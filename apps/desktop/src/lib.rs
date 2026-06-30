@@ -1,15 +1,15 @@
-mod browser;
 mod branch;
-pub mod chat;
+mod browser;
 mod channel_forward;
+pub mod chat;
 mod engine;
-mod terminal;
 mod error;
 mod force_automode;
 mod hebcore_client;
 mod hebisland_client;
 mod hitl;
 mod idle;
+mod terminal;
 mod wechat;
 mod window_control;
 
@@ -925,7 +925,11 @@ fn git_diff_file(root: String, path: String, staged: bool) -> AppResult<DiffPayl
         before_sha: String::new(),
         after_sha: String::new(),
         file_path: path,
-        action: if staged { "staged".into() } else { "unstaged".into() },
+        action: if staged {
+            "staged".into()
+        } else {
+            "unstaged".into()
+        },
     })
 }
 
@@ -1122,12 +1126,14 @@ async fn send_message(
     let dd_for_blocking = dd.clone();
     let sid_for_blocking = session_id.clone();
     let text = content.clone();
+    let run_attachments = attachments.clone();
     let run_result = tokio::task::spawn_blocking(move || {
         hebcore_client::run_conversation(
             &app_for_blocking,
             &dd_for_blocking,
             &sid_for_blocking,
             &text,
+            &run_attachments,
             &sink,
         )
     })
@@ -1190,7 +1196,10 @@ impl hebcore_client::RunEventSink for DesktopHebcoreSink {
             _ => {}
         }
         // 灵动岛 + 微信转发（native 出口，§7.2.1 保留进程内）。
-        if let Some(client) = self.app.try_state::<crate::hebisland_client::HebislandClient>() {
+        if let Some(client) = self
+            .app
+            .try_state::<crate::hebisland_client::HebislandClient>()
+        {
             chat::push_engine_event_to_island(&client, &event);
         }
         crate::channel_forward::maybe_forward(&self.app, &self.session_id, &event);
@@ -1223,11 +1232,7 @@ struct InjectUserMessageResult {
 }
 
 #[tauri::command]
-fn cancel_message(
-    app: AppHandle,
-    hitl: State<'_, Arc<HitlState>>,
-    request_id: String,
-) -> bool {
+fn cancel_message(app: AppHandle, hitl: State<'_, Arc<HitlState>>, request_id: String) -> bool {
     // 架构 §7.8.6：run 在 hebcore 进程里——经 hebcore Interrupt 中断。找得到 session 就代理；
     // 同时本地 cancel/hitl 兜底（兼容进程内 branch 旁支 + 清理本地登记）。
     if let Some(session_id) = common::runtime::session_for_request(&request_id) {
@@ -1280,7 +1285,7 @@ fn inject_user_message(
     // 找得到 session 就经 hebcore；失败回退本地 cancellation 队列（进程内 run 兼容）。
     let injected = if let Some(session_id) = common::runtime::session_for_request(&request_id) {
         match chat::data_dir(&app) {
-            Ok(dd) => hebcore_client::inject(&dd, &session_id, &content).is_ok(),
+            Ok(dd) => hebcore_client::inject(&dd, &session_id, &content, &attachments).is_ok(),
             Err(_) => false,
         }
     } else {
@@ -1393,8 +1398,8 @@ fn approve_permission(
     // 找不到则回退本地 gate（兼容尚未迁移的进程内 run，如 branch 旁支）。
     if let Some(session_id) = hitl.remote_session_of(&request_id) {
         let dd = data_dir(&app)?;
-        let result = hebcore_client::approve(&dd, &session_id, &request_id, decision)
-            .map_err(AppError::msg);
+        let result =
+            hebcore_client::approve(&dd, &session_id, &request_id, decision).map_err(AppError::msg);
         // 代理成功才消费映射——失败保留，用户可重试（§7.8.6 不可重试 bug 修复）。
         if result.is_ok() {
             hitl.forget_remote(&request_id);
@@ -1614,11 +1619,8 @@ fn list_session_plans(app: AppHandle, session_id: String) -> AppResult<Vec<PlanM
     let dd = data_dir(&app)?;
     let session = sessions::load(&dd, &session_id)?;
     let active = session.active_plan.clone();
-    let dir = agent_core::storage::plans::dir_for_session(
-        &dd,
-        session.workdir.as_deref(),
-        &session_id,
-    );
+    let dir =
+        agent_core::storage::plans::dir_for_session(&dd, session.workdir.as_deref(), &session_id);
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -1675,12 +1677,9 @@ fn list_session_plans(app: AppHandle, session_id: String) -> AppResult<Vec<PlanM
 fn read_plan_markdown(app: AppHandle, session_id: String, plan_id: String) -> AppResult<String> {
     let dd = data_dir(&app)?;
     let session = sessions::load(&dd, &session_id)?;
-    let path = agent_core::storage::plans::dir_for_session(
-        &dd,
-        session.workdir.as_deref(),
-        &session_id,
-    )
-    .join(format!("{plan_id}.md"));
+    let path =
+        agent_core::storage::plans::dir_for_session(&dd, session.workdir.as_deref(), &session_id)
+            .join(format!("{plan_id}.md"));
     let bytes = agent_core::storage::lock::read_locked(&path)?;
     Ok(String::from_utf8_lossy(&bytes).to_string())
 }
@@ -1696,12 +1695,9 @@ fn update_plan_markdown(
 ) -> AppResult<()> {
     let dd = data_dir(&app)?;
     let session = sessions::load(&dd, &session_id)?;
-    let path = agent_core::storage::plans::dir_for_session(
-        &dd,
-        session.workdir.as_deref(),
-        &session_id,
-    )
-    .join(format!("{plan_id}.md"));
+    let path =
+        agent_core::storage::plans::dir_for_session(&dd, session.workdir.as_deref(), &session_id)
+            .join(format!("{plan_id}.md"));
     agent_core::storage::lock::write_atomic(&path, markdown.as_bytes())?;
     Ok(())
 }

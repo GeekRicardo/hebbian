@@ -293,10 +293,12 @@ async fn dispatch_invoke(
         "delete_skill_collection" => cmd_delete_skill_collection(state, args).await.map(Some),
         "plugin_marketplace_add" => cmd_plugin_marketplace_add(state, args).await.map(Some),
         "plugin_marketplace_list" => cmd_plugin_marketplace_list(state).await.map(Some),
-        "plugin_marketplace_list_plugins" => {
-            cmd_plugin_marketplace_list_plugins(state, args).await.map(Some)
-        }
-        "plugin_marketplace_remove" => cmd_plugin_marketplace_remove(state, args).await.map(|_| None),
+        "plugin_marketplace_list_plugins" => cmd_plugin_marketplace_list_plugins(state, args)
+            .await
+            .map(Some),
+        "plugin_marketplace_remove" => cmd_plugin_marketplace_remove(state, args)
+            .await
+            .map(|_| None),
         "plugin_install" => cmd_plugin_install(state, args).await.map(Some),
         "plugin_uninstall" => cmd_plugin_uninstall(state, args).await.map(|_| None),
         "plugin_list" => cmd_plugin_list(state).await.map(Some),
@@ -414,7 +416,9 @@ async fn dispatch_invoke(
         "discover_rules_files" => cmd_discover_rules_files(args).await.map(Some),
         "list_background_tasks" => cmd_list_background_tasks_local(args).await.map(Some),
         "kill_background_task" => cmd_kill_background_task_local(args).await.map(Some),
-        "read_background_task_output" => cmd_read_background_task_output_local(args).await.map(Some),
+        "read_background_task_output" => {
+            cmd_read_background_task_output_local(args).await.map(Some)
+        }
         "update_session_settings" => cmd_update_session_settings(state, args).await.map(Some),
         "list_session_model_io" => cmd_list_session_model_io(state, args).await.map(Some),
         "get_session_model_io_entry" => cmd_get_session_model_io_entry(state, args).await.map(Some),
@@ -505,6 +509,12 @@ fn pick_text(args: &Value) -> Result<String> {
     Err(anyhow!("missing `content` (or `text`)"))
 }
 
+fn pick_attachments(args: &Value) -> Vec<common::attachments::MessageAttachment> {
+    args.get("attachments")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default()
+}
+
 async fn cmd_send_message(
     state: &ServerState,
     args: Value,
@@ -512,11 +522,12 @@ async fn cmd_send_message(
 ) -> Result<()> {
     let sid = need_session(session_id)?;
     let text = pick_text(&args)?;
+    let attachments = pick_attachments(&args);
 
     let runtime = state.ensure_runtime(&sid).await?;
     if runtime.is_active() {
         // 有 active run 时，新输入注入当前 turn 的 pending_inputs（fire-and-forget）
-        if !runtime.inject(text) {
+        if !runtime.inject(surface_session::TurnInput::new(text, attachments)) {
             return Err(anyhow!("inject failed: no active pending_inputs"));
         }
         return Ok(());
@@ -525,7 +536,7 @@ async fn cmd_send_message(
     // 跟 Tauri send_message 行为一致：前端拿到 invoke resolve 时 turn 已结束，
     // 此刻清理 sessionStreams 槽是安全的；否则 ws 推来的 permission_requested
     // 会因槽已被清而被丢弃，popup 渲染不出来。
-    run_turn(runtime, text).await
+    run_turn(runtime, surface_session::TurnInput::new(text, attachments)).await
 }
 
 // ─── 旁支对话（branch）────────────────────────────────────────────────────────
@@ -557,13 +568,21 @@ async fn cmd_branch_create(state: &ServerState, args: Value) -> Result<Value> {
 }
 
 fn cmd_branch_discard(state: &ServerState, args: Value) {
-    if let Some(branch_id) = args.get("branchId").or_else(|| args.get("branch_id")).and_then(|v| v.as_str()) {
+    if let Some(branch_id) = args
+        .get("branchId")
+        .or_else(|| args.get("branch_id"))
+        .and_then(|v| v.as_str())
+    {
         state.branches.discard(branch_id);
     }
 }
 
 fn cmd_branch_cancel(state: &ServerState, args: Value) {
-    if let Some(branch_id) = args.get("branchId").or_else(|| args.get("branch_id")).and_then(|v| v.as_str()) {
+    if let Some(branch_id) = args
+        .get("branchId")
+        .or_else(|| args.get("branch_id"))
+        .and_then(|v| v.as_str())
+    {
         state.branches.cancel(branch_id);
     }
 }
@@ -576,16 +595,16 @@ async fn cmd_branch_send(state: &ServerState, args: Value) -> Result<Value> {
         .ok_or_else(|| anyhow!("missing `branchId`"))?
         .to_string();
     let content = pick_text(&args)?;
-    let attachments = args
-        .get("attachments")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+    let attachments = pick_attachments(&args);
     let provider_id = args
         .get("providerId")
         .or_else(|| args.get("provider_id"))
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    let model = args.get("model").and_then(|v| v.as_str()).map(str::to_string);
+    let model = args
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
 
     // 事件出口：把 WireEvent 经绑定主对话的 WS 广播推给前端（与主对话 engine-event 同通道）。
     // branch_id 形如 "branch-<sid>"——但事件要落到绑定的主对话 session 上，故先建 create 时
@@ -614,8 +633,9 @@ async fn cmd_inject_user_message(
 ) -> Result<()> {
     let sid = need_session(session_id)?;
     let text = pick_text(&args)?;
+    let attachments = pick_attachments(&args);
     let runtime = state.ensure_runtime(&sid).await?;
-    if !runtime.inject(text) {
+    if !runtime.inject(surface_session::TurnInput::new(text, attachments)) {
         return Err(anyhow!("no active run, nothing to inject"));
     }
     Ok(())
@@ -1145,7 +1165,10 @@ async fn cmd_set_force_automode(
         .and_then(|v| v.as_bool())
         .ok_or_else(|| anyhow!("missing `enabled`"))?;
     let runtime = state.ensure_runtime(&sid).await?;
-    runtime.state.force_automode.store(enabled, Ordering::SeqCst);
+    runtime
+        .state
+        .force_automode
+        .store(enabled, Ordering::SeqCst);
     Ok(())
 }
 
@@ -1609,19 +1632,22 @@ fn _force_ordering_import(_: Ordering) {}
 // 与 desktop lib.rs 同名命令同实现，只是入口从 Tauri command 换成 WS dispatch。
 
 async fn cmd_list_todos(state: &ServerState, args: Value) -> Result<Value> {
-    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let sid = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
     let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
     Ok(serde_json::to_value(session.todos)?)
 }
 
 async fn cmd_get_active_goal(state: &ServerState, args: Value) -> Result<Value> {
-    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let sid = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
     let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
     Ok(serde_json::to_value(session.active_goal)?)
 }
 
 async fn cmd_set_active_goal(state: &ServerState, args: Value) -> Result<()> {
-    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let sid = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
     let condition = arg_str(&args, &["condition"]).ok_or_else(|| anyhow!("missing `condition`"))?;
     let goal = sessions_store::ActiveGoal {
         condition: condition.clone(),
@@ -1630,7 +1656,8 @@ async fn cmd_set_active_goal(state: &ServerState, args: Value) -> Result<()> {
         last_reason: None,
         pending_set_marker: true,
     };
-    sessions_store::set_active_goal(&state.data_dir, &sid, Some(goal)).map_err(|e| anyhow!("{e}"))?;
+    sessions_store::set_active_goal(&state.data_dir, &sid, Some(goal))
+        .map_err(|e| anyhow!("{e}"))?;
     let marker = sessions_store::Message {
         id: sessions_store::new_id(),
         role: sessions_store::Role::Marker,
@@ -1653,24 +1680,33 @@ async fn cmd_set_active_goal(state: &ServerState, args: Value) -> Result<()> {
 }
 
 async fn cmd_clear_active_goal(state: &ServerState, args: Value) -> Result<()> {
-    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let sid = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
     sessions_store::set_active_goal(&state.data_dir, &sid, None)
         .map(|_| ())
         .map_err(|e| anyhow!("{e}"))
 }
 
 async fn cmd_undo_compaction(state: &ServerState, args: Value) -> Result<Value> {
-    let id = arg_str(&args, &["id", "sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `id`"))?;
-    let marker_id = arg_str(&args, &["markerId", "marker_id"]).ok_or_else(|| anyhow!("missing `markerId`"))?;
-    let s = sessions_store::undo_compaction(&state.data_dir, &id, &marker_id).map_err(|e| anyhow!("{e}"))?;
+    let id = arg_str(&args, &["id", "sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `id`"))?;
+    let marker_id =
+        arg_str(&args, &["markerId", "marker_id"]).ok_or_else(|| anyhow!("missing `markerId`"))?;
+    let s = sessions_store::undo_compaction(&state.data_dir, &id, &marker_id)
+        .map_err(|e| anyhow!("{e}"))?;
     Ok(serde_json::to_value(s)?)
 }
 
 async fn cmd_list_session_plans(state: &ServerState, args: Value) -> Result<Value> {
-    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let sid = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
     let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
     let active = session.active_plan.clone();
-    let dir = agent_core::storage::plans::dir_for_session(&state.data_dir, session.workdir.as_deref(), &sid);
+    let dir = agent_core::storage::plans::dir_for_session(
+        &state.data_dir,
+        session.workdir.as_deref(),
+        &sid,
+    );
     if !dir.exists() {
         return Ok(json!([]));
     }
@@ -1681,7 +1717,11 @@ async fn cmd_list_session_plans(state: &ServerState, args: Value) -> Result<Valu
         if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("md") {
             continue;
         }
-        let plan_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let plan_id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
         if plan_id.is_empty() {
             continue;
         }
@@ -1694,7 +1734,11 @@ async fn cmd_list_session_plans(state: &ServerState, args: Value) -> Result<Valu
             .unwrap_or(0);
         let title = std::fs::read_to_string(&path)
             .ok()
-            .and_then(|s| s.lines().next().map(|l| l.trim_start_matches('#').trim().to_string()))
+            .and_then(|s| {
+                s.lines()
+                    .next()
+                    .map(|l| l.trim_start_matches('#').trim().to_string())
+            })
             .filter(|t| !t.is_empty())
             .unwrap_or_else(|| plan_id.clone());
         let plan_path_str = path.display().to_string();
@@ -1707,34 +1751,53 @@ async fn cmd_list_session_plans(state: &ServerState, args: Value) -> Result<Valu
             "is_active": is_active,
         }));
     }
-    out.sort_by(|a, b| b["updated_at_ms"].as_i64().cmp(&a["updated_at_ms"].as_i64()));
+    out.sort_by(|a, b| {
+        b["updated_at_ms"]
+            .as_i64()
+            .cmp(&a["updated_at_ms"].as_i64())
+    });
     Ok(Value::Array(out))
 }
 
 async fn cmd_read_plan_markdown(state: &ServerState, args: Value) -> Result<Value> {
-    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
-    let plan_id = arg_str(&args, &["planId", "plan_id"]).ok_or_else(|| anyhow!("missing `planId`"))?;
+    let sid = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let plan_id =
+        arg_str(&args, &["planId", "plan_id"]).ok_or_else(|| anyhow!("missing `planId`"))?;
     let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
-    let path = agent_core::storage::plans::dir_for_session(&state.data_dir, session.workdir.as_deref(), &sid)
-        .join(format!("{plan_id}.md"));
+    let path = agent_core::storage::plans::dir_for_session(
+        &state.data_dir,
+        session.workdir.as_deref(),
+        &sid,
+    )
+    .join(format!("{plan_id}.md"));
     let bytes = agent_core::storage::lock::read_locked(&path).map_err(|e| anyhow!("{e}"))?;
     Ok(Value::String(String::from_utf8_lossy(&bytes).to_string()))
 }
 
 async fn cmd_update_plan_markdown(state: &ServerState, args: Value) -> Result<()> {
-    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
-    let plan_id = arg_str(&args, &["planId", "plan_id"]).ok_or_else(|| anyhow!("missing `planId`"))?;
+    let sid = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let plan_id =
+        arg_str(&args, &["planId", "plan_id"]).ok_or_else(|| anyhow!("missing `planId`"))?;
     let markdown = arg_str(&args, &["markdown"]).ok_or_else(|| anyhow!("missing `markdown`"))?;
     let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
-    let path = agent_core::storage::plans::dir_for_session(&state.data_dir, session.workdir.as_deref(), &sid)
-        .join(format!("{plan_id}.md"));
-    agent_core::storage::lock::write_atomic(&path, markdown.as_bytes()).map_err(|e| anyhow!("{e}"))?;
+    let path = agent_core::storage::plans::dir_for_session(
+        &state.data_dir,
+        session.workdir.as_deref(),
+        &sid,
+    )
+    .join(format!("{plan_id}.md"));
+    agent_core::storage::lock::write_atomic(&path, markdown.as_bytes())
+        .map_err(|e| anyhow!("{e}"))?;
     Ok(())
 }
 
 async fn cmd_list_plan_comments(state: &ServerState, args: Value) -> Result<Value> {
-    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
-    let plan_id = arg_str(&args, &["planId", "plan_id"]).ok_or_else(|| anyhow!("missing `planId`"))?;
+    let sid = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let plan_id =
+        arg_str(&args, &["planId", "plan_id"]).ok_or_else(|| anyhow!("missing `planId`"))?;
     let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
     let comments = agent_core::storage::plan_comments::list_comments(
         &state.data_dir,
@@ -1749,7 +1812,8 @@ async fn cmd_list_plan_comments(state: &ServerState, args: Value) -> Result<Valu
 async fn cmd_list_claude_sessions(_state: &ServerState) -> Result<Value> {
     let home = dirs::home_dir().ok_or_else(|| anyhow!("找不到用户主目录"))?;
     let dir = home.join(".claude").join("projects");
-    let list = agent_core::storage::import_claude::list_importable(&dir).map_err(|e| anyhow!("{e}"))?;
+    let list =
+        agent_core::storage::import_claude::list_importable(&dir).map_err(|e| anyhow!("{e}"))?;
     let out: Vec<Value> = list
         .into_iter()
         .map(|i| {
@@ -1771,7 +1835,8 @@ async fn cmd_import_claude_session(state: &ServerState, args: Value) -> Result<V
     let project_id = arg_str(&args, &["projectId", "project_id"]);
     let workdir = arg_str(&args, &["workdir"]);
     let content = std::fs::read_to_string(&path).map_err(|e| anyhow!("读取失败：{e}"))?;
-    let parsed = agent_core::storage::import_claude::parse_claude_jsonl(&content).map_err(|e| anyhow!("{e}"))?;
+    let parsed = agent_core::storage::import_claude::parse_claude_jsonl(&content)
+        .map_err(|e| anyhow!("{e}"))?;
     let session_workdir = workdir.map(std::path::PathBuf::from).or(parsed.workdir);
     let mut session = sessions_store::create_with_workspace(
         &state.data_dir,
@@ -1811,8 +1876,10 @@ async fn cmd_refresh_models_catalog(state: &ServerState) -> Result<Value> {
 }
 
 async fn cmd_add_plan_comment(state: &ServerState, args: Value) -> Result<Value> {
-    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
-    let plan_id = arg_str(&args, &["planId", "plan_id"]).ok_or_else(|| anyhow!("missing `planId`"))?;
+    let sid = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let plan_id =
+        arg_str(&args, &["planId", "plan_id"]).ok_or_else(|| anyhow!("missing `planId`"))?;
     let anchor = arg_str(&args, &["anchor"]).unwrap_or_default();
     let body = arg_str(&args, &["body"]).ok_or_else(|| anyhow!("missing `body`"))?;
     let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
@@ -1838,11 +1905,15 @@ async fn cmd_add_plan_comment(state: &ServerState, args: Value) -> Result<Value>
 async fn cmd_read_skill_md(_state: &ServerState, args: Value) -> Result<Value> {
     let path = arg_str(&args, &["path"]).ok_or_else(|| anyhow!("missing `path`"))?;
     let p = std::path::Path::new(&path);
-    let is_skill = p.file_name().map(|n| n == std::ffi::OsStr::new("SKILL.md")).unwrap_or(false);
+    let is_skill = p
+        .file_name()
+        .map(|n| n == std::ffi::OsStr::new("SKILL.md"))
+        .unwrap_or(false);
     if !is_skill {
         return Err(anyhow!("仅允许读取 SKILL.md 文件"));
     }
-    let content = std::fs::read_to_string(p).map_err(|e| anyhow!("读取 {} 失败：{e}", p.display()))?;
+    let content =
+        std::fs::read_to_string(p).map_err(|e| anyhow!("读取 {} 失败：{e}", p.display()))?;
     Ok(Value::String(content))
 }
 
@@ -1865,29 +1936,42 @@ async fn cmd_import_project_file(state: &ServerState, args: Value) -> Result<Val
 }
 
 async fn cmd_switch_provider_model(state: &ServerState, args: Value) -> Result<Value> {
-    let id = arg_str(&args, &["id", "sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `id`"))?;
-    let new_provider_id = arg_str(&args, &["newProviderId", "new_provider_id"]).ok_or_else(|| anyhow!("missing `newProviderId`"))?;
-    let new_model = arg_str(&args, &["newModel", "new_model"]).ok_or_else(|| anyhow!("missing `newModel`"))?;
+    let id = arg_str(&args, &["id", "sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `id`"))?;
+    let new_provider_id = arg_str(&args, &["newProviderId", "new_provider_id"])
+        .ok_or_else(|| anyhow!("missing `newProviderId`"))?;
+    let new_model =
+        arg_str(&args, &["newModel", "new_model"]).ok_or_else(|| anyhow!("missing `newModel`"))?;
     let dd = &state.data_dir;
     let cur = sessions_store::load(dd, &id).map_err(|e| anyhow!("{e}"))?;
     let cur_provider = model_gateway::config::get(dd, &cur.provider_id).ok();
     let new_provider = model_gateway::config::get(dd, &new_provider_id).ok();
-    let from_provider = cur_provider.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| cur.provider_id.clone());
-    let to_provider = new_provider.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| new_provider_id.clone());
+    let from_provider = cur_provider
+        .as_ref()
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| cur.provider_id.clone());
+    let to_provider = new_provider
+        .as_ref()
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| new_provider_id.clone());
     if cur.provider_id == new_provider_id && cur.model == new_model {
         return Ok(serde_json::to_value(cur)?);
     }
     // 模型系列锁定：有真实对话后 DeepSeek 与其他系列不可互切（web 编码与协议不同）。
-    let has_real_turn = cur
-        .messages
-        .iter()
-        .any(|m| matches!(m.role, sessions_store::Role::User | sessions_store::Role::Assistant));
+    let has_real_turn = cur.messages.iter().any(|m| {
+        matches!(
+            m.role,
+            sessions_store::Role::User | sessions_store::Role::Assistant
+        )
+    });
     if has_real_turn {
         if let (Some(c), Some(n)) = (cur_provider.as_ref(), new_provider.as_ref()) {
             let cur_ds = matches!(c.kind, model_gateway::config::ProviderKind::Deepseek);
             let new_ds = matches!(n.kind, model_gateway::config::ProviderKind::Deepseek);
             if cur_ds != new_ds {
-                return Err(anyhow!("本会话已锁定模型系列：DeepSeek 与其他模型之间不可互相切换，请新建会话。"));
+                return Err(anyhow!(
+                    "本会话已锁定模型系列：DeepSeek 与其他模型之间不可互相切换，请新建会话。"
+                ));
             }
         }
     }
@@ -1920,7 +2004,8 @@ async fn cmd_switch_provider_model(state: &ServerState, args: Value) -> Result<V
 
 async fn cmd_fetch_provider_usage(state: &ServerState, args: Value) -> Result<Value> {
     use model_gateway::config::AuthMode;
-    let provider_id = arg_str(&args, &["providerId", "provider_id"]).ok_or_else(|| anyhow!("missing `providerId`"))?;
+    let provider_id = arg_str(&args, &["providerId", "provider_id"])
+        .ok_or_else(|| anyhow!("missing `providerId`"))?;
     let dir = &state.data_dir;
     let file = model_gateway::config::load(dir).map_err(|e| anyhow!("read providers: {e}"))?;
     let provider = file
@@ -1929,9 +2014,10 @@ async fn cmd_fetch_provider_usage(state: &ServerState, args: Value) -> Result<Va
         .find(|p| p.id == provider_id)
         .ok_or_else(|| anyhow!("provider not found: {provider_id}"))?;
     if provider.auth_mode == AuthMode::OauthClaudeCode {
-        let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(dir, provider.clone())
-            .await
-            .map_err(|e| anyhow!("refresh token: {e}"))?;
+        let provider =
+            model_gateway::auth::refresh::ensure_fresh_provider_token(dir, provider.clone())
+                .await
+                .map_err(|e| anyhow!("refresh token: {e}"))?;
         let info = model_gateway::usage::fetch_claude_usage(&provider.api_key)
             .await
             .map_err(|e| anyhow!("fetch claude usage: {e}"))?;
@@ -1947,16 +2033,30 @@ async fn cmd_fetch_provider_usage(state: &ServerState, args: Value) -> Result<Va
 }
 
 async fn cmd_export_session_to_claude(state: &ServerState, args: Value) -> Result<Value> {
-    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
-    let include_thinking = args.get("includeThinking").or_else(|| args.get("include_thinking")).and_then(|v| v.as_bool()).unwrap_or(false);
+    let sid = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let include_thinking = args
+        .get("includeThinking")
+        .or_else(|| args.get("include_thinking"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let home = dirs::home_dir().ok_or_else(|| anyhow!("找不到用户主目录"))?;
-    let export = agent_core::storage::export_claude::build_claude_resume(&state.data_dir, &sid, include_thinking, &home)
-        .map_err(|e| anyhow!("{e}"))?;
+    let export = agent_core::storage::export_claude::build_claude_resume(
+        &state.data_dir,
+        &sid,
+        include_thinking,
+        &home,
+    )
+    .map_err(|e| anyhow!("{e}"))?;
     let dir = home.join(".claude").join("projects").join(&export.dir_name);
     std::fs::create_dir_all(&dir).map_err(|e| anyhow!("创建目录失败：{e}"))?;
     let path = dir.join(format!("{}.jsonl", export.session_uuid));
     std::fs::write(&path, export.lines.join("\n")).map_err(|e| anyhow!("写入失败：{e}"))?;
-    let resume_command = format!("cd {} && claude --resume {}", shell_quote_min(&export.cwd), export.session_uuid);
+    let resume_command = format!(
+        "cd {} && claude --resume {}",
+        shell_quote_min(&export.cwd),
+        export.session_uuid
+    );
     Ok(json!({
         "resume_command": resume_command,
         "session_uuid": export.session_uuid,
@@ -1966,7 +2066,10 @@ async fn cmd_export_session_to_claude(state: &ServerState, args: Value) -> Resul
 
 /// 最小 shell 引用：路径含空格 / 特殊字符时用单引号包裹。
 fn shell_quote_min(s: &str) -> String {
-    if s.is_empty() || s.chars().any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '/' | '.' | '_' | '-')) {
+    if s.is_empty()
+        || s.chars()
+            .any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '/' | '.' | '_' | '-'))
+    {
         format!("'{}'", s.replace('\'', "'\\''"))
     } else {
         s.to_string()
@@ -1980,7 +2083,11 @@ async fn cmd_discover_all_rules(_state: &ServerState, args: Value) -> Result<Val
         .get("allowedPaths")
         .or_else(|| args.get("allowed_paths"))
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(std::path::PathBuf::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(std::path::PathBuf::from))
+                .collect()
+        })
         .unwrap_or_default();
     let mut out: Vec<RuleFileInfo> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1990,14 +2097,20 @@ async fn cmd_discover_all_rules(_state: &ServerState, args: Value) -> Result<Val
         }
         let key = g.display().to_string();
         if seen.insert(key.clone()) {
-            out.push(RuleFileInfo { path: key, source: RuleSource::Global });
+            out.push(RuleFileInfo {
+                path: key,
+                source: RuleSource::Global,
+            });
         }
     }
     if let Some(wd) = workdir {
         for f in agent_core::rules::discover(&wd, &allowed_paths) {
             let key = f.path.display().to_string();
             if seen.insert(key.clone()) {
-                out.push(RuleFileInfo { path: key, source: f.source });
+                out.push(RuleFileInfo {
+                    path: key,
+                    source: f.source,
+                });
             }
         }
     }
@@ -2012,8 +2125,8 @@ async fn cmd_approve_path_access(
     args: Value,
     session_id: Option<String>,
 ) -> Result<()> {
-    let request_id =
-        arg_str(&args, &["requestId", "request_id"]).ok_or_else(|| anyhow!("missing `requestId`"))?;
+    let request_id = arg_str(&args, &["requestId", "request_id"])
+        .ok_or_else(|| anyhow!("missing `requestId`"))?;
     let scope = arg_str(&args, &["scope"]).ok_or_else(|| anyhow!("missing `scope`"))?;
     let paths: Vec<PathBuf> = args
         .get("paths")
@@ -2099,7 +2212,9 @@ async fn cmd_approve_path_access(
 /// 探测单条粘贴路径形态（file/dir/missing）。委托 agent_core::attach（与 desktop 同实现）。
 async fn cmd_attach_path(args: Value) -> Result<Value> {
     let path = arg_str(&args, &["path"]).ok_or_else(|| anyhow!("missing `path`"))?;
-    Ok(serde_json::to_value(agent_core::attach::attach_path(&path))?)
+    Ok(serde_json::to_value(agent_core::attach::attach_path(
+        &path,
+    ))?)
 }
 
 /// 批量分流拖拽路径（小图片/文本读成附件，其余引用）。委托 agent_core::attach。
@@ -2107,7 +2222,11 @@ async fn cmd_drop_paths(args: Value) -> Result<Value> {
     let paths: Vec<String> = args
         .get("paths")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
     Ok(serde_json::to_value(agent_core::attach::drop_paths(paths))?)
 }
@@ -2132,13 +2251,15 @@ async fn cmd_preview_session_payload(state: &ServerState, args: Value) -> Result
 
 async fn cmd_oauth_codex_start() -> Result<Value> {
     Ok(serde_json::to_value(
-        model_gateway::auth::codex_start().await.map_err(|e| anyhow!("{e}"))?,
+        model_gateway::auth::codex_start()
+            .await
+            .map_err(|e| anyhow!("{e}"))?,
     )?)
 }
 
 async fn cmd_oauth_codex_poll(args: Value) -> Result<Value> {
-    let device_code =
-        arg_str(&args, &["deviceCode", "device_code"]).ok_or_else(|| anyhow!("missing `deviceCode`"))?;
+    let device_code = arg_str(&args, &["deviceCode", "device_code"])
+        .ok_or_else(|| anyhow!("missing `deviceCode`"))?;
     Ok(serde_json::to_value(
         model_gateway::auth::codex_poll(&device_code)
             .await
@@ -2163,8 +2284,8 @@ async fn cmd_oauth_openai_start() -> Result<Value> {
 }
 
 async fn cmd_oauth_openai_exchange(args: Value) -> Result<Value> {
-    let session_id =
-        arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let session_id = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
     let code = arg_str(&args, &["code"]).ok_or_else(|| anyhow!("missing `code`"))?;
     let state = arg_str(&args, &["state"]);
     Ok(serde_json::to_value(
@@ -2181,8 +2302,8 @@ async fn cmd_oauth_claude_start() -> Result<Value> {
 }
 
 async fn cmd_oauth_claude_exchange(args: Value) -> Result<Value> {
-    let session_id =
-        arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let session_id = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
     let code = arg_str(&args, &["code"]).ok_or_else(|| anyhow!("missing `code`"))?;
     Ok(serde_json::to_value(
         model_gateway::auth::claude_oauth_exchange(&session_id, &code)
@@ -2216,8 +2337,8 @@ async fn cmd_oauth_gemini_start() -> Result<Value> {
 }
 
 async fn cmd_oauth_gemini_exchange(args: Value) -> Result<Value> {
-    let session_id =
-        arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let session_id = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
     let code = arg_str(&args, &["code"]).ok_or_else(|| anyhow!("missing `code`"))?;
     Ok(serde_json::to_value(
         model_gateway::auth::gemini_oauth_exchange(&session_id, &code)
@@ -2249,10 +2370,9 @@ async fn cmd_oauth_gemini_cli_import() -> Result<Value> {
 }
 
 async fn cmd_deepseek_login(args: Value) -> Result<Value> {
-    let input: model_gateway::auth::deepseek::DeepseekLoginInput = serde_json::from_value(
-        args.get("input").cloned().unwrap_or(Value::Null),
-    )
-    .map_err(|e| anyhow!("invalid `input`: {e}"))?;
+    let input: model_gateway::auth::deepseek::DeepseekLoginInput =
+        serde_json::from_value(args.get("input").cloned().unwrap_or(Value::Null))
+            .map_err(|e| anyhow!("invalid `input`: {e}"))?;
     Ok(serde_json::to_value(
         model_gateway::auth::deepseek::deepseek_login(input)
             .await
@@ -2354,7 +2474,10 @@ async fn cmd_save_mcp_config(state: &ServerState, args: Value) -> Result<()> {
             .ok_or_else(|| anyhow!("missing `config`"))?,
     )
     .map_err(|e| anyhow!("invalid `config`: {e}"))?;
-    state.core.save_mcp_config(config).map_err(|e| anyhow!("{e}"))
+    state
+        .core
+        .save_mcp_config(config)
+        .map_err(|e| anyhow!("{e}"))
 }
 
 async fn cmd_discover_mcp_tools(state: &ServerState) -> Result<Value> {
@@ -2429,7 +2552,10 @@ async fn cmd_plugin_install(state: &ServerState, args: Value) -> Result<Value> {
 
 async fn cmd_plugin_uninstall(state: &ServerState, args: Value) -> Result<()> {
     let name = arg_str(&args, &["name"]).ok_or_else(|| anyhow!("missing `name`"))?;
-    state.core.plugin_uninstall(&name).map_err(|e| anyhow!("{e}"))
+    state
+        .core
+        .plugin_uninstall(&name)
+        .map_err(|e| anyhow!("{e}"))
 }
 
 async fn cmd_plugin_list(state: &ServerState) -> Result<Value> {
@@ -2895,7 +3021,10 @@ async fn cmd_git_status(args: Value) -> Result<Value> {
 async fn cmd_git_diff_file(args: Value) -> Result<Value> {
     let root = arg_str(&args, &["root"]).ok_or_else(|| anyhow!("missing `root`"))?;
     let path = arg_str(&args, &["path"]).ok_or_else(|| anyhow!("missing `path`"))?;
-    let staged = args.get("staged").and_then(|v| v.as_bool()).unwrap_or(false);
+    let staged = args
+        .get("staged")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let (before_text, after_text) =
         git_scm::diff_file(&std::path::PathBuf::from(&root), &path, staged)
             .map_err(|e| anyhow!("{e}"))?;
@@ -2924,14 +3053,17 @@ async fn cmd_git_unstage(args: Value) -> Result<()> {
 async fn cmd_git_discard(args: Value) -> Result<()> {
     let root = arg_str(&args, &["root"]).ok_or_else(|| anyhow!("missing `root`"))?;
     let path = arg_str(&args, &["path"]).ok_or_else(|| anyhow!("missing `path`"))?;
-    let untracked = args.get("untracked").and_then(|v| v.as_bool()).unwrap_or(false);
+    let untracked = args
+        .get("untracked")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     git_scm::discard(&std::path::PathBuf::from(&root), &path, untracked).map_err(|e| anyhow!("{e}"))
 }
 
 async fn cmd_git_commit(args: Value) -> Result<Value> {
     let root = arg_str(&args, &["root"]).ok_or_else(|| anyhow!("missing `root`"))?;
     let message = arg_str(&args, &["message"]).ok_or_else(|| anyhow!("missing `message`"))?;
-    let sha = git_scm::commit(&std::path::PathBuf::from(&root), &message)
-        .map_err(|e| anyhow!("{e}"))?;
+    let sha =
+        git_scm::commit(&std::path::PathBuf::from(&root), &message).map_err(|e| anyhow!("{e}"))?;
     Ok(Value::String(sha))
 }

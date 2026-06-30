@@ -31,9 +31,7 @@ use agent_core::{
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use common::runtime::PendingInputs;
-use tokio::sync::RwLock;
-use std::collections::HashMap;
+use common::{attachments::MessageAttachment, runtime::PendingInputs};
 use model_gateway::{
     client::{DynModelClient, ModelClient},
     config as providers,
@@ -43,21 +41,45 @@ use protocol::{
     ApprovalDecision, Event as AgentEvent, PermissionKind, PermissionRequestId, QuestionOption,
     UserAnswer,
 };
+use std::collections::HashMap;
 use tokio::sync::mpsc;
+use tokio::sync::RwLock;
+
+/// 一轮用户输入。文本与附件必须一起流经 surface-session；否则 Desktop / hebweb
+/// 发送图片时，UI 会显示附件，但 agent_core 构造模型请求时只看见纯文本。
+#[derive(Debug, Clone)]
+pub struct TurnInput {
+    pub text: String,
+    pub attachments: Vec<MessageAttachment>,
+}
+
+impl TurnInput {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            attachments: Vec::new(),
+        }
+    }
+
+    pub fn new(text: impl Into<String>, attachments: Vec<MessageAttachment>) -> Self {
+        Self {
+            text: text.into(),
+            attachments,
+        }
+    }
+}
 
 /// 每个 session 一份的运行时状态。
 ///
 /// 通用运行时（事件 broadcast / HITL pending / cancel / pending inputs / run_mode）下沉到
 /// agent_core 的 [`SessionRuntimeState`]（架构 §7.8.5），hebweb 这层只保留 surface 特有
-/// 部分（provider/model、输入驱动 input_tx、WS 协议包装 emit_engine_event）。
+/// 部分（输入驱动 input_tx、WS 协议包装 emit_engine_event）。provider / model / reasoning
+/// 每轮从最新 session 元数据读取，避免输入框切模型后活 runtime 继续使用旧快照。
 pub struct SessionRuntime {
     pub session_id: String,
     pub data_dir: PathBuf,
-    pub provider_id: String,
-    pub model: String,
-    pub reasoning: Option<common::ReasoningConfig>,
 
-    pub input_tx: mpsc::UnboundedSender<String>,
+    pub input_tx: mpsc::UnboundedSender<TurnInput>,
     pub permission_store: Option<Arc<PermissionStore>>,
 
     /// 下沉到 agent_core 的通用运行时状态（§7.8.5「单写者 + 多观察者」）。
@@ -83,8 +105,11 @@ impl SessionRuntime {
         self.state.clear_active();
     }
 
-    pub fn inject(&self, text: String) -> bool {
-        self.state.inject(text)
+    pub fn inject(&self, input: TurnInput) -> bool {
+        self.state.inject(common::runtime::PendingUserInput {
+            content: input.text,
+            attachments: input.attachments,
+        })
     }
 
     pub fn stop(&self) {
@@ -156,14 +181,11 @@ impl RuntimeRegistry {
             .map_err(|e| anyhow!("session {session_id} 不存在：{e}"))?;
         sessions_dir::ensure_session_dirs(data_dir, session_id)?;
 
-        let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<TurnInput>();
         let state = SessionRuntimeState::new(session_id, EVENT_CHANNEL_CAPACITY, session.run_mode);
         let runtime = Arc::new(SessionRuntime {
             session_id: session_id.to_string(),
             data_dir: data_dir.to_path_buf(),
-            provider_id: session.provider_id.clone(),
-            model: session.model.clone(),
-            reasoning: None,
             input_tx,
             permission_store,
             state,
@@ -171,8 +193,8 @@ impl RuntimeRegistry {
 
         let rt_for_loop = runtime.clone();
         tokio::spawn(async move {
-            while let Some(text) = input_rx.recv().await {
-                if let Err(e) = run_turn(rt_for_loop.clone(), text).await {
+            while let Some(input) = input_rx.recv().await {
+                if let Err(e) = run_turn(rt_for_loop.clone(), input).await {
                     rt_for_loop.emit_engine_event(protocol::WireEvent::Error {
                         message: e.to_string(),
                     });
@@ -220,14 +242,15 @@ pub fn register_wakeup_resume_handler(ctx: Arc<crate::transport::TransportCtx>) 
                 },
             };
             let wakeup_xml = agent_core::wakeup::wakeup_xml(&event);
+            let wakeup_input = TurnInput::text(wakeup_xml.clone());
             tracing::info!(
                 target: "wakeup",
                 session_id = %sid,
                 active = rt.is_active(),
                 "[Wakeup:Resume] 后台任务 / cron 唤醒续跑"
             );
-            if !rt.inject(wakeup_xml.clone()) {
-                if let Err(e) = rt.input_tx.send(wakeup_xml) {
+            if !rt.inject(wakeup_input.clone()) {
+                if let Err(e) = rt.input_tx.send(wakeup_input) {
                     tracing::warn!(session = %sid, error = %e, "wakeup resume: input_tx 已关闭");
                 }
             }
@@ -337,9 +360,13 @@ impl ModelClient for NamedModelClient {
 
 // ─── run_turn ──────────────────────────────────────────────────────────────
 
-pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result<()> {
+pub async fn run_turn(runtime: Arc<SessionRuntime>, input: TurnInput) -> Result<()> {
     let data_dir = &runtime.data_dir;
     let session_id = &runtime.session_id;
+    let TurnInput {
+        text: user_text,
+        attachments,
+    } = input;
 
     // 单写者闸口（架构 §7.8.5）：抢 session 级 run 锁，持有到本函数返回（_run_guard 在栈上）。
     // 抢不到 = 同一 session 已有活 run（本进程另一通路 / 另一 surface 进程共享数据目录）——
@@ -360,7 +387,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
         id: sessions::new_id(),
         role: Role::User,
         content: user_text.clone(),
-        attachments: Vec::new(),
+        attachments: attachments.clone(),
         tool_calls: Vec::new(),
         parts: Vec::new(),
         created_at: Utc::now().timestamp_millis(),
@@ -375,14 +402,14 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
     let provider = providers_file
         .providers
         .iter()
-        .find(|p| p.id == runtime.provider_id)
-        .ok_or_else(|| anyhow!("provider {} 不存在", runtime.provider_id))?
+        .find(|p| p.id == prior.provider_id)
+        .ok_or_else(|| anyhow!("provider {} 不存在", prior.provider_id))?
         .clone();
     let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
         .await
         .map_err(|e| anyhow!("OAuth token 刷新失败: {e}"))?;
     let ctx_window =
-        model_gateway::context_window::effective_context_window_for(&provider, &runtime.model);
+        model_gateway::context_window::effective_context_window_for(&provider, &prior.model);
     let vision = agent_core::vision_bridge::build_vision_client(data_dir)
         .await
         .map_err(|e| anyhow!("vision bridge: {e}"))?;
@@ -391,8 +418,8 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
     let inner = agent_core::vision_bridge::wrap_with_vision_client(inner, vision);
     let client: Arc<dyn ModelClient> = Arc::new(NamedModelClient::new(
         inner,
-        runtime.model.clone(),
-        runtime.reasoning.clone(),
+        prior.model.clone(),
+        prior.reasoning.clone(),
     ));
 
     // workspace
@@ -501,7 +528,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
             permission_store: runtime.permission_store.clone(),
             session_id: Some(session_id.clone()),
             run_mode,
-            model_id: Some(runtime.model.clone()),
+            model_id: Some(prior.model.clone()),
             force_automode: false,
             // surface 主对话：tag=Main（前端不额外标记，§4.11）。
             call_tag: model_gateway::types::ModelCallTag::Main,
@@ -513,7 +540,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
             derived_sink: None,
         },
     );
-    core_session.append_user(user_text, Vec::new());
+    core_session.append_user(user_text, attachments);
 
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let pending_inputs: PendingInputs = Arc::new(Mutex::new(Vec::new()));

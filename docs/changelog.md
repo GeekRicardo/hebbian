@@ -10574,6 +10574,15 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: Desktop/hebweb 前端右侧工作台旁支对话 UI；不改 core、协议、持久化。不破坏数据兼容，但旁支面板底部不再提供继续输入入口。
 - **留尾巴**: 无。
 
+### 2026-06-30 — 修复活 hebcore 会话切模型后重生成仍使用旧供应商
+
+- **Why**: 用户在 `202606291111-f1d44445` 对话里从 Claude OAuth 切到 DeepSeek 后点击「重新生成」，日志仍出现 `Claude OAuth refresh 失败`。排查发现 session.jsonl 的 meta 已经是 DeepSeek，但常驻 hebcore 首次 attach 时把 provider/model/reasoning 缓存在 `SessionRuntime`，后续 `StartRun` / 重新生成复用旧内存快照，导致磁盘上的模型切换没有实时作用到活 runtime。
+- **改动**:
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): `SessionRuntime` 不再长期持有 provider/model/reasoning；`run_turn` 每轮在 `load_with_partial_recovery` 后从最新 session 元数据读取 provider/model/reasoning，再构建 `NamedModelClient` 和 `RunParams.model_id`。
+  - [docs/架构.md](架构.md): 在 §7.8.5 补充约束：provider / model / reasoning 以磁盘 session 元数据为准，活 runtime 不能作为长期快照缓存，每轮 `StartRun` 必须重读。
+- **影响范围**: `surface-session` 共享运行链路（hebcore / hebweb-as-core / desktop 对话主链路）；不改线协议、不改前端、不改 session 文件格式。行为变化是切换模型/推理参数后，下一轮新 run 立即按最新设置执行。
+- **验证**: `cargo check -p surface-session` 通过；`cargo check --workspace` 通过（保留既有 unused/dead_code warning）。代码级对照确认 `run_turn` 已无 `runtime.provider_id` / `runtime.model` / `runtime.reasoning` 旧快照读取，现象根因被移除。
+- **留尾巴**: 未跑真实 DeepSeek/Claude 网络重生成（避免消耗模型与依赖有效凭据）；如需端到端验证，用原会话切到 DeepSeek 后重新生成，日志不应再进入 Claude OAuth refresh。
 
 ### 2026-06-30 — 让 thinking 随相邻工具调用一起折叠
 
@@ -10582,4 +10591,57 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 在 `buildAssistantRenderParts` / `buildNestedRenderParts` 阶段挂起 reasoning，遇到相邻 tool call 时并入同一个 `tool_group`；遇到正文时再作为独立 `ReasoningBlock` 输出。
   - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `ToolCallTimeline` 支持携带 reasoning，折叠摘要显示 `thinking`，展开详情里先显示紧凑版 thinking，再显示工具调用列表。
 - **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改 core、协议、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-30 — 调整上下文压缩 marker 展示位置并钉住完成后不二次压缩
+
+- **Why**: 用户反馈自动压缩后不应在输入框上方单独显示提示，而应在压缩发生的位置用 marker 前后分割上下文；同时观察到 agent loop 已完成后像是又触发了一次压缩，需要确认触发时机并加回归保护。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 移除输入框上方的“上下文已自动压缩”临时提示，只保留消息流里的 compact boundary 分隔条。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 收到 `context_compacted` 事件后重新加载当前 session，让后端已落盘的 `CompactBoundary` marker 立即出现在真实消息位置，并刷新上下文用量。
+  - [apps/desktop/frontend/src/desktop/ui/store/slotReducer.ts](../apps/desktop/frontend/src/desktop/ui/store/slotReducer.ts) / [apps/desktop/frontend/src/desktop/ui/store/slotReducer.test.ts](../apps/desktop/frontend/src/desktop/ui/store/slotReducer.test.ts): 删除旧的 `contextCompacted` 输入区提示状态。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 增加 `normal_done_does_not_start_an_extra_model_step_or_compaction` 回归测试，确认普通 `Done(Stop)` 完成路径只发一次模型请求、不会在 run 收尾后再触发压缩。
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): 更新 `context_compacted` 注释，明确它用于刷新消息流 marker，而不是输入区提示。
+- **影响范围**: agent-core 回归测试 + Desktop/hebweb 前端状态与渲染；不改协议字段、不改持久化格式、不破坏兼容。自动压缩仍按架构 §4.7 在下一次模型请求前触发；普通 run 完成后不会额外压缩，若有插队 / Stop hook / goal 续跑则属于同一 run 的下一次模型请求前压缩。
+- **留尾巴**: 无。
+
+### 2026-06-30 — 修复 Desktop/hebweb 发送图片附件未进入模型请求
+
+- **Why**: 用户在 Desktop 输入框粘贴图片后发送，UI 能看到图片附件，但使用支持图片的 `sub2api-gpt-5.5` 时模型请求里没有图片。根因是主对话迁移到 hebcore 后，Desktop → hebcore 的 StartRun/Inject IPC 只传 `text`，surface-session 的 `run_turn` 与 `SessionRuntimeState::inject` 又把附件写成空数组，导致图片在进入 agent_core transcript 前被丢弃。
+- **改动**:
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs) / [apps/desktop/src/hebcore_client.rs](../apps/desktop/src/hebcore_client.rs): Desktop 发起新 run 与 streaming 插队时，把 `MessageAttachment` 一并传给 hebcore。
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): 新增 `TurnInput { text, attachments }`，输入队列、`run_turn` 落盘 user message、`CoreSession::append_user` 全部保留附件。
+  - [crates/surface-session/src/transport.rs](../crates/surface-session/src/transport.rs): hebcore `StartRun` / `Inject` wire 请求新增可选 `attachments` 字段，默认空数组兼容旧客户端，并补 wire 回归测试。
+  - [crates/agent-core/src/session_hub.rs](../crates/agent-core/src/session_hub.rs): `SessionRuntimeState::inject` 改为接收完整 `PendingUserInput`，不再在插队路径清空附件，并补图片附件回归断言。
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs) / [apps/cli/src/hebcore_client.rs](../apps/cli/src/hebcore_client.rs): hebweb 主对话发送/插队读取 `attachments`，CLI connect 显式发送空附件保持 wire 形态一致。
+- **影响范围**: Desktop / hebweb / hebcore IPC / surface-session / agent-core runtime；`attachments` 是 additive + `serde(default)`，旧文本客户端兼容；模型请求构造层已支持 OpenAI `image_url` / Responses `input_image`，本次只补齐上游传递。
+- **留尾巴**: 未新增 CLI 图片输入能力；本次只修 Desktop/hebweb 已有附件 UI 到模型请求的丢失问题。
+
+### 2026-06-30 — 修正运行中 thinking 与工具调用展示顺序
+
+- **Why**: 用户反馈运行中 thinking 会被提到工具调用上方，把 tool 挤到下面；运行态也不应直接展示带点竖线和描述的完整 timeline，而应先用受限高度的紧凑块按原始顺序显示 thinking/tool；同一 assistant 仍在生成时，即使当前工具组已 done，也不能中途翻成完整 timeline，但已经被后续正文隔断的工具组应收成 `已运行 ...`。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `tool_group` 改为保存按流顺序排列的 activity items，避免 reasoning 统一插到工具组顶部。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 运行中工具组默认渲染为受限高度的紧凑滚动块，一行一个 `thinking` 或工具名；点击整块后直接切换为详情列表，详情顶部保留 `已运行 ...` 入口可切回紧凑块；完成态 `已运行 ...` 展开仍保留带点竖线 timeline。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 运行态判断改由 assistant 是否仍在 streaming 且后面是否已有正文共同决定：只有当前未被 content 隔断的工具组保持紧凑运行块；已被后续正文隔断的工具组收成 `已运行 ...`，展开走完成态带点竖线详情。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 收紧运行活动块与工具详情行的行高、行距和图标列宽，让展开态列表更紧凑。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改 core、协议、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-30 — 新增 hebweb 一键启动 pnpm 脚本
+
+- **Why**: 用户希望不要每次手写 `cargo build`、前端 build、启动 `hebweb` 的串联命令，而是在 pnpm scripts 里有固定入口，类似 `pnpm run app:hebweb`。首次使用后发现服务日志显示 `static_dir=None` 且浏览器打开 404，根因是脚本没有传前端静态目录，同时 hebweb 自动探测还指向旧的 `apps/desktop/frontend/dist` 路径。随后用户希望再补一个 dev 模式入口，改前端代码能实时热更新。
+- **改动**:
+  - [apps/desktop/package.json](../apps/desktop/package.json): 新增 `app:hebweb` script，串联前端构建、`hebbian-web-server` 编译与 `./target/debug/hebweb --port 38080 --static-dir apps/desktop/dist` 启动。
+  - [apps/desktop/package.json](../apps/desktop/package.json): 新增 `dev:hebweb` script，先启动 hebweb 后端，再以 `HEBWEB_PROXY=38080 pnpm dev` 启动 Vite dev server，前端改动走 HMR 实时更新。
+  - [apps/web-server/src/main.rs](../apps/web-server/src/main.rs): 将帮助文档与 `autodetect_static_dir` 的默认候选路径从旧的 `apps/desktop/frontend/dist` 修正为真实 Vite 输出目录 `apps/desktop/dist`。
+- **影响范围**: hebweb 启动路径与 Desktop 前端包开发脚本；不改协议、不改持久化、不影响现有 `app:dev` / `app:build`。手动从仓库根目录运行 `hebweb` 时也能自动找到构建产物，避免静态首页 404。
+- **留尾巴**: dev 模式访问 Vite 地址 `http://127.0.0.1:1420`，不是 hebweb 后端地址 `http://127.0.0.1:38080`；38080 只提供 API/WS 代理目标。
+
+### 2026-06-30 — 精简修改文件列表状态与统计
+
+- **Why**: 右侧「修改文件」列表里中文状态 badge 占宽，且 `before→afterB` 字节变化信息噪声较大；用户希望改成 Git 风格的 `M/U/D`，只保留 `+N -N` 行数统计。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx): 文件行状态 badge 改为 `M` / `U` / `D`；移除字节变化展示，仅保留 diff 行数统计。
+- **影响范围**: Desktop/hebweb 右侧工作台「修改文件」tab 展示层；不改协议、core、持久化，不破坏兼容。
 - **留尾巴**: 无。

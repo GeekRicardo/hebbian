@@ -43,7 +43,12 @@ pub enum HebcoreRequest {
     /// 同步 API：内嵌一个 [`core_rpc::CoreRequest`]，走 dispatch。
     Rpc { req: core_rpc::CoreRequest },
     /// 启动一个对话 turn：把 user 文本投进 session 输入循环（异步跑，事件走 broadcast）。
-    StartRun { session_id: String, text: String },
+    StartRun {
+        session_id: String,
+        text: String,
+        #[serde(default)]
+        attachments: Vec<common::attachments::MessageAttachment>,
+    },
     /// 订阅一个 session 的事件流：本连接转为只读事件流，持续推 [`protocol::WireEvent`]。
     Subscribe { session_id: String },
     /// 结算一条审批（HITL）。
@@ -61,7 +66,12 @@ pub enum HebcoreRequest {
     /// 中断当前 run。
     Interrupt { session_id: String },
     /// 把一条 user 输入插进当前活 run 的队列。
-    Inject { session_id: String, text: String },
+    Inject {
+        session_id: String,
+        text: String,
+        #[serde(default)]
+        attachments: Vec<common::attachments::MessageAttachment>,
+    },
     /// 即时切换 run mode。
     SetRunMode { session_id: String, mode: String },
     /// 报告本 hebcore 进程的版本身份（desktop connect 后做版本协商，§7.8.7）。
@@ -81,11 +91,19 @@ pub enum HebcoreRequest {
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HebcoreResponse<'a> {
-    Rpc { resp: &'a core_rpc::CoreResponse },
+    Rpc {
+        resp: &'a core_rpc::CoreResponse,
+    },
     Accepted,
-    Subscribed { session_id: String },
-    Event { event: protocol::WireEvent },
-    Error { message: String },
+    Subscribed {
+        session_id: String,
+    },
+    Event {
+        event: protocol::WireEvent,
+    },
+    Error {
+        message: String,
+    },
     /// GetVersion 应答（§7.8.7）。`build_version` 跨进程比对（同次 build 的两 binary 注入
     /// 相同 `HEBBIAN_BUILD_VERSION`，字符串相等 = 同版本）；`bin_name` 区分 hebcore /
     /// hebweb 兼任（不误杀 hebweb）；`has_active_run` 门控 Shutdown。
@@ -96,7 +114,9 @@ pub enum HebcoreResponse<'a> {
         has_active_run: bool,
     },
     /// 一条转发给 surface 的日志行（应 [`HebcoreRequest::SubscribeLogs`]，§4.10）。
-    Log { line: observability::LogLine },
+    Log {
+        line: observability::LogLine,
+    },
 }
 
 /// 处理一条 unix-socket 连接：逐行读 [`HebcoreRequest`]，按通路分派。
@@ -113,13 +133,17 @@ pub async fn handle_connection(stream: UnixStream, ctx: Arc<TransportCtx>) -> Re
                 let resp = core_rpc::dispatch(req, &*ctx.core).await;
                 write_line(&mut write_half, &HebcoreResponse::Rpc { resp: &resp }).await?;
             }
-            Ok(HebcoreRequest::StartRun { session_id, text }) => {
+            Ok(HebcoreRequest::StartRun {
+                session_id,
+                text,
+                attachments,
+            }) => {
                 let resp = match ctx
                     .runtimes
                     .ensure(&ctx.data_dir, ctx.permission_store.clone(), &session_id)
                     .await
                 {
-                    Ok(rt) => match rt.input_tx.send(text) {
+                    Ok(rt) => match rt.input_tx.send(crate::TurnInput::new(text, attachments)) {
                         Ok(()) => HebcoreResponse::Accepted,
                         Err(_) => HebcoreResponse::Error {
                             message: "session 输入循环已关闭".into(),
@@ -199,9 +223,15 @@ pub async fn handle_connection(stream: UnixStream, ctx: Arc<TransportCtx>) -> Re
                 };
                 write_line(&mut write_half, &resp).await?;
             }
-            Ok(HebcoreRequest::Inject { session_id, text }) => {
+            Ok(HebcoreRequest::Inject {
+                session_id,
+                text,
+                attachments,
+            }) => {
                 let resp = match ctx.runtimes.get(&session_id).await {
-                    Some(rt) if rt.inject(text) => HebcoreResponse::Accepted,
+                    Some(rt) if rt.inject(crate::TurnInput::new(text, attachments)) => {
+                        HebcoreResponse::Accepted
+                    }
                     Some(_) => HebcoreResponse::Error {
                         message: "无活跃 run，无法注入".into(),
                     },
@@ -247,14 +277,19 @@ pub async fn handle_connection(stream: UnixStream, ctx: Arc<TransportCtx>) -> Re
                         loop {
                             match rx.recv().await {
                                 Ok(event) => {
-                                    if write_line(&mut write_half, &HebcoreResponse::Event { event })
-                                        .await
-                                        .is_err()
+                                    if write_line(
+                                        &mut write_half,
+                                        &HebcoreResponse::Event { event },
+                                    )
+                                    .await
+                                    .is_err()
                                     {
                                         return Ok(());
                                     }
                                 }
-                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                    continue
+                                }
                                 Err(_) => break,
                             }
                         }
@@ -286,7 +321,9 @@ pub async fn handle_connection(stream: UnixStream, ctx: Arc<TransportCtx>) -> Re
                                         return Ok(());
                                     }
                                 }
-                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                    continue
+                                }
                                 Err(_) => break,
                             }
                         }
@@ -351,10 +388,7 @@ pub async fn handle_connection(stream: UnixStream, ctx: Arc<TransportCtx>) -> Re
 }
 
 /// 写一行 JSON（带换行）。客户端断开时返回 Err，调用方据此结束订阅循环。
-async fn write_line(
-    w: &mut (impl AsyncWriteExt + Unpin),
-    msg: &HebcoreResponse<'_>,
-) -> Result<()> {
+async fn write_line(w: &mut (impl AsyncWriteExt + Unpin), msg: &HebcoreResponse<'_>) -> Result<()> {
     let mut out = serde_json::to_string(msg)
         .unwrap_or_else(|e| format!("{{\"kind\":\"error\",\"message\":\"序列化失败: {e}\"}}"));
     out.push('\n');
@@ -419,5 +453,30 @@ mod tests {
         assert_eq!(v["line"]["target"], "model");
         assert_eq!(v["line"]["level"], "INFO");
         assert_eq!(v["line"]["message"], "[Model:Request] 发起模型请求");
+    }
+
+    #[test]
+    fn start_run_and_inject_preserve_attachments_on_wire() {
+        let start: HebcoreRequest = serde_json::from_str(
+            r#"{"kind":"start_run","session_id":"s1","text":"看图","attachments":[{"kind":"image","name":"p.png","media_type":"image/png","data":"iVBORw0KGgo="}]}"#,
+        )
+        .unwrap();
+        match start {
+            HebcoreRequest::StartRun { attachments, .. } => {
+                assert_eq!(attachments.len(), 1);
+            }
+            other => panic!("应是 StartRun，实际 {other:?}"),
+        }
+
+        let inject: HebcoreRequest = serde_json::from_str(
+            r#"{"kind":"inject","session_id":"s1","text":"补一张","attachments":[{"kind":"image","name":"p.png","media_type":"image/png","data":"iVBORw0KGgo="}]}"#,
+        )
+        .unwrap();
+        match inject {
+            HebcoreRequest::Inject { attachments, .. } => {
+                assert_eq!(attachments.len(), 1);
+            }
+            other => panic!("应是 Inject，实际 {other:?}"),
+        }
     }
 }

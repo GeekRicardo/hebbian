@@ -119,7 +119,7 @@ impl SessionRuntimeState {
     /// 把一条 user 输入插进当前活 run 的队列（agent_loop 下个 drain 边界消费）。
     /// 无活 run、或 run 已过末次 drain（accepting=false 的收尾窗口）返回 `false`，
     /// 让 surface 回落到「起新 run」，避免消息 push 进再也不会被 drain 的队列而静默丢失。
-    pub fn inject(&self, content: String) -> bool {
+    pub fn inject(&self, input: PendingUserInput) -> bool {
         // run 收尾窗口（agent_loop 末次 drain 后置 accepting=false）拒绝晚到注入；
         // accepting 缺失（未接线）也按拒绝处理（§4.2.3）。
         let accepting = self
@@ -132,10 +132,7 @@ impl SessionRuntimeState {
             return false;
         }
         if let Some(inputs) = &*self.pending_inputs.lock().unwrap() {
-            inputs.lock().unwrap().push(PendingUserInput {
-                content,
-                attachments: Vec::new(),
-            });
+            inputs.lock().unwrap().push(input);
             true
         } else {
             false
@@ -259,7 +256,9 @@ mod tests {
         let rt = SessionRuntimeState::new("s1", 16, RunMode::Default);
         let mut a = rt.subscribe();
         let mut b = rt.subscribe();
-        rt.emit(WireEvent::Error { message: "x".into() });
+        rt.emit(WireEvent::Error {
+            message: "x".into(),
+        });
         assert!(matches!(a.try_recv(), Ok(WireEvent::Error { .. })));
         assert!(matches!(b.try_recv(), Ok(WireEvent::Error { .. })));
     }
@@ -267,7 +266,13 @@ mod tests {
     #[test]
     fn inject_requires_active_run() {
         let rt = SessionRuntimeState::new("s1", 16, RunMode::Default);
-        assert!(!rt.inject("hi".into()), "无活 run 时 inject 应失败");
+        assert!(
+            !rt.inject(PendingUserInput {
+                content: "hi".into(),
+                attachments: Vec::new(),
+            }),
+            "无活 run 时 inject 应失败"
+        );
         let inputs: PendingInputs = Arc::new(Mutex::new(Vec::new()));
         rt.set_active(
             Arc::new(HitlGate::default()),
@@ -275,8 +280,17 @@ mod tests {
             inputs.clone(),
             Arc::new(AtomicBool::new(true)),
         );
-        assert!(rt.inject("hi".into()));
-        assert_eq!(inputs.lock().unwrap().len(), 1);
+        assert!(rt.inject(PendingUserInput {
+            content: "hi".into(),
+            attachments: vec![common::attachments::MessageAttachment::Image {
+                name: "p.png".into(),
+                media_type: "image/png".into(),
+                data: "iVBORw0KGgo=".into(),
+            }],
+        }));
+        let queued = inputs.lock().unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].attachments.len(), 1);
     }
 
     /// 回归（#8 late-inject 静默丢消息）：run 收尾窗口（agent_loop 末次 drain 后置
@@ -293,11 +307,20 @@ mod tests {
             inputs.clone(),
             accepting.clone(),
         );
-        assert!(rt.inject("a".into()), "accepting=true 时应接受注入");
+        assert!(
+            rt.inject(PendingUserInput {
+                content: "a".into(),
+                attachments: Vec::new(),
+            }),
+            "accepting=true 时应接受注入"
+        );
         // 模拟 agent_loop 末次 drain 后置 accepting=false（run 收尾窗口）。
         accepting.store(false, std::sync::atomic::Ordering::SeqCst);
         assert!(
-            !rt.inject("b".into()),
+            !rt.inject(PendingUserInput {
+                content: "b".into(),
+                attachments: Vec::new(),
+            }),
             "accepting=false 时应拒绝注入（防 §4.2.3 消息静默丢失）"
         );
         assert_eq!(inputs.lock().unwrap().len(), 1, "被拒注入不该 push 进队列");
@@ -324,10 +347,7 @@ mod tests {
         assert!(!rt.resolve_approval("unknown", ApprovalDecision::AllowOnce));
         // 命中真实 pending：返回 true 并唤醒 agent_loop 侧 waiter。
         assert!(rt.resolve_approval(request_id.as_str(), ApprovalDecision::AllowOnce));
-        assert!(matches!(
-            waiter.await,
-            Ok(ApprovalDecision::AllowOnce)
-        ));
+        assert!(matches!(waiter.await, Ok(ApprovalDecision::AllowOnce)));
     }
 
     #[test]

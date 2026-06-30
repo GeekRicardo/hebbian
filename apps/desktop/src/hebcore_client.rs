@@ -31,6 +31,7 @@ enum Req<'a> {
     StartRun {
         session_id: &'a str,
         text: &'a str,
+        attachments: &'a [common::attachments::MessageAttachment],
     },
     Subscribe {
         session_id: &'a str,
@@ -51,6 +52,7 @@ enum Req<'a> {
     Inject {
         session_id: &'a str,
         text: &'a str,
+        attachments: &'a [common::attachments::MessageAttachment],
     },
     SetRunMode {
         session_id: &'a str,
@@ -186,7 +188,11 @@ fn negotiate_version(app: &AppHandle, sock: &Path) {
     let (running_ver, bin_name, has_active_run) = match running {
         Some(v) => (v.build_version, v.bin_name, v.has_active_run),
         // 旧 hebcore 不认 GetVersion → 必然 stale。
-        None => ("（旧版本，无版本协议）".to_string(), "hebcore".to_string(), false),
+        None => (
+            "（旧版本，无版本协议）".to_string(),
+            "hebcore".to_string(),
+            false,
+        ),
     };
 
     if running_ver == current {
@@ -221,9 +227,12 @@ fn negotiate_version(app: &AppHandle, sock: &Path) {
     // 旧版**不认** Shutdown（回 Error、不退）——靠下面「等死超时 → pkill」兜底强杀。
     if let Ok(mut conn) = UnixStream::connect(sock) {
         let _ = write_req(&mut conn, &Req::Shutdown);
-        let _ = BufReader::new(conn.try_clone().unwrap_or_else(|_| conn.try_clone().unwrap()))
-            .lines()
-            .next();
+        let _ = BufReader::new(
+            conn.try_clone()
+                .unwrap_or_else(|_| conn.try_clone().unwrap()),
+        )
+        .lines()
+        .next();
     }
     // 等旧进程真死（~3s）。connect 失败 = 已退（单例锁 + sock 由 OS 释放）。
     let mut died = false;
@@ -238,7 +247,10 @@ fn negotiate_version(app: &AppHandle, sock: &Path) {
     // 清残留 sock。这让「杀旧版换新」对**没有版本协议的旧 hebcore**（首次升级场景）也生效。
     if !died {
         tracing::warn!("hebcore 未响应 Shutdown（可能是旧版不认协议），pkill 强杀");
-        let _ = std::process::Command::new("pkill").arg("-x").arg("hebcore").status();
+        let _ = std::process::Command::new("pkill")
+            .arg("-x")
+            .arg("hebcore")
+            .status();
         let _ = std::fs::remove_file(sock);
         for _ in 0..60 {
             if UnixStream::connect(sock).is_err() {
@@ -272,7 +284,9 @@ pub fn ensure_running(app: &AppHandle, data_dir: &Path) {
     negotiate_version(app, &sock);
     match connect_or_spawn(app, &sock) {
         Ok(_) => tracing::info!(socket = %sock.display(), "hebcore 就绪"),
-        Err(e) => tracing::warn!(socket = %sock.display(), error = %e, "hebcore 未就绪（发消息时会重试拉起）"),
+        Err(e) => {
+            tracing::warn!(socket = %sock.display(), error = %e, "hebcore 未就绪（发消息时会重试拉起）")
+        }
     }
 }
 
@@ -324,6 +338,7 @@ pub fn run_conversation(
     data_dir: &Path,
     session_id: &str,
     text: &str,
+    attachments: &[common::attachments::MessageAttachment],
     sink: &dyn RunEventSink,
 ) -> Result<(), String> {
     let sock = hebcore_sock(data_dir);
@@ -336,10 +351,7 @@ pub fn run_conversation(
         .map_err(|e| format!("连接 hebcore 失败（{}）：{e}", sock.display()))?;
     let mut sub_write = sub.try_clone().map_err(|e| e.to_string())?;
     let mut sub_lines = BufReader::new(sub).lines();
-    write_req(
-        &mut sub_write,
-        &Req::Subscribe { session_id },
-    )?;
+    write_req(&mut sub_write, &Req::Subscribe { session_id })?;
     // 等订阅确认。
     if let Some(line) = sub_lines.next() {
         let line = line.map_err(|e| e.to_string())?;
@@ -352,7 +364,14 @@ pub fn run_conversation(
 
     // 发起 run（另一条连接）。
     let mut run_conn = UnixStream::connect(&sock).map_err(|e| e.to_string())?;
-    write_req(&mut run_conn, &Req::StartRun { session_id, text })?;
+    write_req(
+        &mut run_conn,
+        &Req::StartRun {
+            session_id,
+            text,
+            attachments,
+        },
+    )?;
     let mut run_lines = BufReader::new(run_conn.try_clone().map_err(|e| e.to_string())?).lines();
     if let Some(line) = run_lines.next() {
         let line = line.map_err(|e| e.to_string())?;
@@ -460,8 +479,20 @@ pub fn interrupt(data_dir: &Path, session_id: &str) -> Result<(), String> {
 }
 
 /// 插队一条 user 输入 → hebcore。
-pub fn inject(data_dir: &Path, session_id: &str, text: &str) -> Result<(), String> {
-    control_request(data_dir, &Req::Inject { session_id, text })
+pub fn inject(
+    data_dir: &Path,
+    session_id: &str,
+    text: &str,
+    attachments: &[common::attachments::MessageAttachment],
+) -> Result<(), String> {
+    control_request(
+        data_dir,
+        &Req::Inject {
+            session_id,
+            text,
+            attachments,
+        },
+    )
 }
 
 /// 即时切换 run mode → hebcore。

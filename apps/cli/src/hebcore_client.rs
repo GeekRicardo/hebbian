@@ -19,17 +19,21 @@ fn hebcore_sock(data_dir: &Path) -> PathBuf {
 }
 
 fn default_data_dir() -> PathBuf {
-    dirs::home_dir()
-        .expect("no home dir")
-        .join(".hebbian")
+    dirs::home_dir().expect("no home dir").join(".hebbian")
 }
 
 /// 出站消息（与 hebcore 的 `HebcoreRequest` 对应）。
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Req<'a> {
-    StartRun { session_id: &'a str, text: &'a str },
-    Subscribe { session_id: &'a str },
+    StartRun {
+        session_id: &'a str,
+        text: &'a str,
+        attachments: &'a [common::attachments::MessageAttachment],
+    },
+    Subscribe {
+        session_id: &'a str,
+    },
 }
 
 /// 入站消息（与 hebcore 的 `HebcoreResponse` 对应）。
@@ -56,9 +60,9 @@ pub async fn connect_run(
     let sock = hebcore_sock(&data_dir);
 
     // 订阅连接：先建立，保证不漏 run 早期事件。
-    let sub_stream = UnixStream::connect(&sock).await.with_context(|| {
-        format!("连接 hebcore 失败（{sock:?}）——常驻 hebcore 是否在运行？")
-    })?;
+    let sub_stream = UnixStream::connect(&sock)
+        .await
+        .with_context(|| format!("连接 hebcore 失败（{sock:?}）——常驻 hebcore 是否在运行？"))?;
     let (sub_read, mut sub_write) = sub_stream.into_split();
     let subscribe = serde_json::to_string(&Req::Subscribe {
         session_id: &session_id,
@@ -72,7 +76,10 @@ pub async fn connect_run(
     if let Some(line) = sub_lines.next_line().await? {
         match serde_json::from_str::<Resp>(&line)? {
             Resp::Subscribed { session_id } => {
-                println!("{}", serde_json::json!({"event":"subscribed","session_id":session_id}));
+                println!(
+                    "{}",
+                    serde_json::json!({"event":"subscribed","session_id":session_id})
+                );
             }
             Resp::Error { message } => return Err(anyhow!("订阅失败: {message}")),
             _ => {}
@@ -82,9 +89,11 @@ pub async fn connect_run(
     // 发起 run（另一条连接）。
     let run_stream = UnixStream::connect(&sock).await?;
     let (run_read, mut run_write) = run_stream.into_split();
+    let no_attachments: &[common::attachments::MessageAttachment] = &[];
     let start = serde_json::to_string(&Req::StartRun {
         session_id: &session_id,
         text: &text,
+        attachments: no_attachments,
     })?;
     run_write.write_all(start.as_bytes()).await?;
     run_write.write_all(b"\n").await?;
