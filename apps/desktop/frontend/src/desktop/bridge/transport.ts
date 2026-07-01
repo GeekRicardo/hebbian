@@ -201,6 +201,11 @@ export async function invoke<T = unknown>(
   return wsClient!.invoke<T>(cmd, finalArgs);
 }
 
+export async function subscribeSession(sessionId: string): Promise<void> {
+  if (IS_TAURI) return;
+  await wsClient!.subscribe(sessionId);
+}
+
 export async function listen<T>(
   name: string,
   handler: (event: { payload: T }) => void,

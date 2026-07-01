@@ -81,7 +81,7 @@ pub async fn classify_prefix(
         tools: Vec::new(),
         max_tokens: 32,
         reasoning: None,
-            meta: model_gateway::types::ModelCallMeta {
+        meta: model_gateway::types::ModelCallMeta {
             tag: model_gateway::types::ModelCallTag::Classifier,
             ..Default::default()
         },

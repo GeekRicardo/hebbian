@@ -786,7 +786,7 @@ export type EngineEvent =
       reason: string;
     }
   | {
-      // 自动结构化压缩触发（L2）。前端在输入框上方显示一行提示。
+      // 自动压缩完成。后端已在 session 消息流里落 compact_boundary marker；前端收到后刷新消息流。
       type: "context_compacted";
       before_tokens: number;
       after_tokens: number;

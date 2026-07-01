@@ -160,6 +160,73 @@
   .markdown :where(th, td) {
     @apply border border-border px-2 py-1 text-sm;
   }
+
+  .vscode-markdown-preview {
+    @apply mx-auto max-w-[900px] px-8 py-6 text-[14px] leading-[1.6] text-foreground;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .vscode-markdown-preview :where(h1, h2) {
+    @apply mt-6 mb-4 border-b border-border pb-2 font-semibold leading-tight;
+  }
+  .vscode-markdown-preview :where(h1) { @apply text-[26px]; }
+  .vscode-markdown-preview :where(h2) { @apply text-[21px]; }
+  .vscode-markdown-preview :where(h3) { @apply mt-5 mb-3 text-[17px] font-semibold leading-snug; }
+  .vscode-markdown-preview :where(h4, h5, h6) { @apply mt-4 mb-2 font-semibold; }
+  .vscode-markdown-preview :where(p, ul, ol, blockquote, pre, table) { @apply mb-4; }
+  .vscode-markdown-preview :where(ul, ol) { @apply pl-8; }
+  .vscode-markdown-preview :where(ul) { @apply list-disc; }
+  .vscode-markdown-preview :where(ol) { @apply list-decimal; }
+  .vscode-markdown-preview :where(li) { @apply mb-1; }
+  .vscode-markdown-preview :where(li > p) { @apply mb-2; }
+  .vscode-markdown-preview :where(a) { @apply text-primary underline underline-offset-2; }
+  .vscode-markdown-preview :where(blockquote) { @apply border-l-4 border-border pl-4 text-muted-foreground; }
+  .vscode-markdown-preview :where(hr) { @apply my-6 border-border; }
+  .vscode-markdown-preview :where(code):not(pre code) {
+    @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[0.9em];
+  }
+  .vscode-markdown-preview :where(pre) {
+    @apply overflow-x-auto rounded-md bg-muted p-4;
+  }
+  .vscode-markdown-preview :where(pre code) {
+    @apply bg-transparent p-0 font-mono text-[13px] leading-[1.55];
+  }
+  .vscode-markdown-preview :where(table) {
+    @apply block w-full overflow-auto border-collapse;
+  }
+  .vscode-markdown-preview :where(th, td) {
+    @apply border border-border px-3 py-1.5;
+  }
+  .vscode-markdown-preview :where(th) {
+    @apply bg-muted/60 font-semibold;
+  }
+  .vscode-markdown-preview :where(img) {
+    @apply max-w-full;
+  }
+}
+
+@keyframes text-shimmer {
+  0% {
+    background-position: 120% 0;
+  }
+  100% {
+    background-position: -120% 0;
+  }
+}
+
+.text-shimmer {
+  color: transparent;
+  background-image: linear-gradient(
+    110deg,
+    hsl(var(--foreground) / 0.45) 0%,
+    hsl(var(--foreground) / 0.45) 35%,
+    hsl(var(--foreground)) 50%,
+    hsl(var(--foreground) / 0.45) 65%,
+    hsl(var(--foreground) / 0.45) 100%
+  );
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: text-shimmer 1.4s linear infinite;
 }
 
 @keyframes breathe {

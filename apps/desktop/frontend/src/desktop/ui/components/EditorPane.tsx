@@ -13,8 +13,8 @@ import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
 import { detectLanguage, fileName } from "@/desktop/ui/lib/fileLanguage";
 import { fetchEditDiff } from "@/desktop/ui/lib/diffCache";
-import { MarkdownRenderer } from "@/desktop/ui/components/MarkdownRenderer";
 import { Codicon } from "./Codicon";
+import { VsCodeMarkdownPreview } from "./VsCodeMarkdownPreview";
 import type { DiffPayload, PlanComment } from "@/desktop/ui/types";
 import "@/desktop/ui/lib/monacoSetup";
 
@@ -375,8 +375,8 @@ function FileBody({
   }
   if (showPreview) {
     return (
-      <div className="h-full overflow-auto px-6 py-4">
-        <MarkdownRenderer markdown={file.draft} className="markdown-body" />
+      <div className="h-full overflow-auto">
+        <VsCodeMarkdownPreview markdown={file.draft} />
       </div>
     );
   }
@@ -650,10 +650,7 @@ function PlanBody({ planId }: { planId: string }) {
             <Loader2 className="h-4 w-4 animate-spin" /> 读取中…
           </div>
         ) : (
-          <MarkdownRenderer
-            markdown={planMd}
-            className="prose prose-sm max-w-none dark:prose-invert"
-          />
+          <VsCodeMarkdownPreview markdown={planMd} />
         )}
       </div>
 

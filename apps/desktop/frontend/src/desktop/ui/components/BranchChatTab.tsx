@@ -12,6 +12,7 @@ import {
   type Branch,
 } from "@/desktop/ui/store/useBranchStore";
 import { MessageBubble } from "./MessageBubble";
+import { AsideComposer } from "./AsideComposer";
 import { cn } from "@/desktop/ui/lib/utils";
 
 /**
@@ -21,7 +22,7 @@ import { cn } from "@/desktop/ui/lib/utils";
  * Read / Grep，能读代码、查实现、解释调用，但改不了任何文件。后端纯内存、不落盘、关掉即消失。
  *
  * 一个主对话下可开多条旁支，顶部子 tab 横条切换 / 新建 / 关闭；
- * 当前面板只展示旁支内容，不在底部放输入区。
+ * 底部保留轻量输入区继续追问。
  */
 export function BranchChatTab() {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
@@ -159,6 +160,10 @@ function BranchSubTab({
 
 function BranchConversation({ branch }: { branch: Branch }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const setBranchInput = useBranchStore((s) => s.setBranchInput);
+  const setBranchAttachments = useBranchStore((s) => s.setBranchAttachments);
+  const sendBranchMessage = useBranchStore((s) => s.sendBranchMessage);
+  const cancelBranch = useBranchStore((s) => s.cancelBranch);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -182,7 +187,7 @@ function BranchConversation({ branch }: { branch: Branch }) {
         基于主对话 {branch.inheritedCount} 条记录 · 只读（不改文件、不跑命令）
       </div>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3 pb-3">
+      <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
         {empty ? (
           <EmptyHint
             icon={<MessagesSquare className="h-5 w-5 opacity-60" />}
@@ -216,6 +221,21 @@ function BranchConversation({ branch }: { branch: Branch }) {
           </div>
         ) : null}
       </div>
+
+      <AsideComposer
+        value={branch.input}
+        onChange={(value) => setBranchInput(branch.branchId, value)}
+        attachments={branch.attachments}
+        onAttachmentsChange={(attachments) =>
+          setBranchAttachments(branch.branchId, attachments)
+        }
+        busy={branch.busy}
+        onSend={(text, attachments) =>
+          void sendBranchMessage(branch.branchId, text, attachments)
+        }
+        onStop={() => void cancelBranch(branch.branchId)}
+        placeholder="继续问这条旁支"
+      />
     </div>
   );
 }

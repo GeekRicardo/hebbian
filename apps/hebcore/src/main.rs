@@ -20,7 +20,7 @@ use agent_core::permissions::PermissionStore;
 use anyhow::{Context, Result};
 use clap::Parser;
 use fs2::FileExt;
-use surface_session::transport::{handle_connection, TransportCtx};
+use surface_session::transport::{handle_connection, SurfaceLifecycle, TransportCtx};
 use surface_session::RuntimeRegistry;
 use tokio::net::UnixListener;
 use tracing::{error, info, warn};
@@ -110,19 +110,37 @@ async fn main() -> Result<()> {
         UnixListener::bind(&sock).with_context(|| format!("bind hebcore socket {sock:?}"))?;
     info!(socket = %sock.display(), data_dir = %data_dir.display(), "hebcore listening");
 
+    let lifecycle = SurfaceLifecycle::default();
+    let mut exit_rx = lifecycle.subscribe_exit();
+
     loop {
-        match listener.accept().await {
-            Ok((stream, _)) => {
-                let ctx = ctx.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, ctx).await {
-                        warn!(error = %e, "hebcore connection 处理失败");
-                    }
-                });
+        tokio::select! {
+            changed = exit_rx.changed() => {
+                if changed.is_ok() && *exit_rx.borrow() {
+                    info!("最后一个 surface 连接已断开，按用户主动退出语义关闭 hebcore");
+                    ctx.runtimes.cancel_active_runs_and_wait().await;
+                    break;
+                }
             }
-            Err(e) => {
-                error!(error = %e, "hebcore accept 失败");
+            accepted = listener.accept() => {
+                match accepted {
+                    Ok((stream, _)) => {
+                        let ctx = ctx.clone();
+                        let connection = lifecycle.attach().await;
+                        tokio::spawn(async move {
+                            let _connection = connection;
+                            if let Err(e) = handle_connection(stream, ctx).await {
+                                warn!(error = %e, "hebcore connection 处理失败");
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        error!(error = %e, "hebcore accept 失败");
+                    }
+                }
             }
         }
     }
+
+    Ok(())
 }

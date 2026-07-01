@@ -155,6 +155,20 @@ impl RuntimeRegistry {
         self.sessions.read().await.values().any(|rt| rt.is_active())
     }
 
+    /// 按用户主动退出语义取消全部活跃 run，然后等待它们完成持久化收尾。
+    pub async fn cancel_active_runs_and_wait(&self) {
+        let runtimes: Vec<_> = self.sessions.read().await.values().cloned().collect();
+        for rt in &runtimes {
+            if rt.is_active() {
+                rt.stop();
+            }
+        }
+
+        while runtimes.iter().any(|rt| rt.is_active()) {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
     /// 移除一个 runtime（session 关闭）。
     pub async fn remove(&self, session_id: &str) -> Option<Arc<SessionRuntime>> {
         self.sessions.write().await.remove(session_id)

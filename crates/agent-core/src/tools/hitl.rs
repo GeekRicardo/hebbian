@@ -1444,8 +1444,10 @@ mod tests {
             "sess-persist",
             Some(wd.clone()),
         );
-        let build =
-            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "cargo build --release"}));
+        let build = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "cargo build --release"}),
+        );
         // 首次需审批，判官放行 → P0-1 沉淀 "cargo build" 到 session。
         match gate1.check("Bash", &build) {
             PermissionDecision::NeedsApproval { .. } => {}
@@ -1460,8 +1462,10 @@ mod tests {
             "sess-persist",
             Some(wd),
         );
-        let build2 =
-            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "cargo build --workspace"}));
+        let build2 = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "cargo build --workspace"}),
+        );
         match gate2.check("Bash", &build2) {
             PermissionDecision::Approved => {}
             other => panic!(
@@ -1484,8 +1488,10 @@ mod tests {
             "sess-egress",
             Some(wd.clone()),
         );
-        let push =
-            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "git push origin main"}));
+        let push = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "git push origin main"}),
+        );
         match gate1.check("Bash", &push) {
             PermissionDecision::NeedsApproval { .. } => {}
             other => panic!("expected git push to need approval, got {other:?}"),
@@ -1498,8 +1504,10 @@ mod tests {
             "sess-egress",
             Some(wd),
         );
-        let push2 =
-            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "git push origin main"}));
+        let push2 = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "git push origin main"}),
+        );
         match gate2.check("Bash", &push2) {
             PermissionDecision::NeedsApproval { .. } => {}
             other => panic!(

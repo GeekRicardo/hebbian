@@ -885,10 +885,9 @@ pub async fn run_loop(
         // 与本轮请求配对的本地估算值（surface `context_usage` 同款口径）。采样点紧贴
         // 请求构建：此后到拿 usage 之间 transcript 不变。它与服务端 `usage.input_tokens`
         // 真值一起落进 token_stats，比值用于校准估算（见 `calibrated_transcript_tokens`）。
-        let request_estimated_tokens = budget::estimate_transcript_tokens(
-            transcript.system.as_deref(),
-            &transcript.entries,
-        ) as u64;
+        let request_estimated_tokens =
+            budget::estimate_transcript_tokens(transcript.system.as_deref(), &transcript.entries)
+                as u64;
 
         debug!(iteration, "calling model");
         hooks
@@ -923,6 +922,9 @@ pub async fn run_loop(
                 ModelStreamEvent::TextDelta { text } => EventPayload::TextDelta { text },
                 ModelStreamEvent::ReasoningDelta { text } => EventPayload::Reasoning { text },
                 ModelStreamEvent::ReasoningSignature { .. } => return,
+                ModelStreamEvent::ReasoningDuration { ms } => {
+                    EventPayload::ReasoningDuration { ms }
+                }
                 ModelStreamEvent::ToolCallDelta(delta) => EventPayload::ToolCallDelta {
                     index: stream_tool_call_offset + delta.index,
                     id: delta.id,
@@ -1670,6 +1672,46 @@ mod tests {
         }
     }
 
+    struct DoneOnceClient {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ModelClient for DoneOnceClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        fn supports_streaming_tools(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            unreachable!("test uses streaming")
+        }
+
+        async fn stream(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+            _on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
+                text: "完成".to_string(),
+                reasoning: String::new(),
+                attachments: Vec::new(),
+                usage: Usage::default(),
+                reasoning_signature: String::new(),
+            })
+        }
+    }
+
     struct PendingInputDuringDoneClient {
         calls: AtomicUsize,
         pending_inputs: PendingInputs,
@@ -1948,6 +1990,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn normal_done_does_not_start_an_extra_model_step_or_compaction() {
+        let mut transcript = Transcript::new(None);
+        transcript.push_user("hi".to_string(), Vec::new());
+
+        let client = DoneOnceClient {
+            calls: AtomicUsize::new(0),
+        };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_for_sink = Arc::clone(&events);
+        let state = Arc::new(RunState::new(RunId::new()));
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path().to_path_buf(), Vec::new());
+        let policy = CompactionPolicy::default();
+
+        let result = run_loop(
+            LoopParams {
+                client: &client,
+                registry: Arc::new(ToolRegistry::new(Vec::new())),
+                hitl: Arc::new(HitlGate::default()),
+                hooks: Arc::new(HookManager::empty()),
+                transcript: &mut transcript,
+                enabled_tools: &[],
+                compaction_policy: &policy,
+                workspace,
+                stream: true,
+                cancel: Arc::new(AtomicBool::new(false)),
+                state,
+                agent: AgentRef::new("test"),
+                parent: None,
+                model_io_dump: None,
+                pending_inputs: None,
+                consumed_pending_inputs: None,
+                pending_inputs_accepting: None,
+                run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
+                model_id: None,
+                judge_client: None,
+                force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                data_dir: None,
+                session_id: None,
+                phase: None,
+                resume_from: None,
+                edits_worktree: None,
+                max_tool_iterations: None,
+                system_rules: None,
+                subagent_ctx: None,
+                subagent_bypass: false,
+                persister: None,
+                call_tag: Default::default(),
+            },
+            Arc::new(move |event| {
+                events_for_sink.lock().unwrap().push(event.payload);
+            }),
+        )
+        .await
+        .expect("run should finish normally");
+
+        assert_eq!(result.text, "完成");
+        assert_eq!(client.calls.load(Ordering::SeqCst), 1);
+        let events = events.lock().unwrap();
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, EventPayload::RunFinished { .. })));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, EventPayload::ContextCompacted { .. })));
+    }
+
+    #[tokio::test]
     async fn pending_input_during_final_model_step_continues_same_run() {
         let mut transcript = Transcript::new(None);
         transcript.push_user("hi".to_string(), Vec::new());
@@ -2080,14 +2190,20 @@ mod tests {
         // 返回上层的文本不含残骸。
         assert!(!result.text.contains("<invoke"));
         // 历史里那条漏出残骸的 assistant 已被清洗成纯净前导文本。
-        let cleaned = transcript.entries.iter().any(|entry| {
-            matches!(entry, TranscriptEntry::Assistant(a) if a.text == "现在改文件。")
-        });
-        assert!(cleaned, "漏出残骸的 assistant 文本应被清洗为「现在改文件。」");
-        let any_leak = transcript.entries.iter().any(|entry| {
-            matches!(entry, TranscriptEntry::Assistant(a) if a.text.contains("<invoke"))
-        });
-        assert!(!any_leak, "transcript 任何 assistant 文本都不得残留 <invoke>");
+        let cleaned = transcript.entries.iter().any(
+            |entry| matches!(entry, TranscriptEntry::Assistant(a) if a.text == "现在改文件。"),
+        );
+        assert!(
+            cleaned,
+            "漏出残骸的 assistant 文本应被清洗为「现在改文件。」"
+        );
+        let any_leak = transcript.entries.iter().any(
+            |entry| matches!(entry, TranscriptEntry::Assistant(a) if a.text.contains("<invoke")),
+        );
+        assert!(
+            !any_leak,
+            "transcript 任何 assistant 文本都不得残留 <invoke>"
+        );
     }
 
     #[tokio::test]
@@ -2470,10 +2586,9 @@ mod tests {
 
         let events = events.lock().unwrap();
         assert!(
-            events.iter().any(|e| matches!(
-                e,
-                EventPayload::GoalProgress { iteration: 1, .. }
-            )),
+            events
+                .iter()
+                .any(|e| matches!(e, EventPayload::GoalProgress { iteration: 1, .. })),
             "应 emit GoalProgress(iteration=1)"
         );
         assert!(

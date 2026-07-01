@@ -95,7 +95,11 @@ pub fn init_cef() -> bool {
         None => return false,
     };
     let is_browser_process = cmd.has_switch(Some(&CefString::from("type"))) != 1;
-    let ret = execute_process(Some(args.as_main_args()), None::<&mut App>, std::ptr::null_mut());
+    let ret = execute_process(
+        Some(args.as_main_args()),
+        None::<&mut App>,
+        std::ptr::null_mut(),
+    );
     if !is_browser_process {
         // 子进程：CEF 已接管，直接让调用方退出，绝不进 Tauri。
         std::process::exit(if ret >= 0 { ret } else { 0 });
@@ -198,7 +202,11 @@ pub fn start_pump_loop(app: tauri::AppHandle, make_keepalive: impl Fn() + Send +
             std::thread::sleep(std::time::Duration::from_millis(8));
             ticks += 1;
             // 第 ~60 轮（~0.5s，事件循环已稳定转）在主线程建一次 keep-alive
-            let ka = if ticks == 60 { keepalive.lock().unwrap().take() } else { None };
+            let ka = if ticks == 60 {
+                keepalive.lock().unwrap().take()
+            } else {
+                None
+            };
             if ticks == 60 {
                 tracing::info!(target: "cef", "pump loop 第 60 轮，触发 keep-alive");
             }

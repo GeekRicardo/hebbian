@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Sparkles, ChevronDown, RotateCw, Scissors } from "lucide-react";
+import { Sparkles, ChevronDown, RotateCw } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { MessageList } from "./MessageList";
 import { ChatInput } from "./chatInput";
@@ -85,7 +85,6 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     debugEnabled,
     appSettings,
     modelRetry,
-    contextCompacted,
     undoCompaction,
     deleteTrailingMessage,
   } = useStore();
@@ -1125,14 +1124,6 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
             <RotateCw className="h-3 w-3 animate-spin" />
             <span>
               模型出错，重试中 {modelRetry.attempt}/{modelRetry.max}…
-            </span>
-          </div>
-        )}
-        {contextCompacted && (
-          <div className="flex items-center gap-1.5 px-3 pb-1 text-xs text-blue-600 dark:text-blue-400">
-            <Scissors className="h-3 w-3" />
-            <span>
-              上下文已自动压缩（{Math.round(contextCompacted.before_tokens / 1000)}k → {Math.round(contextCompacted.after_tokens / 1000)}k token）
             </span>
           </div>
         )}

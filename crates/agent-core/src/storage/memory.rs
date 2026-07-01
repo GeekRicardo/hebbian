@@ -753,7 +753,10 @@ mod tests {
         .unwrap();
         let l0 = list_l0(&dd, None, MemoryScope::Global).unwrap();
         assert_eq!(l0[0].kind, MemoryKind::Episode);
-        assert_eq!(l0[0].tags, vec!["pitfall".to_string(), "provider".to_string()]);
+        assert_eq!(
+            l0[0].tags,
+            vec!["pitfall".to_string(), "provider".to_string()]
+        );
     }
 
     #[test]
@@ -791,7 +794,9 @@ mod tests {
     fn links_roundtrip_and_empty_when_absent() {
         let dd = tmp_dir();
         // 不存在 → 空
-        assert!(load_links(&dd, None, MemoryScope::Global).unwrap().is_empty());
+        assert!(load_links(&dd, None, MemoryScope::Global)
+            .unwrap()
+            .is_empty());
         // 先建 memory 目录（save_links 需要 root 存在）
         w(&dd, None, MemoryScope::Global, "a", "c", "sa", "ba").unwrap();
         let links = vec![

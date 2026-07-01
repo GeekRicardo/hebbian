@@ -80,7 +80,10 @@ impl Transcript {
         // from_session 重建历史后末尾可能是 assistant（截断续跑、boundary 占位等），
         // 统一在这里注入"继续"兜底，让所有重用 from_session 的路径都是合法状态。
         // continue_run 逻辑不再特判——transcript 末尾已经保证是 user。
-        if matches!(t.entries.last(), Some(TranscriptEntry::Assistant(_)) | Some(TranscriptEntry::ToolResults(_))) {
+        if matches!(
+            t.entries.last(),
+            Some(TranscriptEntry::Assistant(_)) | Some(TranscriptEntry::ToolResults(_))
+        ) {
             t.entries.push(TranscriptEntry::User(UserEntry {
                 text: "继续".to_string(),
                 attachments: Vec::new(),
@@ -244,6 +247,7 @@ fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart
             }
             MessagePart::Reasoning {
                 text: next_reasoning,
+                ..
             } => {
                 if !tool_calls.is_empty() {
                     // reasoning 出现在工具调用之后罕见；如果发生，先把当前 turn 落桶。
@@ -558,11 +562,16 @@ mod tests {
             }
         }
         // 干净前导文本要保留。
-        let saw_clean_tail = transcript.entries.iter().any(|entry| matches!(
-            entry,
-            TranscriptEntry::Assistant(a) if a.text == "现在调度器：周期性运行优化。"
-        ));
-        assert!(saw_clean_tail, "末尾 Text 应被清洗为「现在调度器：周期性运行优化。」");
+        let saw_clean_tail = transcript.entries.iter().any(|entry| {
+            matches!(
+                entry,
+                TranscriptEntry::Assistant(a) if a.text == "现在调度器：周期性运行优化。"
+            )
+        });
+        assert!(
+            saw_clean_tail,
+            "末尾 Text 应被清洗为「现在调度器：周期性运行优化。」"
+        );
     }
 
     /// 复现真实 session 202606180734-87c643bd 的 400（依赖本机 ~/.hebbian，故 ignore）：
@@ -579,8 +588,11 @@ mod tests {
         )
         .expect("加载真实 session");
         let t = Transcript::from_session(s.system_prompt.clone(), &s.messages);
-        eprintln!("entries={} last_is_user={}", t.entries.len(),
-            matches!(t.entries.last(), Some(TranscriptEntry::User(_))));
+        eprintln!(
+            "entries={} last_is_user={}",
+            t.entries.len(),
+            matches!(t.entries.last(), Some(TranscriptEntry::User(_)))
+        );
         assert!(
             matches!(t.entries.last(), Some(TranscriptEntry::User(_))),
             "末尾必须是 user，实际: {:?}",
@@ -687,7 +699,9 @@ mod tests {
         }
         // 真实正文「改完了，继续下一步。」必须保留
         assert!(
-            t.entries.iter().any(|e| matches!(e, TranscriptEntry::Assistant(a) if a.text.contains("改完了"))),
+            t.entries
+                .iter()
+                .any(|e| matches!(e, TranscriptEntry::Assistant(a) if a.text.contains("改完了"))),
             "正文被误删"
         );
         // 末尾补 user

@@ -169,9 +169,10 @@ impl Harness {
         // 移进 LoopParams.persister 在 agent_loop 主体单点落盘；handle（sink 端 clone）插进
         // core_sink，对每个 Event 做纯内存累积 + partial 写帧。`None` 时整条落盘链跳过。
         let persister = match (&params.data_dir, &params.session_id) {
-            (Some(dd), Some(sid)) => {
-                Some(crate::run_persister::RunPersister::new(dd.clone(), sid.clone()))
-            }
+            (Some(dd), Some(sid)) => Some(crate::run_persister::RunPersister::new(
+                dd.clone(),
+                sid.clone(),
+            )),
             _ => None,
         };
         let persister_handle = persister.as_ref().map(|p| p.handle());
@@ -216,7 +217,10 @@ impl Harness {
         // 派生事件优先走旁路 sink（§4.14.7）：标题 / 记忆在 run 收尾后才完成，走 run 级
         // sink 会被 trailing window 关掉的通道丢弃。derived_sink 由 surface 接到 long-lived
         // 出口；缺省回退 core_sink（run 级，未接入 surface 行为不变）。
-        let derived_sink = params.derived_sink.clone().unwrap_or_else(|| core_sink.clone());
+        let derived_sink = params
+            .derived_sink
+            .clone()
+            .unwrap_or_else(|| core_sink.clone());
         let title_sink = derived_sink.clone();
         // 记忆抽取挂钩（架构 §4.14）：本 Run 的 agent_loop 跑完（RunFinished）后异步 spawn
         // 一个 task 调 memory_extract::extract_for_session。一个 Run = 用户语义的「一个 turn
@@ -252,11 +256,10 @@ impl Harness {
                             task_sink(ev);
                         }
                         TitleOutcome::Failed(reason) => {
-                            let ev =
-                                task_state.event(EventPayload::SessionTitleGenerationFailed {
-                                    session_id: sid,
-                                    reason,
-                                });
+                            let ev = task_state.event(EventPayload::SessionTitleGenerationFailed {
+                                session_id: sid,
+                                reason,
+                            });
                             task_sink(ev);
                         }
                         TitleOutcome::Skipped => {}
@@ -354,7 +357,7 @@ impl Harness {
                 agent,
                 parent,
                 model_io_dump,
-            call_tag,
+                call_tag,
                 pending_inputs,
                 consumed_pending_inputs,
                 pending_inputs_accepting,
@@ -898,11 +901,7 @@ fn arm_idle_after_run(data_dir: &std::path::Path, session_id: &str) {
         });
     }));
     let last_msg_id = crate::storage::memory::read_cursor(data_dir, session_id);
-    scheduler.arm_idle(
-        session_id.to_string(),
-        last_msg_id,
-        (t_min as i64) * 60_000,
-    );
+    scheduler.arm_idle(session_id.to_string(), last_msg_id, (t_min as i64) * 60_000);
     tracing::info!(target: "memory", "[Memory:Sleep] 已挂 idle 哨兵 session={session_id} T={t_min}min");
 }
 

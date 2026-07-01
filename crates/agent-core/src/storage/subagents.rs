@@ -534,7 +534,10 @@ mod tests {
         save_definition(&dd, "a", "---\ndescription: A\n---\nbody").unwrap();
         let defs = load_for_workdir(&dd, None);
         // builtin 垫底后结果含内置项，按 name 找回自定义 "a"，验证两层都未设时缺省启用。
-        let a = defs.iter().find(|d| d.name == "a").expect("自定义 a 应在合并结果里");
+        let a = defs
+            .iter()
+            .find(|d| d.name == "a")
+            .expect("自定义 a 应在合并结果里");
         assert!(a.enabled);
     }
 
@@ -620,7 +623,12 @@ mod tests {
     #[test]
     fn disk_definition_overrides_builtin_with_same_name() {
         let dd = tmp_data_dir("override-builtin");
-        save_definition(&dd, "explore", "---\ndescription: my explore\n---\nCustom explore.").unwrap();
+        save_definition(
+            &dd,
+            "explore",
+            "---\ndescription: my explore\n---\nCustom explore.",
+        )
+        .unwrap();
         let defs = load_for_workdir(&dd, None);
         let explore: Vec<_> = defs.iter().filter(|d| d.name == "explore").collect();
         assert_eq!(explore.len(), 1, "同名只保留磁盘版（覆盖内嵌）");

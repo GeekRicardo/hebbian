@@ -39,6 +39,7 @@ import { useToastStore } from "@/desktop/ui/store/useToastStore";
 import { api } from "@/desktop/bridge/tauri";
 import { appendOptimisticUserMessage } from "@/desktop/ui/store/sessionOptimism";
 import { applyEventToSlot } from "@/desktop/ui/store/slotReducer";
+import { createEventBatcher, type EventBatcher } from "@/desktop/ui/store/eventBatcher";
 import { type LiveTimelineItem } from "@/desktop/ui/components/liveTimelineOrder";
 import { shouldApplyCompactionResult } from "@/desktop/ui/components/compactingState";
 
@@ -225,8 +226,6 @@ export type SessionStream = {
   planComments: Record<string, PlanComment[]>;
   /** 模型调用失败后的自动重试进度（架构 §4.3）。`null` = 当前没在重试。 */
   modelRetry: { attempt: number; max: number; reason: string } | null;
-  /** 自动压缩触发提示（L2）。`null` = 无提示。before/after_tokens 仅供显示。 */
-  contextCompacted: { before_tokens: number; after_tokens: number } | null;
   /**
    * 本 ModelStep 起点（step_started{model}）时的 streaming 快照，供 model_retry 回退：
    * 重试只丢失败 attempt 流出的残片、回到本 step 起点，保留多 Turn 共用 bubble 里之前
@@ -274,7 +273,6 @@ const EMPTY_MIRROR = {
   activePlan: null as SessionStream["activePlan"],
   planComments: {} as Record<string, PlanComment[]>,
   modelRetry: null as SessionStream["modelRetry"],
-  contextCompacted: null as SessionStream["contextCompacted"],
 };
 
 function mirrorFromSlot(slot: SessionStream | undefined) {
@@ -297,7 +295,6 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
     activePlan: slot.activePlan,
     planComments: slot.planComments,
     modelRetry: slot.modelRetry,
-    contextCompacted: slot.contextCompacted,
   };
 }
 
@@ -309,6 +306,40 @@ function trimToastText(s: string, limit = 160): string {
 
 // applyEventToSlot / applyNestedEvent / setPartJudging / dropKey 已抽到 slotReducer.ts
 // （单一源 + standalone 单测覆盖），useStore 直接 import 复用。
+
+const sessionSubscriptions = new Map<string, Promise<() => void>>();
+const sessionEventBatchers = new Map<string, EventBatcher>();
+
+function ensureSessionEventSubscription(
+  sessionId: string,
+  handleEvent: (sessionId: string, event: EngineEvent) => void,
+) {
+  if (sessionSubscriptions.has(sessionId)) return;
+  const promise = api
+    .subscribeSessionEvents(sessionId, (event) => {
+      let batcher = sessionEventBatchers.get(sessionId);
+      if (!batcher) {
+        batcher = createEventBatcher({
+          dispatch: (batched) => handleEvent(sessionId, batched),
+        });
+        sessionEventBatchers.set(sessionId, batcher);
+      }
+      batcher.push(event);
+    })
+    .catch((err) => {
+      sessionSubscriptions.delete(sessionId);
+      throw err;
+    });
+  sessionSubscriptions.set(sessionId, promise);
+}
+
+function dropSessionEventSubscription(sessionId: string) {
+  const batcher = sessionEventBatchers.get(sessionId);
+  batcher?.dispose();
+  sessionEventBatchers.delete(sessionId);
+  void sessionSubscriptions.get(sessionId)?.then((unlisten) => unlisten()).catch(() => {});
+  sessionSubscriptions.delete(sessionId);
+}
 
 /**
  * 从 session.active_plan 绝对路径反推前端 store 用的 activePlan 形状。
@@ -364,7 +395,6 @@ function patchSessionSlot(
         activePlan: null,
         planComments: {},
         modelRetry: null,
-  contextCompacted: null,
       } satisfies SessionStream);
     const next = patch(base);
     const isCurrent = state.currentSession?.id === sessionId;
@@ -522,8 +552,6 @@ interface AppState {
   streamingParts: StreamingAssistantPart[];
   /** 模型调用失败后的自动重试进度（架构 §4.3）。镜像自当前 slot。 */
   modelRetry: { attempt: number; max: number; reason: string } | null;
-  /** 自动压缩触发提示（L2）。镜像自当前 slot。`null` = 无提示。 */
-  contextCompacted: { before_tokens: number; after_tokens: number } | null;
   /**
    * Run 内时间线（架构 §4.2 + §4.12.5）：已完成 turn 快照 + streaming 期间
    * 插队的 user message，按真实顺序。ChatView 据此把"插队 → 下个 turn 输出"
@@ -725,6 +753,7 @@ interface AppState {
    *  `engine-derived-event`（架构 §4.14.7），不走 per-message Channel——后者 invoke
    *  返回即废弃，活不过 detached task。全局 listener 收到后统一调本方法。 */
   handleDerivedEvent: (e: EngineEvent) => void;
+  handleSessionEngineEvent: (sessionId: string, e: EngineEvent) => void;
 
   /**
    * 发送 user message 并触发 run。`meta` 可选——为 wakeup notification 等系统注入
@@ -936,7 +965,6 @@ export const useStore = create<AppState>((set, get) => ({
   streamingText: "",
   streamingParts: [],
   modelRetry: null,
-  contextCompacted: null,
   liveTimeline: [],
   assistantInsertPos: 0,
   activeRequestId: null,
@@ -1685,6 +1713,7 @@ export const useStore = create<AppState>((set, get) => ({
       .catch(() => {});
     get().refreshContextUsage();
     get().refreshEdits();
+    ensureSessionEventSubscription(id, (sid, event) => get().handleSessionEngineEvent(sid, event));
   },
 
   async newSession(opts) {
@@ -1739,6 +1768,7 @@ export const useStore = create<AppState>((set, get) => ({
       ...mirrorFromSlot(state.sessionStreams[s.id]),
     }));
     await get().refreshSessions();
+    ensureSessionEventSubscription(s.id, (sid, event) => get().handleSessionEngineEvent(sid, event));
   },
 
   async renameSession(id, title) {
@@ -1751,6 +1781,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   async deleteSession(id) {
     await api.deleteSession(id);
+    dropSessionEventSubscription(id);
     const wasCurrent = get().currentSession?.id === id;
     set((state) => {
       const { [id]: _drop, ...restStreams } = state.sessionStreams;
@@ -1839,6 +1870,183 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  handleSessionEngineEvent(sessionId, e) {
+    if (
+      e.type === "session_title_changed" ||
+      e.type === "session_title_generation_failed" ||
+      e.type === "memory_extracted" ||
+      e.type === "memory_extraction_failed"
+    ) {
+      get().handleDerivedEvent(e);
+      return;
+    }
+    if (
+      e.type === "context_compacted" ||
+      e.type === "goal_progress" ||
+      e.type === "goal_achieved" ||
+      e.type === "goal_impossible"
+    ) {
+      if (get().currentSession?.id === sessionId) {
+        void api
+          .getSession(sessionId, activeRequestForSession(get(), sessionId))
+          .then((fresh) => {
+            set((state) =>
+              state.currentSession?.id === sessionId
+                ? { currentSession: fresh }
+                : state
+            );
+          })
+          .catch(() => {});
+      }
+      if (e.type === "context_compacted") void get().refreshContextUsage();
+      return;
+    }
+    if (e.type === "notice") {
+      if (e.dedup_key?.startsWith("pending-continue-")) {
+        useToastStore.getState().push({
+          level: e.level,
+          message: e.message,
+          dedupKey: e.dedup_key,
+        });
+        const KINDS: ContinueKind[] = [
+          "truncated",
+          "refused",
+          "filtered",
+          "network_error",
+          "max_iterations",
+          "other",
+        ];
+        const rest = e.dedup_key.slice("pending-continue-".length);
+        const kind = KINDS.find((k) => rest.startsWith(`${k}-`)) ?? "other";
+        set((state) =>
+          state.currentSession?.id === sessionId
+            ? {
+                currentSession: {
+                  ...state.currentSession,
+                  pending_continue: { at: Date.now(), kind, message: e.message },
+                },
+              }
+            : state
+        );
+        return;
+      }
+      const opts = {
+        position: "bottom-right" as const,
+        ...(e.dedup_key ? { id: e.dedup_key } : {}),
+      };
+      if (e.level === "error") toast.error(e.message, opts);
+      else if (e.level === "warn") toast.warning(e.message, opts);
+      else toast(e.message, opts);
+      return;
+    }
+    if (e.type === "run_edits_committed" || e.type === "run_edits_reverted") {
+      set((state) => {
+        const next = applyEditEvent(state.sessionEditSnapshots, sessionId, e);
+        if (next === null) return state;
+        const shouldExpand =
+          e.type === "run_edits_committed" && state.currentSession?.id === sessionId;
+        return shouldExpand
+          ? { sessionEditSnapshots: next, expandEditsRunId: e.run_id }
+          : { sessionEditSnapshots: next };
+      });
+      return;
+    }
+    if (e.type === "usage") {
+      set((state) => {
+        if (state.currentSession?.id !== sessionId) return state;
+        const prev = state.currentSession.token_stats;
+        const next: TokenStats = {
+          input_tokens: (prev?.input_tokens ?? 0) + e.input_tokens,
+          output_tokens: (prev?.output_tokens ?? 0) + e.output_tokens,
+          cache_read_tokens: (prev?.cache_read_tokens ?? 0) + e.cache_read_tokens,
+          cache_creation_tokens:
+            (prev?.cache_creation_tokens ?? 0) + e.cache_creation_tokens,
+          run_count: (prev?.run_count ?? 0) + 1,
+          last_input_tokens: e.input_tokens,
+          last_output_tokens: e.output_tokens,
+          last_cache_read_tokens: e.cache_read_tokens,
+          last_cache_creation_tokens: e.cache_creation_tokens,
+        };
+        return { currentSession: { ...state.currentSession, token_stats: next } };
+      });
+      return;
+    }
+    if (e.type === "run_finished" || e.type === "run_suspended" || e.type === "error") {
+      sessionEventBatchers.get(sessionId)?.flushNow();
+    }
+    set((state) => {
+      const slot = state.sessionStreams[sessionId];
+      if (!slot) return state;
+      if (
+        e.type === "permission_auto_judged" &&
+        e.decision === "deny" &&
+        (e.tool_name === "Edit" || e.tool_name === "Write")
+      ) {
+        toast.info(`自动拒绝：${e.tool_name}`, {
+          description: e.reason ?? undefined,
+          duration: 5000,
+        });
+      }
+      const updated = applyEventToSlot(slot, e);
+      if (updated === slot) return state;
+      const isForeground = state.currentSession?.id === sessionId;
+      return {
+        ...state,
+        sessionStreams: {
+          ...state.sessionStreams,
+          [sessionId]: updated,
+        },
+        ...(isForeground ? mirrorFromSlot(updated) : {}),
+      };
+    });
+    if (e.type === "run_finished" || e.type === "error") {
+      void (async () => {
+        const live = get().sessionStreams[sessionId];
+        const loaded = await api.getSession(sessionId, activeRequestForSession(get(), sessionId));
+        const fresh = live ? attachReasoningDurations(loaded, live.streamingParts) : loaded;
+        const stillForeground = get().currentSession?.id === sessionId;
+        set((state) => {
+          const { [sessionId]: _drop, ...rest } = state.sessionStreams;
+          if (stillForeground) {
+            return {
+              currentSession: fresh,
+              sessionStreams: rest,
+              runningSessions: removeFromSet(state.runningSessions, sessionId),
+              ...mirrorFromSlot(undefined),
+              todos: fresh.todos ?? [],
+              activePlan: fresh.active_plan ? activePlanFromPath(fresh.active_plan) : null,
+            };
+          }
+          return {
+            ...state,
+            sessionStreams: rest,
+            runningSessions: removeFromSet(state.runningSessions, sessionId),
+            unreadFinishedSessions: new Set(state.unreadFinishedSessions).add(sessionId),
+          };
+        });
+        await get().refreshSessions();
+        if (stillForeground) get().refreshContextUsage();
+        const head = get().inputQueues[sessionId]?.[0];
+        if (head && !get().sessionStreams[sessionId]) {
+          set((state) => {
+            const list = state.inputQueues[sessionId] ?? [];
+            const next = list.filter((it) => it.id !== head.id);
+            const queues = { ...state.inputQueues };
+            if (next.length === 0) delete queues[sessionId];
+            else queues[sessionId] = next;
+            const isForeground = state.currentSession?.id === sessionId;
+            return {
+              ...state,
+              inputQueues: queues,
+              ...(isForeground ? { currentInputQueue: next } : {}),
+            };
+          });
+          await get().sendUserMessage(head.content, head.attachments, null, {}, sessionId);
+        }
+      })().catch(() => {});
+    }
+  },
+
   async sendUserMessage(content, attachments = [], meta = null, options = {}, targetSessionId = null) {
     // targetSessionId：发到指定对话（内置浏览器绑定的对话），不随当前打开的对话变——
     // 否则切到别的对话时提交注释会串到那个对话。非当前对话时后台落盘，切回时显示。
@@ -1871,32 +2079,6 @@ export const useStore = create<AppState>((set, get) => ({
       runAttachments: MessageAttachment[]
     ) => {
       const sessionId = baseSession.id;
-      // 当前 turn 跑完后（无论成功 / 失败 / 取消），把队首项作为下一轮自动 send。
-      // 队列属于 session，不属于当前打开的页面；切到别的对话后也要继续 drain。
-      const drainNext = () => {
-        queueMicrotask(() => {
-          const state = get();
-          const queue = state.inputQueues[sessionId];
-          if (!queue || queue.length === 0) return;
-          if (state.sessionStreams[sessionId]) return; // 还有 run 在跑（异常路径）
-          const head = queue[0];
-          removeQueuedForSession(sessionId, head.id);
-          void (async () => {
-            const latest =
-              get().currentSession?.id === sessionId
-                ? get().currentSession
-                : await api.getSession(
-                    sessionId,
-                    activeRequestForSession(get(), sessionId)
-                  );
-            if (!latest) return;
-            await sendForSession(latest, head.content, head.attachments);
-          })().catch(() => {
-            // 后台队列失败时由 running/unread 状态提示用户回到该会话查看。
-          });
-        });
-      };
-
       const tempId = "streaming";
       const requestId =
         crypto.randomUUID?.() ??
@@ -1931,7 +2113,6 @@ export const useStore = create<AppState>((set, get) => ({
             : null),
         planComments: priorSlot?.planComments ?? {},
         modelRetry: null,
-  contextCompacted: null,
       };
       set((state) => {
         const isForeground = state.currentSession?.id === sessionId;
@@ -1958,6 +2139,7 @@ export const useStore = create<AppState>((set, get) => ({
         };
       });
       try {
+        ensureSessionEventSubscription(sessionId, (sid, event) => get().handleSessionEngineEvent(sid, event));
         // 传空数组：后端会优先用 session.enabled_tools，再 fallback 到全局 settings。
         // 工具的开关现在统一在「设置 → 对话设置」配置。
         await api.sendMessage(
@@ -1967,201 +2149,11 @@ export const useStore = create<AppState>((set, get) => ({
           baseSession.stream,
           [],
           requestId,
-          (e: EngineEvent) => {
-            // 后台派生任务（标题 / 记忆）事件的双路径兼容：
-            // - Desktop（Tauri）：agent-core 走 derived_sink 旁路 → app 级全局总线
-            //   `engine-derived-event`，由 App.tsx 全局 listener 调 handleDerivedEvent；
-            //   本 per-message 回调收不到（不会重复）。
-            // - hebweb（Web）：本回调即 ws `engine-event` 的 onmessage，派生事件随 ws
-            //   广播到这里，委托同一份 handleDerivedEvent 兜住（架构 §4.14.7）。
-            if (
-              e.type === "session_title_changed" ||
-              e.type === "session_title_generation_failed" ||
-              e.type === "memory_extracted" ||
-              e.type === "memory_extraction_failed"
-            ) {
-              get().handleDerivedEvent(e);
-              return;
-            }
-            // //goal 目标判定事件（架构 §4.8.3）：裁决在 turn 收尾时已落一条 GoalOutcome
-            // marker；前台正看着这个会话就 reload，从落盘 marker 重建成彩色竖线结果块（不弹 toast）。
-            if (
-              e.type === "goal_progress" ||
-              e.type === "goal_achieved" ||
-              e.type === "goal_impossible"
-            ) {
-              const sid = get().currentSession?.id;
-              if (sid) {
-                void api
-                  .getSession(sid, activeRequestForSession(get(), sid))
-                  .then((fresh) => {
-                    set((state) =>
-                      state.currentSession?.id === sid
-                        ? { currentSession: fresh }
-                        : state
-                    );
-                  })
-                  .catch(() => {});
-              }
-              return;
-            }
-            // 轻量通知（架构 §4.4.4）：渲染成 toast，不进 slot。
-            if (e.type === "notice") {
-              // 模型异常退出（架构 §4.3）走输入框上方的自定义 toast 区——右→左滑入、
-              // 新消息往上挤、hover 不关；其余通知仍走 sonner 角落。
-              if (e.dedup_key?.startsWith("pending-continue-")) {
-                useToastStore.getState().push({
-                  level: e.level,
-                  message: e.message,
-                  dedupKey: e.dedup_key,
-                });
-                // 当场把续作入口同步进内存态，让 ContinueBar 立刻出现——不必等磁盘重载。
-                // 落盘那份由 agent_loop 写，保证重启后仍可见。
-                const KINDS: ContinueKind[] = [
-                  "truncated",
-                  "refused",
-                  "filtered",
-                  "network_error",
-                  "max_iterations",
-                  "other",
-                ];
-                const rest = e.dedup_key.slice("pending-continue-".length);
-                const kind = KINDS.find((k) => rest.startsWith(`${k}-`)) ?? "other";
-                set((state) =>
-                  state.currentSession?.id === sessionId
-                    ? {
-                        currentSession: {
-                          ...state.currentSession,
-                          pending_continue: { at: Date.now(), kind, message: e.message },
-                        },
-                      }
-                    : state
-                );
-                return;
-              }
-              const opts = {
-                position: "bottom-right" as const,
-                ...(e.dedup_key ? { id: e.dedup_key } : {}),
-              };
-              if (e.level === "error") toast.error(e.message, opts);
-              else if (e.level === "warn") toast.warning(e.message, opts);
-              else toast(e.message, opts);
-              return;
-            }
-            // Edit Run 事件：session-scoped，不进 slot；run 结束 slot 被删后仍然保留
-            if (e.type === "run_edits_committed" || e.type === "run_edits_reverted") {
-              set((state) => {
-                const next = applyEditEvent(state.sessionEditSnapshots, sessionId, e);
-                if (next === null) return state;
-                // 仅「模型刚提交修改」且属于当前会话时，发一次性展开信号让
-                // RightSidebar 跳到修改文件 tab。回退不触发；加载历史走 refreshEdits
-                // 不经此路径，故打开旧对话不会误弹。
-                const shouldExpand =
-                  e.type === "run_edits_committed" &&
-                  state.currentSession?.id === sessionId;
-                return shouldExpand
-                  ? { sessionEditSnapshots: next, expandEditsRunId: e.run_id }
-                  : { sessionEditSnapshots: next };
-              });
-              return;
-            }
-            // turn 级 usage：run 进行中每次模型请求完成就累加 token_stats，前台实时刷新
-            // cache 指示器。后端已 per-turn 落盘，切回来 getSession 取到的值一致。
-            if (e.type === "usage") {
-              set((state) => {
-                if (state.currentSession?.id !== sessionId) return state;
-                const prev = state.currentSession.token_stats;
-                const next: TokenStats = {
-                  input_tokens: (prev?.input_tokens ?? 0) + e.input_tokens,
-                  output_tokens: (prev?.output_tokens ?? 0) + e.output_tokens,
-                  cache_read_tokens: (prev?.cache_read_tokens ?? 0) + e.cache_read_tokens,
-                  cache_creation_tokens:
-                    (prev?.cache_creation_tokens ?? 0) + e.cache_creation_tokens,
-                  run_count: (prev?.run_count ?? 0) + 1,
-                  last_input_tokens: e.input_tokens,
-                  last_output_tokens: e.output_tokens,
-                  last_cache_read_tokens: e.cache_read_tokens,
-                  last_cache_creation_tokens: e.cache_creation_tokens,
-                };
-                return {
-                  currentSession: { ...state.currentSession, token_stats: next },
-                };
-              });
-              return;
-            }
-            set((state) => {
-              const slot = state.sessionStreams[sessionId];
-              // 槽已被替换（用户在同一会话又发了一条）或被清掉（run 已结束）→ 丢弃事件
-              if (!slot || slot.requestId !== requestId) return state;
-              // judge 自动拒 Edit/Write 的提示 toast：reducer 保持纯净，副作用留在调用层。
-              if (
-                e.type === "permission_auto_judged" &&
-                e.decision === "deny" &&
-                (e.tool_name === "Edit" || e.tool_name === "Write")
-              ) {
-                toast.info(`自动拒绝：${e.tool_name}`, {
-                  description: e.reason ?? undefined,
-                  duration: 5000,
-                });
-              }
-              const updated = applyEventToSlot(slot, e);
-              if (updated === slot) return state;
-              const isForeground = state.currentSession?.id === sessionId;
-              return {
-                ...state,
-                sessionStreams: {
-                  ...state.sessionStreams,
-                  [sessionId]: updated,
-                },
-                ...(isForeground ? mirrorFromSlot(updated) : {}),
-              };
-            });
-          },
+          (e: EngineEvent) => get().handleSessionEngineEvent(sessionId, e),
           meta,
           options.continueRun,
         );
-        const live = get().sessionStreams[sessionId];
-        const stillForeground = get().currentSession?.id === sessionId;
-        if (stillForeground) {
-          const loaded = await api.getSession(
-            sessionId,
-            activeRequestForSession(get(), sessionId)
-          );
-          const fresh = live ? attachReasoningDurations(loaded, live.streamingParts) : loaded;
-          set((state) => {
-            const { [sessionId]: _drop, ...rest } = state.sessionStreams;
-            return {
-              currentSession: fresh,
-              sessionStreams: rest,
-              runningSessions: removeFromSet(state.runningSessions, sessionId),
-              // run 结束时 slot 被清掉 → 顶层 streaming 等字段走 EMPTY_MIRROR；
-              // 但 todos / active_plan 是持久化状态，run 结束不应该跟着清空——
-              // 从 fresh session（agent_core 折叠 jsonl 后的最新快照）拿回来。
-              ...mirrorFromSlot(undefined),
-              todos: fresh.todos ?? [],
-              activePlan: fresh.active_plan
-                ? activePlanFromPath(fresh.active_plan)
-                : null,
-            };
-          });
-          get().refreshContextUsage();
-        } else {
-          set((state) => {
-            const { [sessionId]: _drop, ...rest } = state.sessionStreams;
-            return {
-              ...state,
-              sessionStreams: rest,
-              runningSessions: removeFromSet(state.runningSessions, sessionId),
-              unreadFinishedSessions: new Set(state.unreadFinishedSessions).add(
-                sessionId
-              ),
-            };
-          });
-        }
-        await get().refreshSessions();
-        // 标题自动生成已下沉到 agent_core：首轮 TurnFinished 后由 Harness::spawn_run
-        // 异步 spawn 一个短调用 task，落 jsonl 后通过 EngineEvent::SessionTitleChanged
-        // 推到前端（见上面 event handler）。前端不再主动 invoke。
+        // start_run 已被 hebcore 接收；流式事件与终态清理由 session 级长期订阅处理。
       } catch (err: any) {
         const stillForeground = get().currentSession?.id === sessionId;
         // 不论前后台都先把 slot 清掉、running 摘除；后台失败再标 unread
@@ -2213,7 +2205,7 @@ export const useStore = create<AppState>((set, get) => ({
           throw err;
         }
       } finally {
-        drainNext();
+        // 队列续跑等 session 级订阅收到 run 终态、清掉 slot 后再触发。
       }
     };
 

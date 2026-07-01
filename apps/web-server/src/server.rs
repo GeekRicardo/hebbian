@@ -40,10 +40,9 @@ use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
 use crate::protocol::{WsClientMessage, WsServerMessage};
-use surface_session::{run_turn, SessionRuntime};
+use surface_session::SessionRuntime;
 
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
-const EVENT_CHANNEL_CAPACITY: usize = 1024;
 
 // ─── 共享 server 状态 ─────────────────────────────────────────────────────
 
@@ -532,11 +531,11 @@ async fn cmd_send_message(
         }
         return Ok(());
     }
-    // 直接 await run_turn，让前端 invoke 等到整个 turn（含 HITL 审批）完成才 resolve。
-    // 跟 Tauri send_message 行为一致：前端拿到 invoke resolve 时 turn 已结束，
-    // 此刻清理 sessionStreams 槽是安全的；否则 ws 推来的 permission_requested
-    // 会因槽已被清而被丢弃，popup 渲染不出来。
-    run_turn(runtime, surface_session::TurnInput::new(text, attachments)).await
+    runtime
+        .input_tx
+        .send(surface_session::TurnInput::new(text, attachments))
+        .map_err(|_| anyhow!("start run failed: runtime input loop closed"))?;
+    Ok(())
 }
 
 // ─── 旁支对话（branch）────────────────────────────────────────────────────────

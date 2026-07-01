@@ -1023,7 +1023,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         }
     }
 
@@ -1073,7 +1073,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_responses_body(&req, false, true);
@@ -1101,7 +1101,7 @@ mod responses_tests {
             }],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_responses_body(&req, true, true);
@@ -1124,7 +1124,7 @@ mod responses_tests {
             }],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_responses_body(&req, true, true);
@@ -1145,7 +1145,7 @@ mod responses_tests {
             }],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_responses_body(&req, true, true);
@@ -1176,7 +1176,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_responses_body(&req, false, false);
@@ -1219,7 +1219,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_responses_body(&req, true, true);
@@ -1261,7 +1261,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_responses_body(&req, true, true);
@@ -1332,7 +1332,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_responses_body(&req, true, false);
@@ -1379,7 +1379,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_responses_body(&req, true, true);
@@ -1499,7 +1499,7 @@ mod deepseek_compat_tests {
             tools: vec![],
             max_tokens,
             reasoning,
-                    meta: Default::default(),
+            meta: Default::default(),
         }
     }
 
@@ -1661,7 +1661,7 @@ mod deepseek_compat_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning,
-                    meta: Default::default(),
+            meta: Default::default(),
         }
     }
 

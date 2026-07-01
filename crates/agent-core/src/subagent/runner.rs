@@ -228,8 +228,11 @@ impl SubagentRunner {
         // client、model 取该 provider 的 default_model；缺省复用父 client 与父 model。
         let (child_client, model_id) = self.resolve_child_client(&def);
         // 子权限（架构 §4.4.11.4）：按 def.permission 解析子 RunMode、force_automode 与 bypass。
-        let (child_run_mode, child_force_automode, subagent_bypass) =
-            resolve_permission(def.permission, self.parent_run_mode, &self.parent_force_automode);
+        let (child_run_mode, child_force_automode, subagent_bypass) = resolve_permission(
+            def.permission,
+            self.parent_run_mode,
+            &self.parent_force_automode,
+        );
         let max_iter = def.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
 
         let params = LoopParams {
@@ -478,11 +481,17 @@ mod tests {
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
 
         // inherit：跟父 RunMode + 共享同一句柄（同一 Arc）。
-        let (mode, fa, bypass) =
-            resolve_permission(Some(SubagentPermission::Inherit), RunMode::AutoMode, &parent_fa);
+        let (mode, fa, bypass) = resolve_permission(
+            Some(SubagentPermission::Inherit),
+            RunMode::AutoMode,
+            &parent_fa,
+        );
         assert_eq!(mode, RunMode::AutoMode);
         assert!(!bypass);
-        assert!(fa.load(Ordering::Relaxed), "inherit 子应读到父 hands-off=true");
+        assert!(
+            fa.load(Ordering::Relaxed),
+            "inherit 子应读到父 hands-off=true"
+        );
         assert!(
             std::sync::Arc::ptr_eq(&fa, &parent_fa),
             "inherit 子必须共享父同一个 force_automode Arc（父中途切换实时跟随）"
@@ -500,12 +509,18 @@ mod tests {
         );
         assert_eq!(mode, RunMode::Default);
         assert!(!bypass);
-        assert!(!fa.load(Ordering::Relaxed), "acceptEdits 子不跟父 hands-off");
+        assert!(
+            !fa.load(Ordering::Relaxed),
+            "acceptEdits 子不跟父 hands-off"
+        );
         assert!(!std::sync::Arc::ptr_eq(&fa, &parent_fa));
 
         // bypass：Default + bypass，独立 false 句柄。
-        let (mode, fa, bypass) =
-            resolve_permission(Some(SubagentPermission::Bypass), RunMode::AutoMode, &parent_fa);
+        let (mode, fa, bypass) = resolve_permission(
+            Some(SubagentPermission::Bypass),
+            RunMode::AutoMode,
+            &parent_fa,
+        );
         assert_eq!(mode, RunMode::Default);
         assert!(bypass);
         assert!(!fa.load(Ordering::Relaxed));

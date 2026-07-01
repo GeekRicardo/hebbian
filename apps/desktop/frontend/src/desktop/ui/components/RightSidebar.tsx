@@ -316,18 +316,19 @@ export function RightSidebar({
   const currentTabLabel = tabs.find((item) => item.id === tab)?.label ?? "工作台";
 
   const activityBar = (
-    <div className="flex h-full w-10 shrink-0 flex-col items-center gap-0.5 border-l border-border bg-muted/60 p-1 text-muted-foreground">
-      <button
-        type="button"
-        onClick={() => setCollapsed((v) => !v)}
-        className="relative grid h-7 w-7 min-w-7 self-center place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title={collapsed ? "展开工作台" : "折叠工作台"}
-        aria-label={collapsed ? "展开工作台" : "折叠工作台"}
-      >
-        {collapsed ? <Codicon name="chevron-left" className="text-[14px]" /> : <Codicon name="chevron-right" className="text-[14px]" />}
-      </button>
-      <div className="h-px w-7 bg-border" />
-      <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto [scrollbar-width:none]">
+    <div className="flex h-full w-10 shrink-0 flex-col items-center border-l border-border bg-muted/60 text-muted-foreground">
+      <div className="flex h-8 w-full shrink-0 items-center justify-center border-b border-border">
+        <button
+          type="button"
+          onClick={() => setCollapsed((v) => !v)}
+          className="relative grid h-7 w-7 min-w-7 self-center place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title={collapsed ? "展开工作台" : "折叠工作台"}
+          aria-label={collapsed ? "展开工作台" : "折叠工作台"}
+        >
+          {collapsed ? <Codicon name="chevron-left" className="text-[14px]" /> : <Codicon name="chevron-right" className="text-[14px]" />}
+        </button>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto p-1 [scrollbar-width:none]">
         {tabs.map((item) => (
           <SidebarIconButton
             key={item.id}
@@ -398,15 +399,6 @@ export function RightSidebar({
                     <Codicon name="json" className="text-[14px]" />
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={() => setCollapsed(true)}
-                  className="grid h-6 w-6 place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  title="折叠工作台"
-                  aria-label="折叠工作台"
-                >
-                  <Codicon name="chevron-right" className="text-[14px]" />
-                </button>
               </div>
             </div>
 

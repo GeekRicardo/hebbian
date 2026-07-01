@@ -751,8 +751,7 @@ mod tests {
         use crate::storage::memory::{write, MemoryKind, MemoryScope};
         use crate::storage::settings::{self, MemoryModelRef};
 
-        let dd =
-            std::env::temp_dir().join(format!("heb-sess-mem-{}", uuid::Uuid::new_v4()));
+        let dd = std::env::temp_dir().join(format!("heb-sess-mem-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dd).unwrap();
         write(
             &dd,

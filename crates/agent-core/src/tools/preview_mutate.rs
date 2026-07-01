@@ -76,7 +76,9 @@ mod tests {
     #[tokio::test]
     async fn append_returns_ack() {
         let out = PreviewMutateTool
-            .execute(serde_json::json!({ "op": "append", "target": "@1", "html": "<button>x</button>" }))
+            .execute(
+                serde_json::json!({ "op": "append", "target": "@1", "html": "<button>x</button>" }),
+            )
             .await
             .unwrap();
         assert!(out.contains("append"));

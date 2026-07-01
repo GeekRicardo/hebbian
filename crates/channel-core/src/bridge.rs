@@ -7,6 +7,10 @@ use std::sync::{
     Arc, Mutex,
 };
 
+use crate::commands::{self, CommandResult};
+use crate::contract::Channel;
+use crate::message::{InboundMessage, OutboundMessage};
+use crate::owner_state::OwnerState;
 use agent_core::context::transcript::Transcript;
 use agent_core::core_client::LocalCoreClient;
 use agent_core::definition::AgentDefinition;
@@ -20,10 +24,6 @@ use agent_core::workspace::Workspace;
 use agent_core::{Harness, Session as CoreSession, SessionConfig, TurnObserver, TurnOutcome};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use crate::commands::{self, CommandResult};
-use crate::contract::Channel;
-use crate::message::{InboundMessage, OutboundMessage};
-use crate::owner_state::OwnerState;
 use chrono::Utc;
 use common::runtime::PendingInputs;
 use model_gateway::client::{DynModelClient, ModelClient};
@@ -167,8 +167,7 @@ impl ChannelBridge {
     /// 渠道是否就绪可转发（已登录运行 + 机主发过消息有回复目标）。
     /// 调用方据此决定是否落「已转发」痕迹——避免渠道离线却落假痕迹。
     pub fn can_forward(&self) -> bool {
-        self.channel.lock().unwrap().is_some()
-            && self.last_owner_target.lock().unwrap().is_some()
+        self.channel.lock().unwrap().is_some() && self.last_owner_target.lock().unwrap().is_some()
     }
 
     fn forward_target(&self) -> Option<(Arc<dyn Channel>, OwnerTarget)> {
@@ -663,8 +662,10 @@ impl TurnObserver for ChannelObserver {
         }
         match &event.payload {
             EventPayload::Reasoning { text } => {
-                self.parts
-                    .push(sessions::MessagePart::Reasoning { text: text.clone() });
+                self.parts.push(sessions::MessagePart::Reasoning {
+                    text: text.clone(),
+                    duration_ms: None,
+                });
             }
             EventPayload::TextDelta { text } => {
                 self.buffer.push_str(text);
@@ -1017,7 +1018,10 @@ mod tests {
     #[test]
     fn cancel_keyword_cancels() {
         let options = opts(&["A", "B"]);
-        assert!(matches!(answer("取消", &options, false), UserAnswer::Cancelled));
+        assert!(matches!(
+            answer("取消", &options, false),
+            UserAnswer::Cancelled
+        ));
     }
 
     #[test]

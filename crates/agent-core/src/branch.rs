@@ -455,7 +455,12 @@ mod tests {
     fn fork_flattens_assistant_tool_calls() {
         let msgs = vec![
             msg("u1"),
-            assistant_with_tool("a1", "我来跑下测试", "Bash", json!({ "command": "cargo test" })),
+            assistant_with_tool(
+                "a1",
+                "我来跑下测试",
+                "Bash",
+                json!({ "command": "cargo test" }),
+            ),
         ];
         let forked = fork_history(&msgs, None);
         let assistant = &forked[1];

@@ -46,6 +46,10 @@ export default defineConfig(async () => ({
   build: {
     outDir: distDir,
     emptyOutDir: true,
+    // WKWebView (macOS Tauri) 原生支持 es2021；设此值防止 esbuild minify
+    // 把 xterm 6.0.0 的 `let r; (r ||= {})` 错误降级为 `void 0 || (r = {})`
+    // 丢掉变量声明引发 ReferenceError（xtermjs/xtermjs#5800）
+    target: "es2021",
   },
   clearScreen: false,
   server: {

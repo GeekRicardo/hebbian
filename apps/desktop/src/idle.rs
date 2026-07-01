@@ -13,10 +13,7 @@ pub fn seconds_since_last_input() -> f64 {
         const ANY_INPUT_EVENT: u32 = 0xFFFF_FFFF;
         #[link(name = "CoreGraphics", kind = "framework")]
         extern "C" {
-            fn CGEventSourceSecondsSinceLastEventType(
-                state_id: u32,
-                event_type: u32,
-            ) -> f64;
+            fn CGEventSourceSecondsSinceLastEventType(state_id: u32, event_type: u32) -> f64;
         }
         // SAFETY: 纯只读系统调用，无指针参数。
         unsafe { CGEventSourceSecondsSinceLastEventType(HID_SYSTEM_STATE, ANY_INPUT_EVENT) }

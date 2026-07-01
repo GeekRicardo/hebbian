@@ -28,7 +28,7 @@ pub fn build_probe_request(model: impl Into<String>) -> ModelRequest {
         tools: Vec::new(),
         max_tokens: PROBE_MAX_TOKENS,
         reasoning: None,
-            meta: Default::default(),
+        meta: Default::default(),
     }
 }
 

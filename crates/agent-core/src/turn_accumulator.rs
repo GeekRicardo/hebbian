@@ -99,6 +99,7 @@ impl AssistantAccumulator {
             && matches!(
                 payload,
                 EventPayload::Reasoning { .. }
+                    | EventPayload::ReasoningDuration { .. }
                     | EventPayload::TextDelta { .. }
                     | EventPayload::TextDone { .. }
                     | EventPayload::ToolCallStarted { .. }
@@ -113,6 +114,7 @@ impl AssistantAccumulator {
         match payload {
             EventPayload::TextDelta { text } => self.append_text(text),
             EventPayload::Reasoning { text } => self.append_reasoning(text),
+            EventPayload::ReasoningDuration { ms } => self.set_reasoning_duration(*ms),
             EventPayload::TextDone { full_text } => self.final_text = full_text.clone(),
             EventPayload::ToolCallDelta {
                 index,
@@ -160,9 +162,23 @@ impl AssistantAccumulator {
             return;
         }
         match self.parts.last_mut() {
-            Some(MessagePart::Reasoning { text: existing }) => existing.push_str(text),
+            Some(MessagePart::Reasoning { text: existing, .. }) => existing.push_str(text),
             _ => self.parts.push(MessagePart::Reasoning {
                 text: text.to_string(),
+                duration_ms: None,
+            }),
+        }
+    }
+
+    /// 把思考时长写进当前的 Reasoning part。若最后一段不是 Reasoning（OAuth 直连官方时
+    /// thinking 文本被清空、没产生任何 Reasoning delta），就补一个空文本 part 承载时长——
+    /// UI 据此显示「思考用时 N 秒」，哪怕没有可展开的思考正文。
+    fn set_reasoning_duration(&mut self, ms: u64) {
+        match self.parts.last_mut() {
+            Some(MessagePart::Reasoning { duration_ms, .. }) => *duration_ms = Some(ms),
+            _ => self.parts.push(MessagePart::Reasoning {
+                text: String::new(),
+                duration_ms: Some(ms),
             }),
         }
     }
@@ -379,13 +395,59 @@ mod tests {
         acc.on_event(&ev(EventPayload::Reasoning {
             text: "想一下".into(),
         }));
-        acc.on_event(&ev(EventPayload::TextDelta { text: "你好".into() }));
-        acc.on_event(&ev(EventPayload::TextDelta { text: "世界".into() }));
+        acc.on_event(&ev(EventPayload::TextDelta {
+            text: "你好".into(),
+        }));
+        acc.on_event(&ev(EventPayload::TextDelta {
+            text: "世界".into(),
+        }));
         let msg = acc.build().unwrap();
         assert_eq!(msg.content, "你好世界");
         assert_eq!(msg.parts.len(), 2);
         assert!(matches!(msg.parts[0], MessagePart::Reasoning { .. }));
         assert!(matches!(msg.parts[1], MessagePart::Text { .. }));
+    }
+
+    #[test]
+    fn reasoning_duration_attaches_to_thinking_part() {
+        // 有 thinking 文本时：时长写进同一个 Reasoning part，不另起一段。
+        let mut acc = AssistantAccumulator::new();
+        acc.on_event(&ev(EventPayload::Reasoning {
+            text: "推理过程".into(),
+        }));
+        acc.on_event(&ev(EventPayload::ReasoningDuration { ms: 4500 }));
+        acc.on_event(&ev(EventPayload::TextDelta {
+            text: "答案".into(),
+        }));
+        let msg = acc.build().unwrap();
+        assert_eq!(msg.parts.len(), 2);
+        match &msg.parts[0] {
+            MessagePart::Reasoning { text, duration_ms } => {
+                assert_eq!(text, "推理过程");
+                assert_eq!(*duration_ms, Some(4500));
+            }
+            other => panic!("expected Reasoning, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reasoning_duration_without_text_creates_empty_part() {
+        // OAuth 直连官方：thinking 文本被清空，全程没有 Reasoning delta，只有时长。
+        // 必须凭空补一个空文本 Reasoning part 承载时长，UI 才能显示「思考用时 N 秒」。
+        let mut acc = AssistantAccumulator::new();
+        acc.on_event(&ev(EventPayload::ReasoningDuration { ms: 4500 }));
+        acc.on_event(&ev(EventPayload::TextDelta {
+            text: "答案".into(),
+        }));
+        let msg = acc.build().unwrap();
+        assert_eq!(msg.parts.len(), 2);
+        match &msg.parts[0] {
+            MessagePart::Reasoning { text, duration_ms } => {
+                assert!(text.is_empty(), "OAuth 场景 thinking 文本应为空");
+                assert_eq!(*duration_ms, Some(4500));
+            }
+            other => panic!("expected empty Reasoning carrying duration, got {other:?}"),
+        }
     }
 
     #[test]

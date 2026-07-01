@@ -133,7 +133,9 @@ fn cmd_use(
 
     let target = match key.parse::<usize>() {
         Ok(index) if index >= 1 && index <= filtered.len() => Some(&filtered[index - 1]),
-        Ok(_) => return CommandResult::Reply(format!("❌ 序号超范围，共 {} 条对话。", filtered.len())),
+        Ok(_) => {
+            return CommandResult::Reply(format!("❌ 序号超范围，共 {} 条对话。", filtered.len()))
+        }
         Err(_) => filtered
             .iter()
             .find(|session| session.id == key || session.id.starts_with(key)),

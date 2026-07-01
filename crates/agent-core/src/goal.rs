@@ -76,7 +76,7 @@ pub async fn judge_goal(
         tools: Vec::new(),
         max_tokens: 400,
         reasoning: None,
-            meta: model_gateway::types::ModelCallMeta {
+        meta: model_gateway::types::ModelCallMeta {
             tag: model_gateway::types::ModelCallTag::Goal,
             ..Default::default()
         },
@@ -173,18 +173,26 @@ mod tests {
 
     #[test]
     fn parse_impossible() {
-        let v = parse_verdict(r#"{"ok": false, "impossible": true, "reason": "依赖的外部 API 已下线"}"#);
+        let v = parse_verdict(
+            r#"{"ok": false, "impossible": true, "reason": "依赖的外部 API 已下线"}"#,
+        );
         assert_eq!(v, GoalVerdict::Impossible("依赖的外部 API 已下线".into()));
     }
 
     #[test]
     fn parse_garbage_falls_back_to_not_yet() {
-        assert!(matches!(parse_verdict("我觉得差不多了"), GoalVerdict::NotYet(_)));
+        assert!(matches!(
+            parse_verdict("我觉得差不多了"),
+            GoalVerdict::NotYet(_)
+        ));
         assert!(matches!(parse_verdict(""), GoalVerdict::NotYet(_)));
         // `}` 先于 `{`：切片边界倒置，必须 fail-safe 而非 panic
         assert!(matches!(parse_verdict("} x {"), GoalVerdict::NotYet(_)));
         // JSON 存在但类型不符：解析失败分支
-        assert!(matches!(parse_verdict(r#"{"ok": "yes"}"#), GoalVerdict::NotYet(_)));
+        assert!(matches!(
+            parse_verdict(r#"{"ok": "yes"}"#),
+            GoalVerdict::NotYet(_)
+        ));
     }
 
     #[test]

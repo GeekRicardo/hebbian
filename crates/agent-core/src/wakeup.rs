@@ -340,7 +340,6 @@ impl WakeupScheduler {
         }
     }
 
-
     /// 在 cron 表里登记一条；到 `fire_at_ms` 时投递事件。
     pub fn arm_cron(&self, session_id: String, run_id: String, fire_at_ms: i64, reason: String) {
         self.inner.lock().unwrap().crons.push(Cron {
@@ -712,7 +711,13 @@ mod tests {
         };
 
         // 主动 kill 的任务：arm watch 后 kill，scan_bg 不应投递事件。
-        let killed = shells.register("sleep 30".into(), "/".into(), true, None, spawn_bg("sleep 30"));
+        let killed = shells.register(
+            "sleep 30".into(),
+            "/".into(),
+            true,
+            None,
+            spawn_bg("sleep 30"),
+        );
         scheduler.arm_bg_task("sess".into(), "run".into(), killed.task_id.clone(), None);
         shells.kill(&killed.task_id).await;
         assert!(matches!(

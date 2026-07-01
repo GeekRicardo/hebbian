@@ -33,7 +33,15 @@ pub fn create_keepalive(parent_view: *mut std::ffi::c_void) {
     let slot: BrowserSlot = Arc::new(std::sync::Mutex::new(None));
     let nav: super::client::NavCb = Arc::new(|_| {});
     let mut client = HebClient::make(slot, Arc::new(String::new()), nav);
-    let window_info = WindowInfo::default().set_as_child(parent_view, &Rect { x: 0, y: 0, width: 1, height: 1 });
+    let window_info = WindowInfo::default().set_as_child(
+        parent_view,
+        &Rect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        },
+    );
     let url = CefString::from("about:blank");
     let created = browser_host_create_browser(
         Some(&window_info),
@@ -197,4 +205,3 @@ impl CefHost {
         }
     }
 }
-

@@ -30,7 +30,10 @@ impl NestedAccumulator {
             EventPayload::TextDelta { text } => push_text(parts, text),
             EventPayload::Reasoning { text } => push_reasoning(parts, text),
             EventPayload::ToolCallStarted {
-                call_id, name, input, ..
+                call_id,
+                name,
+                input,
+                ..
             } => parts.push(MessagePart::ToolCall {
                 id: call_id.clone(),
                 name: name.clone(),
@@ -92,11 +95,12 @@ fn push_text(parts: &mut Vec<MessagePart>, text: &str) {
 }
 
 fn push_reasoning(parts: &mut Vec<MessagePart>, text: &str) {
-    if let Some(MessagePart::Reasoning { text: t }) = parts.last_mut() {
+    if let Some(MessagePart::Reasoning { text: t, .. }) = parts.last_mut() {
         t.push_str(text);
     } else {
         parts.push(MessagePart::Reasoning {
             text: text.to_string(),
+            duration_ms: None,
         });
     }
 }
@@ -123,7 +127,12 @@ mod tests {
         let mut acc = NestedAccumulator::default();
         let cid = "T1";
         acc.record(cid, &EventPayload::TextDelta { text: "找".into() });
-        acc.record(cid, &EventPayload::TextDelta { text: "到了".into() });
+        acc.record(
+            cid,
+            &EventPayload::TextDelta {
+                text: "到了".into(),
+            },
+        );
         acc.record(
             cid,
             &EventPayload::ToolCallStarted {

@@ -265,7 +265,7 @@ fn preview_push_assistant(out: &mut Vec<Value>, m: &Message) {
         for p in &m.parts {
             match p {
                 MessagePart::Text { text } => text_parts.push(text.clone()),
-                MessagePart::Reasoning { text } => reasoning_parts.push(text.clone()),
+                MessagePart::Reasoning { text, .. } => reasoning_parts.push(text.clone()),
                 MessagePart::ToolCall {
                     id,
                     name,
@@ -315,10 +315,7 @@ fn preview_push_assistant(out: &mut Vec<Value>, m: &Message) {
     });
     let map = assistant.as_object_mut().expect("json object");
     if !reasoning_parts.is_empty() {
-        map.insert(
-            "reasoning".into(),
-            Value::String(reasoning_parts.join("")),
-        );
+        map.insert("reasoning".into(), Value::String(reasoning_parts.join("")));
     }
     if !tool_calls.is_empty() {
         map.insert("tool_calls".into(), Value::Array(tool_calls));

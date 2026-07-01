@@ -88,7 +88,7 @@ pub struct SweTask {
 pub fn load_suite(path: &Path) -> Result<Vec<Task>> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("读取 suite 文件失败：{}", path.display()))?;
-    let tasks: Vec<Task> =
-        serde_json::from_str(&text).with_context(|| format!("解析 suite 失败：{}", path.display()))?;
+    let tasks: Vec<Task> = serde_json::from_str(&text)
+        .with_context(|| format!("解析 suite 失败：{}", path.display()))?;
     Ok(tasks)
 }

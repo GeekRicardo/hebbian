@@ -671,6 +671,18 @@ pub enum AnthropicStreamEvent {
         index: usize,
         delta: String,
     },
+    /// thinking block 起始（`content_block_start` 里 type=thinking）。
+    /// 无文本载荷，只标记块边界——stream 层据此记录思考开始的墙钟时刻。
+    /// OAuth 流量下 thinking 文本会被官方清空（只回 signature），此时 `Thinking`
+    /// delta 一个都收不到，但 start/stop 边界仍在，是「思考用时」的唯一时间锚点。
+    ThinkingStart {
+        index: usize,
+    },
+    /// 任意 content block 结束（`content_block_stop`）。stream 层用 index 与
+    /// `ThinkingStart` 配对，算出 thinking block 的墙钟时长。
+    BlockStop {
+        index: usize,
+    },
     /// thinking block 的签名，`signature_delta` 帧携带，一次性整体到达（不是增量）。
     Signature {
         index: usize,
@@ -706,10 +718,18 @@ pub fn parse_stream_event(event_type: &str, data: &str) -> Option<AnthropicStrea
                     let name = block["name"].as_str().unwrap_or("").to_string();
                     Some(AnthropicStreamEvent::ToolUseStart { index, id, name })
                 }
-                // text / thinking 的 start 没文本载荷，跳过；后续靠 *_delta 补内容
+                // thinking block 起始：标记块边界用于计时（OAuth 流量下后续 thinking
+                // delta 可能一个都没有，但这个 start 仍到达，是思考开始的时间锚点）。
+                "thinking" => Some(AnthropicStreamEvent::ThinkingStart { index }),
+                // text 的 start 没文本载荷，跳过；后续靠 *_delta 补内容
                 _ => None,
             }
         }
+        "content_block_stop" => v["index"]
+            .as_u64()
+            .map(|index| AnthropicStreamEvent::BlockStop {
+                index: index as usize,
+            }),
         "content_block_delta" => {
             let index = v["index"].as_u64()? as usize;
             match v["delta"]["type"].as_str() {
@@ -913,7 +933,7 @@ mod tests {
                 tools: vec![],
                 max_tokens: 1024,
                 reasoning: None,
-                            meta: Default::default(),
+                meta: Default::default(),
             };
             let body = build_body(&req, false, false, None, false).unwrap();
             let tool_use = &body["messages"][1]["content"][0];
@@ -957,7 +977,7 @@ mod tests {
             tools: vec![],
             max_tokens: 4096,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_body(&req, false, false, None, false).unwrap();
@@ -1001,7 +1021,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();
         let msgs = body["messages"].as_array().unwrap();
@@ -1034,7 +1054,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();
         let msgs = body["messages"].as_array().unwrap();
@@ -1051,7 +1071,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();
         let msgs = body["messages"].as_array().unwrap();
@@ -1068,7 +1088,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_body(&req, false, true, None, false).unwrap();
@@ -1089,7 +1109,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_body(&req, false, true, None, false).unwrap();
@@ -1109,7 +1129,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_body(&req, false, false, None, false).unwrap();
@@ -1143,7 +1163,7 @@ mod tests {
                 effort: Some(ReasoningEffort::Extra),
                 long_context: None,
             }),
-                    meta: Default::default(),
+            meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();
         assert_eq!(
@@ -1168,7 +1188,7 @@ mod tests {
                 effort: Some(ReasoningEffort::High),
                 long_context: None,
             }),
-                    meta: Default::default(),
+            meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
@@ -1197,7 +1217,7 @@ mod tests {
                     effort: Some(e),
                     long_context: None,
                 }),
-                            meta: Default::default(),
+                meta: Default::default(),
             };
             build_body(&req, false, true, None, false).unwrap()
         };
@@ -1286,7 +1306,7 @@ mod tests {
             }],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
         let body = build_body(&req, false, true, Some("acct-123"), false).unwrap();
 
@@ -1352,7 +1372,7 @@ mod tests {
                 tools: vec![],
                 max_tokens: 8192,
                 reasoning: None,
-                            meta: Default::default(),
+                meta: Default::default(),
             };
             let body = build_body(&req, false, true, Some("acct-123"), false).unwrap();
             assert!(
@@ -1403,7 +1423,7 @@ mod tests {
             tools: vec![],
             max_tokens,
             reasoning,
-                    meta: Default::default(),
+            meta: Default::default(),
         }
     }
 
@@ -1512,7 +1532,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: Some(cfg),
-                    meta: Default::default(),
+            meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();
         assert!(body.get("thinking").is_none());
@@ -1534,7 +1554,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: Some(cfg),
-                    meta: Default::default(),
+            meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();
         // claude-sonnet-4-5 走 LegacyEnabled：thinking.type=enabled + budget_tokens
@@ -1542,5 +1562,32 @@ mod tests {
         assert!(body["thinking"]["budget_tokens"].is_number());
         // 不应注入 DeepSeek 的 output_config
         assert!(body.get("output_config").is_none());
+    }
+
+    #[test]
+    fn thinking_block_boundaries_parsed_for_duration() {
+        // thinking block 的 start/stop 边界必须解析出来——这是「思考用时」的时间锚点。
+        // OAuth 直连官方时 thinking 文本被清空、收不到 thinking_delta，全靠这对边界计时。
+        let start = parse_stream_event(
+            "content_block_start",
+            r#"{"index":0,"content_block":{"type":"thinking"}}"#,
+        );
+        assert_eq!(
+            start,
+            Some(AnthropicStreamEvent::ThinkingStart { index: 0 })
+        );
+
+        let stop = parse_stream_event("content_block_stop", r#"{"index":0}"#);
+        assert_eq!(stop, Some(AnthropicStreamEvent::BlockStop { index: 0 }));
+
+        // tool_use 的 start 仍走 ToolUseStart，不被 thinking 分支误吞。
+        let tool = parse_stream_event(
+            "content_block_start",
+            r#"{"index":1,"content_block":{"type":"tool_use","id":"t1","name":"Read"}}"#,
+        );
+        assert!(matches!(
+            tool,
+            Some(AnthropicStreamEvent::ToolUseStart { index: 1, .. })
+        ));
     }
 }

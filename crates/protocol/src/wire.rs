@@ -482,7 +482,10 @@ pub fn to_wire(event: &Event) -> Option<WireEvent> {
             reason,
             requires_human,
         } => WireEvent::PermissionAutoJudged {
-            request_id: request_id.as_ref().map(|id| id.0.clone()).unwrap_or_default(),
+            request_id: request_id
+                .as_ref()
+                .map(|id| id.0.clone())
+                .unwrap_or_default(),
             tool_name: tool_name.clone(),
             decision: decision.clone(),
             reason: reason.clone(),
@@ -596,6 +599,7 @@ pub fn to_wire(event: &Event) -> Option<WireEvent> {
         | EventPayload::RunCancelled
         | EventPayload::TurnStarted { .. }
         | EventPayload::ReasoningSignature { .. }
+        | EventPayload::ReasoningDuration { .. }
         | EventPayload::Log { .. } => return None,
     };
     Some(wire)
@@ -909,4 +913,3 @@ mod tests {
         .is_none());
     }
 }
-

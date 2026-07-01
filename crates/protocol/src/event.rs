@@ -135,6 +135,12 @@ pub enum EventPayload {
     ReasoningSignature {
         signature: String,
     },
+    /// 思考（thinking block）的墙钟时长，在该块结束时到达一次。
+    /// surface 端把它写进内存里最后一个 Reasoning part 的 `duration_ms`，随消息落盘。
+    /// 前端流式时本地跑秒表、结束后用这个落盘值定格成「思考用时 N 秒」。
+    ReasoningDuration {
+        ms: u64,
+    },
 
     // —— 工具 ——
     ToolCallDelta {

@@ -301,13 +301,7 @@ fn parse_with_tree_sitter(line: &str) -> Result<ParsedShell, ParseError> {
     let mut commands = Vec::new();
     let mut dangerous_kinds = Vec::new();
     let mut reason: Option<String> = None;
-    collect_ast_commands(
-        line,
-        root,
-        &mut commands,
-        &mut dangerous_kinds,
-        &mut reason,
-    );
+    collect_ast_commands(line, root, &mut commands, &mut dangerous_kinds, &mut reason);
 
     if commands.is_empty() {
         return Err(ParseError::Tokenize(
@@ -389,13 +383,7 @@ fn collect_ast_commands(
                 });
 
                 // Recurse into body (could be command, pipeline, etc.)
-                collect_ast_commands(
-                    source,
-                    body,
-                    commands,
-                    dangerous_kinds,
-                    reason,
-                );
+                collect_ast_commands(source, body, commands, dangerous_kinds, reason);
 
                 // Extract positional args from the gap between body and first redirect
                 // (e.g., `python3 - <<'PY'` — the `-` is not captured by tree-sitter)
@@ -487,13 +475,7 @@ fn collect_ast_commands(
             }
             continue;
         }
-        collect_ast_commands(
-            source,
-            child,
-            commands,
-            dangerous_kinds,
-            reason,
-        );
+        collect_ast_commands(source, child, commands, dangerous_kinds, reason);
     }
 }
 
@@ -1710,7 +1692,10 @@ mod tests {
         assert!(
             r.commands.iter().any(|c| c.fingerprint() == "git commit"),
             "git commit 段应被抽出；fingerprints={:?}",
-            r.commands.iter().map(|c| c.fingerprint()).collect::<Vec<_>>()
+            r.commands
+                .iter()
+                .map(|c| c.fingerprint())
+                .collect::<Vec<_>>()
         );
     }
 
@@ -1977,7 +1962,12 @@ mod tests {
             "纯顺序执行的换行命令不应标危险复合：{:?}",
             r.dangerous_kinds
         );
-        assert_eq!(r.commands.len(), 2, "应拆成 pwd / curl 两段：{:?}", r.commands);
+        assert_eq!(
+            r.commands.len(),
+            2,
+            "应拆成 pwd / curl 两段：{:?}",
+            r.commands
+        );
         assert_eq!(r.commands[0].root, "pwd");
         assert_eq!(r.commands[1].root, "curl");
         assert!(super::super::safe_commands::is_safe(&r.commands[0]));
@@ -1990,7 +1980,11 @@ mod tests {
         // 此前被 separator_contains_newline_without_operator 误打 ast-too-complex，
         // 导致只读命令反复要审批（session 202606230807-76761e74）。
         let r = cmd("echo \"=== a ===\"\ntail -22 docs/changelog.md\nls foo 2>/dev/null");
-        assert!(!r.dangerous, "多行只读脚本不应危险：{:?}", r.dangerous_kinds);
+        assert!(
+            !r.dangerous,
+            "多行只读脚本不应危险：{:?}",
+            r.dangerous_kinds
+        );
         assert!(r.dangerous_kinds.is_empty());
         assert_eq!(r.commands.len(), 3);
         assert!(r.commands.iter().all(super::super::safe_commands::is_safe));

@@ -270,7 +270,7 @@ mod tests {
             tools: vec![],
             max_tokens: 4096,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
         let body = build_body(&req);
         let parts = body["contents"][0]["parts"].as_array().unwrap();
@@ -303,7 +303,7 @@ mod tests {
             tools: vec![],
             max_tokens: 4096,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let body = build_body(&req);

@@ -1566,7 +1566,7 @@ mod tests {
             model: "deepseek-v4".into(),
             max_tokens: 1024,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
         let prompt = build_prompt(&req, &[]);
         assert!(

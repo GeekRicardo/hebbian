@@ -326,33 +326,55 @@ fn bundled_hebcore_paths(app: &AppHandle) -> Vec<PathBuf> {
 
 /// 一次对话 run 的事件回调：desktop 把每个 WireEvent 经 native 出口转发。
 pub trait RunEventSink: Send {
-    fn on_event(&self, event: protocol::WireEvent);
+    /// 返回 false 表示前端通道已关闭，调用方可停止订阅线程。
+    fn on_event(&self, event: protocol::WireEvent) -> bool;
 }
 
-/// 发起一轮对话并阻塞消费事件流到终态（架构 §7.8.6 步骤⑥）。
-///
-/// 两条连接：subscribe 连接先建立（不漏早期事件），start_run 连接投一次输入即返回。
-/// 事件经 `sink` 转发；遇 `run_finished` / `run_failed` / `error` 收尾返回。
-pub fn run_conversation(
+/// 向 hebcore 投递一轮输入；Accepted 后立即返回，事件由独立 Subscribe 通道长期接收。
+pub fn start_run(
     app: &AppHandle,
     data_dir: &Path,
     session_id: &str,
     text: &str,
     attachments: &[common::attachments::MessageAttachment],
+) -> Result<(), String> {
+    let sock = hebcore_sock(data_dir);
+    let mut conn = connect_or_spawn(app, &sock)
+        .map_err(|e| format!("连接 hebcore 失败（{}）：{e}", sock.display()))?;
+    write_req(
+        &mut conn,
+        &Req::StartRun {
+            session_id,
+            text,
+            attachments,
+        },
+    )?;
+    let mut lines = BufReader::new(conn.try_clone().map_err(|e| e.to_string())?).lines();
+    if let Some(line) = lines.next() {
+        let line = line.map_err(|e| e.to_string())?;
+        match serde_json::from_str::<Resp>(&line).map_err(|e| e.to_string())? {
+            Resp::Accepted => Ok(()),
+            Resp::Error { message } => Err(format!("start_run 失败: {message}")),
+            _ => Ok(()),
+        }
+    } else {
+        Err("hebcore 无响应".into())
+    }
+}
+
+/// 长期订阅一个 session 的后续事件。订阅者断开只结束本线程，不影响 hebcore 内的 run。
+pub fn subscribe_session(
+    app: &AppHandle,
+    data_dir: &Path,
+    session_id: &str,
     sink: &dyn RunEventSink,
 ) -> Result<(), String> {
     let sock = hebcore_sock(data_dir);
-
-    // 版本协商已移到 `ensure_running`（desktop 启动时做，§7.8.7）——发消息不再做版本检查，
-    // 避免每次发消息卡在协商上；启动时已确保连的是当前版本的 hebcore。
-
-    // 订阅连接：先建立，保证不漏 run 早期事件。
     let sub = connect_or_spawn(app, &sock)
         .map_err(|e| format!("连接 hebcore 失败（{}）：{e}", sock.display()))?;
     let mut sub_write = sub.try_clone().map_err(|e| e.to_string())?;
     let mut sub_lines = BufReader::new(sub).lines();
     write_req(&mut sub_write, &Req::Subscribe { session_id })?;
-    // 等订阅确认。
     if let Some(line) = sub_lines.next() {
         let line = line.map_err(|e| e.to_string())?;
         match serde_json::from_str::<Resp>(&line).map_err(|e| e.to_string())? {
@@ -361,28 +383,6 @@ pub fn run_conversation(
             _ => {}
         }
     }
-
-    // 发起 run（另一条连接）。
-    let mut run_conn = UnixStream::connect(&sock).map_err(|e| e.to_string())?;
-    write_req(
-        &mut run_conn,
-        &Req::StartRun {
-            session_id,
-            text,
-            attachments,
-        },
-    )?;
-    let mut run_lines = BufReader::new(run_conn.try_clone().map_err(|e| e.to_string())?).lines();
-    if let Some(line) = run_lines.next() {
-        let line = line.map_err(|e| e.to_string())?;
-        match serde_json::from_str::<Resp>(&line).map_err(|e| e.to_string())? {
-            Resp::Accepted => {}
-            Resp::Error { message } => return Err(format!("start_run 失败: {message}")),
-            _ => {}
-        }
-    }
-
-    // 消费事件流直到终态。
     for line in sub_lines {
         let line = match line {
             Ok(l) => l,
@@ -390,26 +390,11 @@ pub fn run_conversation(
         };
         match serde_json::from_str::<Resp>(&line) {
             Ok(Resp::Event { event }) => {
-                let terminal = matches!(
-                    &event,
-                    protocol::WireEvent::RunFinished { .. }
-                        | protocol::WireEvent::Error { .. }
-                        // RunSuspended 是合法终态（run 转入后台等 wakeup，§4.12.1）：必须 break。
-                        // 否则订阅 for 循环在 per-session broadcast 上永久阻塞——run task 已退出、
-                        // 不再有新事件、channel 又不关——导致 send_message 的 spawn_blocking 永挂、
-                        // cancellation::unregister 永不执行、阻塞线程泄漏。前端已通过 sink 收到
-                        // RunSuspended 渲染挂起态；wakeup resume 后的续跑事件靠 reload getSession
-                        // 读落盘（实时重订阅是 §7.8 后续步骤）。
-                        | protocol::WireEvent::RunSuspended { .. }
-                );
-                sink.on_event(event);
-                if terminal {
+                if !sink.on_event(event) {
                     break;
                 }
             }
-            Ok(Resp::Error { message }) => {
-                return Err(message);
-            }
+            Ok(Resp::Error { message }) => return Err(message),
             Ok(_) => {}
             Err(e) => tracing::warn!("解析 hebcore 事件失败: {e}"),
         }

@@ -36,85 +36,217 @@ pub enum CoreRequest {
 
     // ── 供应商 ──────────────────────────────────────────────────────────
     ListProviders,
-    GetProvider { id: String },
-    SaveProvider { provider: model_gateway::config::Provider },
-    SaveProviders { file: model_gateway::config::ProvidersFile },
+    GetProvider {
+        id: String,
+    },
+    SaveProvider {
+        provider: model_gateway::config::Provider,
+    },
+    SaveProviders {
+        file: model_gateway::config::ProvidersFile,
+    },
     ListProviderPresets,
-    TestProvider { provider: model_gateway::config::Provider, model: String },
-    FetchProviderModels { provider: model_gateway::config::Provider },
+    TestProvider {
+        provider: model_gateway::config::Provider,
+        model: String,
+    },
+    FetchProviderModels {
+        provider: model_gateway::config::Provider,
+    },
 
     // ── 对话历史 ────────────────────────────────────────────────────────
     ListSessions,
-    LoadSession { session_id: String },
-    DeleteSession { session_id: String },
-    RenameSession { session_id: String, title: String },
-    SearchSessions { query: String, case_sensitive: bool, regex: bool },
+    LoadSession {
+        session_id: String,
+    },
+    DeleteSession {
+        session_id: String,
+    },
+    RenameSession {
+        session_id: String,
+        title: String,
+    },
+    SearchSessions {
+        query: String,
+        case_sensitive: bool,
+        regex: bool,
+    },
 
     // ── Projects ────────────────────────────────────────────────────────
     ListProjects,
-    SaveProject { input: agent_core::storage::projects::WorkspaceProjectInput },
-    DeleteProject { project_id: String },
+    SaveProject {
+        input: agent_core::storage::projects::WorkspaceProjectInput,
+    },
+    DeleteProject {
+        project_id: String,
+    },
 
     // ── 项目设置 ────────────────────────────────────────────────────────
     GetSettings,
-    SaveSettings { settings: agent_core::storage::settings::Settings },
+    SaveSettings {
+        settings: agent_core::storage::settings::Settings,
+    },
 
     // ── 权限规则（架构 §4.6 / §6.1.2）──────────────────────────────────
-    ListPermissions { scope: PermissionScope, session_id: Option<String>, workdir: Option<PathBuf>, effect: RuleEffect },
-    AddPermission { scope: PermissionScope, session_id: Option<String>, workdir: Option<PathBuf>, effect: RuleEffect, pattern: String },
-    RemovePermission { scope: PermissionScope, session_id: Option<String>, workdir: Option<PathBuf>, effect: RuleEffect, pattern: String },
-    ClearPermissions { scope: PermissionScope, session_id: Option<String>, workdir: Option<PathBuf> },
-    ListPermissionPaths { scope: PermissionScope, workdir: Option<PathBuf> },
-    AddPermissionPath { scope: PermissionScope, workdir: Option<PathBuf>, path: PathBuf },
-    RemovePermissionPath { scope: PermissionScope, workdir: Option<PathBuf>, path: PathBuf },
+    ListPermissions {
+        scope: PermissionScope,
+        session_id: Option<String>,
+        workdir: Option<PathBuf>,
+        effect: RuleEffect,
+    },
+    AddPermission {
+        scope: PermissionScope,
+        session_id: Option<String>,
+        workdir: Option<PathBuf>,
+        effect: RuleEffect,
+        pattern: String,
+    },
+    RemovePermission {
+        scope: PermissionScope,
+        session_id: Option<String>,
+        workdir: Option<PathBuf>,
+        effect: RuleEffect,
+        pattern: String,
+    },
+    ClearPermissions {
+        scope: PermissionScope,
+        session_id: Option<String>,
+        workdir: Option<PathBuf>,
+    },
+    ListPermissionPaths {
+        scope: PermissionScope,
+        workdir: Option<PathBuf>,
+    },
+    AddPermissionPath {
+        scope: PermissionScope,
+        workdir: Option<PathBuf>,
+        path: PathBuf,
+    },
+    RemovePermissionPath {
+        scope: PermissionScope,
+        workdir: Option<PathBuf>,
+        path: PathBuf,
+    },
 
     // ── Prompt（用户 persona）──────────────────────────────────────────
     ListPrompts,
-    UpsertPrompt { prompt: agent_core::storage::prompts::Prompt },
-    DeletePrompt { id: String },
-    SetDefaultPrompt { id: Option<String> },
+    UpsertPrompt {
+        prompt: agent_core::storage::prompts::Prompt,
+    },
+    DeletePrompt {
+        id: String,
+    },
+    SetDefaultPrompt {
+        id: Option<String>,
+    },
 
     // ── Skills ──────────────────────────────────────────────────────────
-    ListSkills { workdir: PathBuf },
+    ListSkills {
+        workdir: PathBuf,
+    },
     ListClaudeSkills,
-    ImportClaudeSkills { scope: ImportScope, workdir: Option<PathBuf>, names: Option<Vec<String>>, overwrite: bool },
-    ScanSkillDir { src_dir: PathBuf },
-    ScanSkillGithub { repo_url: String, subpath: Option<String> },
-    ImportSkillsFromDir { scope: ImportScope, workdir: Option<PathBuf>, src_dir: PathBuf, selected_paths: Option<Vec<String>>, overwrite: bool },
-    ImportSkillsFromGithub { scope: ImportScope, workdir: Option<PathBuf>, repo_url: String, subpath: Option<String>, selected_paths: Option<Vec<String>>, overwrite: bool },
-    SetSkillEnabled { name: String, enabled: bool },
-    DeleteSkill { source: SkillSource, workdir: Option<PathBuf>, name: String },
+    ImportClaudeSkills {
+        scope: ImportScope,
+        workdir: Option<PathBuf>,
+        names: Option<Vec<String>>,
+        overwrite: bool,
+    },
+    ScanSkillDir {
+        src_dir: PathBuf,
+    },
+    ScanSkillGithub {
+        repo_url: String,
+        subpath: Option<String>,
+    },
+    ImportSkillsFromDir {
+        scope: ImportScope,
+        workdir: Option<PathBuf>,
+        src_dir: PathBuf,
+        selected_paths: Option<Vec<String>>,
+        overwrite: bool,
+    },
+    ImportSkillsFromGithub {
+        scope: ImportScope,
+        workdir: Option<PathBuf>,
+        repo_url: String,
+        subpath: Option<String>,
+        selected_paths: Option<Vec<String>>,
+        overwrite: bool,
+    },
+    SetSkillEnabled {
+        name: String,
+        enabled: bool,
+    },
+    DeleteSkill {
+        source: SkillSource,
+        workdir: Option<PathBuf>,
+        name: String,
+    },
     ListSkillCollections,
-    DeleteSkillCollection { id: String },
+    DeleteSkillCollection {
+        id: String,
+    },
 
     // ── Subagents（架构 §4.4.11.5）─────────────────────────────────────
-    ListSubagents { workdir: Option<PathBuf> },
-    GetSubagent { name: String },
-    SaveSubagent { name: String, content: String },
-    DeleteSubagent { name: String, workdir: Option<PathBuf> },
-    SetSubagentEnabled { name: String, scope: SubagentScope, enabled: bool },
-    LoadSubagentRun { parent_session_id: String, child_session_id: String },
+    ListSubagents {
+        workdir: Option<PathBuf>,
+    },
+    GetSubagent {
+        name: String,
+    },
+    SaveSubagent {
+        name: String,
+        content: String,
+    },
+    DeleteSubagent {
+        name: String,
+        workdir: Option<PathBuf>,
+    },
+    SetSubagentEnabled {
+        name: String,
+        scope: SubagentScope,
+        enabled: bool,
+    },
+    LoadSubagentRun {
+        parent_session_id: String,
+        child_session_id: String,
+    },
 
     // ── 工具菜单 ────────────────────────────────────────────────────────
     ListTools,
 
     // ── MCP ─────────────────────────────────────────────────────────────
     GetMcpConfig,
-    SaveMcpConfig { config: agent_core::mcp::config::McpConfig },
+    SaveMcpConfig {
+        config: agent_core::mcp::config::McpConfig,
+    },
     DiscoverMcpTools,
 
     // ── Plugins（§6.1.4）───────────────────────────────────────────────
-    PluginMarketplaceAdd { source: String },
+    PluginMarketplaceAdd {
+        source: String,
+    },
     PluginMarketplaceList,
-    PluginMarketplaceListPlugins { name: String },
-    PluginMarketplaceRemove { name: String },
-    PluginInstall { name: String, marketplace: Option<String> },
-    PluginUninstall { name: String },
+    PluginMarketplaceListPlugins {
+        name: String,
+    },
+    PluginMarketplaceRemove {
+        name: String,
+    },
+    PluginInstall {
+        name: String,
+        marketplace: Option<String>,
+    },
+    PluginUninstall {
+        name: String,
+    },
     PluginList,
 
     // ── Hooks（§4.8）───────────────────────────────────────────────────
     GetHooksRaw,
-    SaveHooksRaw { raw: String },
+    SaveHooksRaw {
+        raw: String,
+    },
 }
 
 /// 唯一 command 出口的响应全集。每个 variant 对应 [`CoreRequest`] 的一个方法返回类型。
@@ -252,26 +384,36 @@ pub async fn dispatch(req: CoreRequest, core: &dyn CoreClient) -> CoreResponse {
         // ── 供应商 ──────────────────────────────────────────────────────
         Q::ListProviders => R::from_result(core.list_providers(), R::ListProviders),
         Q::GetProvider { id } => R::from_result(core.get_provider(&id), R::GetProvider),
-        Q::SaveProvider { provider } => R::from_result(core.save_provider(provider), R::SaveProvider),
+        Q::SaveProvider { provider } => {
+            R::from_result(core.save_provider(provider), R::SaveProvider)
+        }
         Q::SaveProviders { file } => R::from_unit(core.save_providers(file)),
         Q::ListProviderPresets => R::ListProviderPresets(core.list_provider_presets()),
         Q::TestProvider { provider, model } => {
             R::from_result(core.test_provider(provider, model).await, R::TestProvider)
         }
-        Q::FetchProviderModels { provider } => {
-            R::from_result(core.fetch_provider_models(provider).await, R::FetchProviderModels)
-        }
+        Q::FetchProviderModels { provider } => R::from_result(
+            core.fetch_provider_models(provider).await,
+            R::FetchProviderModels,
+        ),
 
         // ── 对话历史 ────────────────────────────────────────────────────
         Q::ListSessions => R::from_result(core.list_sessions(), R::ListSessions),
-        Q::LoadSession { session_id } => R::from_result(core.load_session(&session_id), R::LoadSession),
+        Q::LoadSession { session_id } => {
+            R::from_result(core.load_session(&session_id), R::LoadSession)
+        }
         Q::DeleteSession { session_id } => R::from_unit(core.delete_session(&session_id)),
         Q::RenameSession { session_id, title } => {
             R::from_result(core.rename_session(&session_id, title), R::RenameSession)
         }
-        Q::SearchSessions { query, case_sensitive, regex } => {
-            R::from_result(core.search_sessions(&query, case_sensitive, regex), R::SearchSessions)
-        }
+        Q::SearchSessions {
+            query,
+            case_sensitive,
+            regex,
+        } => R::from_result(
+            core.search_sessions(&query, case_sensitive, regex),
+            R::SearchSessions,
+        ),
 
         // ── Projects ────────────────────────────────────────────────────
         Q::ListProjects => R::from_result(core.list_projects(), R::ListProjects),
@@ -283,26 +425,64 @@ pub async fn dispatch(req: CoreRequest, core: &dyn CoreClient) -> CoreResponse {
         Q::SaveSettings { settings } => R::from_unit(core.save_settings(settings)),
 
         // ── 权限规则 ────────────────────────────────────────────────────
-        Q::ListPermissions { scope, session_id, workdir, effect } => R::ListPermissions(
-            core.list_permissions(scope, session_id.as_deref(), workdir.as_deref(), effect),
-        ),
-        Q::AddPermission { scope, session_id, workdir, effect, pattern } => R::from_unit(
-            core.add_permission(scope, session_id.as_deref(), workdir.as_deref(), effect, pattern),
-        ),
-        Q::RemovePermission { scope, session_id, workdir, effect, pattern } => R::from_result(
-            core.remove_permission(scope, session_id.as_deref(), workdir.as_deref(), effect, &pattern),
+        Q::ListPermissions {
+            scope,
+            session_id,
+            workdir,
+            effect,
+        } => R::ListPermissions(core.list_permissions(
+            scope,
+            session_id.as_deref(),
+            workdir.as_deref(),
+            effect,
+        )),
+        Q::AddPermission {
+            scope,
+            session_id,
+            workdir,
+            effect,
+            pattern,
+        } => R::from_unit(core.add_permission(
+            scope,
+            session_id.as_deref(),
+            workdir.as_deref(),
+            effect,
+            pattern,
+        )),
+        Q::RemovePermission {
+            scope,
+            session_id,
+            workdir,
+            effect,
+            pattern,
+        } => R::from_result(
+            core.remove_permission(
+                scope,
+                session_id.as_deref(),
+                workdir.as_deref(),
+                effect,
+                &pattern,
+            ),
             R::RemovePermission,
         ),
-        Q::ClearPermissions { scope, session_id, workdir } => R::from_unit(
-            core.clear_permissions(scope, session_id.as_deref(), workdir.as_deref()),
-        ),
+        Q::ClearPermissions {
+            scope,
+            session_id,
+            workdir,
+        } => R::from_unit(core.clear_permissions(scope, session_id.as_deref(), workdir.as_deref())),
         Q::ListPermissionPaths { scope, workdir } => {
             R::ListPermissionPaths(core.list_permission_paths(scope, workdir.as_deref()))
         }
-        Q::AddPermissionPath { scope, workdir, path } => {
-            R::from_unit(core.add_permission_path(scope, workdir.as_deref(), path))
-        }
-        Q::RemovePermissionPath { scope, workdir, path } => R::from_result(
+        Q::AddPermissionPath {
+            scope,
+            workdir,
+            path,
+        } => R::from_unit(core.add_permission_path(scope, workdir.as_deref(), path)),
+        Q::RemovePermissionPath {
+            scope,
+            workdir,
+            path,
+        } => R::from_result(
             core.remove_permission_path(scope, workdir.as_deref(), &path),
             R::RemovePermissionPath,
         ),
@@ -311,33 +491,74 @@ pub async fn dispatch(req: CoreRequest, core: &dyn CoreClient) -> CoreResponse {
         Q::ListPrompts => R::from_result(core.list_prompts(), R::ListPrompts),
         Q::UpsertPrompt { prompt } => R::from_result(core.upsert_prompt(prompt), R::UpsertPrompt),
         Q::DeletePrompt { id } => R::from_unit(core.delete_prompt(&id)),
-        Q::SetDefaultPrompt { id } => R::from_result(core.set_default_prompt(id), R::SetDefaultPrompt),
+        Q::SetDefaultPrompt { id } => {
+            R::from_result(core.set_default_prompt(id), R::SetDefaultPrompt)
+        }
 
         // ── Skills ──────────────────────────────────────────────────────
         Q::ListSkills { workdir } => R::ListSkills(core.list_skills(&workdir)),
         Q::ListClaudeSkills => R::ListClaudeSkills(core.list_claude_skills()),
-        Q::ImportClaudeSkills { scope, workdir, names, overwrite } => R::from_result(
+        Q::ImportClaudeSkills {
+            scope,
+            workdir,
+            names,
+            overwrite,
+        } => R::from_result(
             core.import_claude_skills(scope, workdir.as_deref(), names.as_deref(), overwrite),
             R::ImportedSkills,
         ),
-        Q::ScanSkillDir { src_dir } => R::from_result(core.scan_skill_dir(&src_dir), R::ScannedSkills),
-        Q::ScanSkillGithub { repo_url, subpath } => {
-            R::from_result(core.scan_skill_github(&repo_url, subpath.as_deref()), R::ScannedSkills)
+        Q::ScanSkillDir { src_dir } => {
+            R::from_result(core.scan_skill_dir(&src_dir), R::ScannedSkills)
         }
-        Q::ImportSkillsFromDir { scope, workdir, src_dir, selected_paths, overwrite } => R::from_result(
-            core.import_skills_from_dir(scope, workdir.as_deref(), &src_dir, selected_paths.as_deref(), overwrite),
+        Q::ScanSkillGithub { repo_url, subpath } => R::from_result(
+            core.scan_skill_github(&repo_url, subpath.as_deref()),
+            R::ScannedSkills,
+        ),
+        Q::ImportSkillsFromDir {
+            scope,
+            workdir,
+            src_dir,
+            selected_paths,
+            overwrite,
+        } => R::from_result(
+            core.import_skills_from_dir(
+                scope,
+                workdir.as_deref(),
+                &src_dir,
+                selected_paths.as_deref(),
+                overwrite,
+            ),
             R::ImportedSkills,
         ),
-        Q::ImportSkillsFromGithub { scope, workdir, repo_url, subpath, selected_paths, overwrite } => {
-            R::from_result(
-                core.import_skills_from_github(scope, workdir.as_deref(), &repo_url, subpath.as_deref(), selected_paths.as_deref(), overwrite),
-                R::ImportedSkills,
-            )
+        Q::ImportSkillsFromGithub {
+            scope,
+            workdir,
+            repo_url,
+            subpath,
+            selected_paths,
+            overwrite,
+        } => R::from_result(
+            core.import_skills_from_github(
+                scope,
+                workdir.as_deref(),
+                &repo_url,
+                subpath.as_deref(),
+                selected_paths.as_deref(),
+                overwrite,
+            ),
+            R::ImportedSkills,
+        ),
+        Q::SetSkillEnabled { name, enabled } => {
+            R::from_unit(core.set_skill_enabled(&name, enabled))
         }
-        Q::SetSkillEnabled { name, enabled } => R::from_unit(core.set_skill_enabled(&name, enabled)),
-        Q::DeleteSkill { source, workdir, name } => {
-            R::from_result(core.delete_skill(source, workdir.as_deref(), &name), R::DeleteSkill)
-        }
+        Q::DeleteSkill {
+            source,
+            workdir,
+            name,
+        } => R::from_result(
+            core.delete_skill(source, workdir.as_deref(), &name),
+            R::DeleteSkill,
+        ),
         Q::ListSkillCollections => R::ListSkillCollections(core.list_skill_collections()),
         Q::DeleteSkillCollection { id } => {
             R::from_result(core.delete_skill_collection(&id), R::DeleteSkillCollection)
@@ -350,10 +571,15 @@ pub async fn dispatch(req: CoreRequest, core: &dyn CoreClient) -> CoreResponse {
         Q::DeleteSubagent { name, workdir } => {
             R::from_unit(core.delete_subagent(&name, workdir.as_deref()))
         }
-        Q::SetSubagentEnabled { name, scope, enabled } => {
-            R::from_unit(core.set_subagent_enabled(&name, scope, enabled))
-        }
-        Q::LoadSubagentRun { parent_session_id, child_session_id } => R::from_result(
+        Q::SetSubagentEnabled {
+            name,
+            scope,
+            enabled,
+        } => R::from_unit(core.set_subagent_enabled(&name, scope, enabled)),
+        Q::LoadSubagentRun {
+            parent_session_id,
+            child_session_id,
+        } => R::from_result(
             core.load_subagent_run(&parent_session_id, &child_session_id),
             R::LoadSubagentRun,
         ),
@@ -367,18 +593,20 @@ pub async fn dispatch(req: CoreRequest, core: &dyn CoreClient) -> CoreResponse {
         Q::DiscoverMcpTools => R::DiscoverMcpTools(core.discover_mcp_tools().await),
 
         // ── Plugins ─────────────────────────────────────────────────────
-        Q::PluginMarketplaceAdd { source } => {
-            R::from_result(core.plugin_marketplace_add(&source), R::PluginMarketplaceAdd)
-        }
+        Q::PluginMarketplaceAdd { source } => R::from_result(
+            core.plugin_marketplace_add(&source),
+            R::PluginMarketplaceAdd,
+        ),
         Q::PluginMarketplaceList => R::PluginMarketplaceList(core.plugin_marketplace_list()),
         Q::PluginMarketplaceListPlugins { name } => R::from_result(
             core.plugin_marketplace_list_plugins(&name),
             R::PluginMarketplaceListPlugins,
         ),
         Q::PluginMarketplaceRemove { name } => R::from_unit(core.plugin_marketplace_remove(&name)),
-        Q::PluginInstall { name, marketplace } => {
-            R::from_result(core.plugin_install(&name, marketplace.as_deref()), R::PluginInstall)
-        }
+        Q::PluginInstall { name, marketplace } => R::from_result(
+            core.plugin_install(&name, marketplace.as_deref()),
+            R::PluginInstall,
+        ),
         Q::PluginUninstall { name } => R::from_unit(core.plugin_uninstall(&name)),
         Q::PluginList => R::PluginList(core.plugin_list()),
 
@@ -399,7 +627,9 @@ mod tests {
         let cases = vec![
             CoreRequest::ListProviders,
             CoreRequest::GetProvider { id: "p1".into() },
-            CoreRequest::LoadSession { session_id: "s1".into() },
+            CoreRequest::LoadSession {
+                session_id: "s1".into(),
+            },
             CoreRequest::SearchSessions {
                 query: "hi".into(),
                 case_sensitive: true,

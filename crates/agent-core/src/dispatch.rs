@@ -276,9 +276,7 @@ fn yolo_decision(
             dangerous_kinds.join(", ")
         };
         return Some(PermissionDecision::Denied {
-            reason: format!(
-                "全速模式拦截不可逆 / 跨界操作（{kinds}）。换一个工作区内的安全做法。"
-            ),
+            reason: format!("全速模式拦截不可逆 / 跨界操作（{kinds}）。换一个工作区内的安全做法。"),
         });
     }
     Some(PermissionDecision::Approved)
@@ -385,7 +383,10 @@ impl ToolDispatcher {
         // 落回正常 allow 匹配（命中用户已存的 Bash(git commit) 规则即放行，不再强制审批/判官）。
         // cd 目标有任一在工作区外则保留危险判定（真有越界跑 hooks 风险）。
         if matches!(call.name.as_str(), "Bash" | "PowerShell")
-            && effects.dangerous_kinds.iter().any(|k| k == "cd-git-compound")
+            && effects
+                .dangerous_kinds
+                .iter()
+                .any(|k| k == "cd-git-compound")
         {
             if let Some(cmd_str) = call.input.get("command").and_then(|v| v.as_str()) {
                 if let Ok(parsed) = crate::tools::shell_parse::parse(cmd_str) {
@@ -752,20 +753,18 @@ impl ToolDispatcher {
                 // AutoMode 判官模型选择（架构 §4.4.4）：会话 provider 配置了专属 judge
                 // 模型则建专属 client，否则回退主 client + 主模型。每次审批时解析，
                 // 设置里改了即时生效（免重启）。
-                let judge_override: Option<(
-                    Arc<dyn model_gateway::client::ModelClient>,
-                    String,
-                )> = if current_run_mode == crate::run_mode::RunMode::AutoMode {
-                    judge_client.as_ref().map(|jc| {
-                        resolve_judge_for_call(
-                            data_dir_for_artifacts.as_deref(),
-                            jc,
-                            model_id_for_judge.as_deref().unwrap_or(""),
-                        )
-                    })
-                } else {
-                    None
-                };
+                let judge_override: Option<(Arc<dyn model_gateway::client::ModelClient>, String)> =
+                    if current_run_mode == crate::run_mode::RunMode::AutoMode {
+                        judge_client.as_ref().map(|jc| {
+                            resolve_judge_for_call(
+                                data_dir_for_artifacts.as_deref(),
+                                jc,
+                                model_id_for_judge.as_deref().unwrap_or(""),
+                            )
+                        })
+                    } else {
+                        None
+                    };
 
                 // 路径越界审批（带 permission.check 子 span）。AutoMode 下先过 judge：
                 // judge ALLOW 自动放行越界路径（低风险目标如 /tmp 不打断用户）、DENY 自动
@@ -1038,7 +1037,12 @@ impl ToolDispatcher {
                     },
                     None => {
                         warn!(tool = %call.name, "tool not in registry");
-                        (format!("未找到工具: {}", call.name), Vec::new(), true, false)
+                        (
+                            format!("未找到工具: {}", call.name),
+                            Vec::new(),
+                            true,
+                            false,
+                        )
                     }
                 };
                 // 给 surface 的失败口径：执行层故障 + 工具自报语义失败（如 Bash 退出码非 0）。
@@ -1498,11 +1502,9 @@ impl ToolDispatcher {
                         // 切 PlanMode：落盘（自动记 pre_plan_mode）+ 更新运行中 Arc，让下一轮
                         // agent_loop 立即收缩工具集。
                         let from_mode = session.run_mode;
-                        if let Err(e) = session_store::set_run_mode(
-                            dd,
-                            sid,
-                            crate::run_mode::RunMode::PlanMode,
-                        ) {
+                        if let Err(e) =
+                            session_store::set_run_mode(dd, sid, crate::run_mode::RunMode::PlanMode)
+                        {
                             return finish_err(format!("PlanMode 进入失败: {e}"));
                         }
                         crate::run_mode::LiveRunModeRegistry::global()
@@ -1517,15 +1519,11 @@ impl ToolDispatcher {
                         } else {
                             parsed.plan_markdown.clone()
                         };
-                        let plan_path = match plans::save_plan(
-                            dd,
-                            workdir.as_deref(),
-                            sid,
-                            &initial,
-                        ) {
-                            Ok(p) => p,
-                            Err(e) => return finish_err(format!("PlanMode 草稿落盘失败: {e}")),
-                        };
+                        let plan_path =
+                            match plans::save_plan(dd, workdir.as_deref(), sid, &initial) {
+                                Ok(p) => p,
+                                Err(e) => return finish_err(format!("PlanMode 草稿落盘失败: {e}")),
+                            };
                         let plan_id = plan_mode::plan_id_from_path(&plan_path);
                         let plan_path_str = plan_path.display().to_string();
                         if let Err(e) =
@@ -1546,7 +1544,13 @@ impl ToolDispatcher {
                              plan, and `action:\"submit\"` to submit it for the user's \
                              approval."
                             .to_string();
-                        record_tool_outcome(attr::outcome::OK, &call.name, 0.0, false, content.len());
+                        record_tool_outcome(
+                            attr::outcome::OK,
+                            &call.name,
+                            0.0,
+                            false,
+                            content.len(),
+                        );
                         sink(state.event(EventPayload::ToolCallFinished {
                             index: dispatch_index,
                             call_id: call.id.clone(),
@@ -1576,7 +1580,13 @@ impl ToolDispatcher {
                         // 覆盖当前 active_plan；无则新建一份。
                         let plan_path = if let Some(ap) = session.active_plan.as_deref() {
                             let pid = plan_mode::plan_id_from_path(Path::new(ap));
-                            plans::update_plan(dd, workdir.as_deref(), sid, &pid, &parsed.plan_markdown)
+                            plans::update_plan(
+                                dd,
+                                workdir.as_deref(),
+                                sid,
+                                &pid,
+                                &parsed.plan_markdown,
+                            )
                         } else {
                             plans::save_plan(dd, workdir.as_deref(), sid, &parsed.plan_markdown)
                         };
@@ -1597,11 +1607,16 @@ impl ToolDispatcher {
                             plan_markdown: parsed.plan_markdown.clone(),
                             summary: parsed.summary.clone(),
                         }));
-                        let content =
-                            "[Plan updated] The plan has been saved. Keep refining with \
+                        let content = "[Plan updated] The plan has been saved. Keep refining with \
                              `action:\"update\"`, or submit it with `action:\"submit\"`."
-                                .to_string();
-                        record_tool_outcome(attr::outcome::OK, &call.name, 0.0, false, content.len());
+                            .to_string();
+                        record_tool_outcome(
+                            attr::outcome::OK,
+                            &call.name,
+                            0.0,
+                            false,
+                            content.len(),
+                        );
                         sink(state.event(EventPayload::ToolCallFinished {
                             index: dispatch_index,
                             call_id: call.id.clone(),
@@ -1785,8 +1800,7 @@ impl ToolDispatcher {
                 content.push_str(&plan_markdown);
             }
             ApprovalDecision::Deny => {
-                content
-                    .push_str("[Plan rejected by user] Stay in PlanMode and revise the plan.");
+                content.push_str("[Plan rejected by user] Stay in PlanMode and revise the plan.");
             }
             ApprovalDecision::DenyWithFeedback { ref feedback } => {
                 content.push_str("[Plan rejected by user — please revise]\n\nUser feedback:\n");
@@ -2225,7 +2239,9 @@ async fn judge_automode_request(req: AutoModeJudgeRequest<'_>) -> AutoModeDecisi
                 timeout_ms = judge_decision_timeout().as_millis() as u64,
                 "[AutoMode] 判官超时未返回（provider 可能抖动），降级 Ask 转人工审批"
             );
-            AutoModeDecision::Ask("AutoMode 判官响应超时（模型可能在抖动），已转人工审批".to_string())
+            AutoModeDecision::Ask(
+                "AutoMode 判官响应超时（模型可能在抖动），已转人工审批".to_string(),
+            )
         }
     };
     let judge_duration_ms = judge_start.elapsed().as_millis() as u64;
@@ -2261,13 +2277,16 @@ async fn judge_automode_request(req: AutoModeJudgeRequest<'_>) -> AutoModeDecisi
         }
         AutoModeDecision::Allow => false,
     };
-    (req.sink)(req.state.event(protocol::EventPayload::PermissionAutoJudged {
-        request_id: Some(req.request_id.clone()),
-        tool_name: req.tool_name.to_string(),
-        decision: decision.as_label().to_string(),
-        reason: decision.reason().map(str::to_string),
-        requires_human,
-    }));
+    (req.sink)(
+        req.state
+            .event(protocol::EventPayload::PermissionAutoJudged {
+                request_id: Some(req.request_id.clone()),
+                tool_name: req.tool_name.to_string(),
+                decision: decision.as_label().to_string(),
+                reason: decision.reason().map(str::to_string),
+                requires_human,
+            }),
+    );
     // 判官请求记入 model_io.jsonl（kind="judge"），前端蓝色标签渲染。
     if let Some(dump) = req.model_io_dump {
         dump.record(DumpEntry {
@@ -2291,7 +2310,6 @@ async fn judge_automode_request(req: AutoModeJudgeRequest<'_>) -> AutoModeDecisi
     }
     decision
 }
-
 
 fn record_tool_outcome(
     outcome: &str,
@@ -2513,21 +2531,33 @@ mod tests {
     fn bash_safe_write_allowed_only_for_in_bounds_pure_create() {
         use crate::effects::analyze_effects;
         // 纯创建 + 界内 → 放行
-        let e = analyze_effects("Bash", &serde_json::json!({"command": "mkdir build && touch a.txt"}));
+        let e = analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "mkdir build && touch a.txt"}),
+        );
         assert!(bash_safe_write_allowed("Bash", &e, true));
         // 同命令但越界（paths_in_bounds=false）→ 不放行（路径闸接管）
         assert!(!bash_safe_write_allowed("Bash", &e, false));
         // 混入会跑代码的命令（cargo build）→ 不放行
-        let e2 = analyze_effects("Bash", &serde_json::json!({"command": "mkdir build && cargo build"}));
+        let e2 = analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "mkdir build && cargo build"}),
+        );
         assert!(!bash_safe_write_allowed("Bash", &e2, true));
         // 混入 rm（不可记忆，非 safe_write）→ 不放行
-        let e3 = analyze_effects("Bash", &serde_json::json!({"command": "mkdir build && rm -rf old"}));
+        let e3 = analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "mkdir build && rm -rf old"}),
+        );
         assert!(!bash_safe_write_allowed("Bash", &e3, true));
         // 纯只读 → 不放行（没有 safe_write 段，交 ReadOnly 短路处理，不归 safe-write 档）
         let e4 = analyze_effects("Bash", &serde_json::json!({"command": "ls -la"}));
         assert!(!bash_safe_write_allowed("Bash", &e4, true));
         // mkdir + 只读 ls → 放行（会写段全是 safe_write，只读段免匹配）
-        let e5 = analyze_effects("Bash", &serde_json::json!({"command": "mkdir build && ls build"}));
+        let e5 = analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "mkdir build && ls build"}),
+        );
         assert!(bash_safe_write_allowed("Bash", &e5, true));
         // 非命令工具 → 不放行
         assert!(!bash_safe_write_allowed("Edit", &e, true));
@@ -2794,8 +2824,11 @@ mod tests {
         std::fs::write(&target, "{}\n").unwrap();
 
         let workspace = Workspace::new(workdir.path(), Vec::new());
-        let (dispatcher, mut rx) =
-            data_dir_dispatcher(workspace, data_dir.path().to_path_buf(), "sid-current".into());
+        let (dispatcher, mut rx) = data_dir_dispatcher(
+            workspace,
+            data_dir.path().to_path_buf(),
+            "sid-current".into(),
+        );
 
         let call = ToolCall {
             id: "call_read_other_session".into(),
@@ -2803,10 +2836,11 @@ mod tests {
             input: serde_json::json!({ "file_path": target.to_string_lossy() }),
         };
 
-        let results = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
-            .await
-            .expect("只读访问 data_dir 应直接执行，不卡审批")
-            .expect("dispatch 不应报错");
+        let results =
+            tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+                .await
+                .expect("只读访问 data_dir 应直接执行，不卡审批")
+                .expect("dispatch 不应报错");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "Read");
 
@@ -2826,8 +2860,11 @@ mod tests {
         let workdir = tempfile::tempdir().unwrap();
         let data_dir = tempfile::tempdir().unwrap();
         let workspace = Workspace::new(workdir.path(), Vec::new());
-        let (dispatcher, mut rx) =
-            data_dir_dispatcher(workspace, data_dir.path().to_path_buf(), "sid-current".into());
+        let (dispatcher, mut rx) = data_dir_dispatcher(
+            workspace,
+            data_dir.path().to_path_buf(),
+            "sid-current".into(),
+        );
 
         // 直指 data_dir 根下的敏感配置——只读会放行，写入必须审批。
         let target = data_dir.path().join("providers.json");
@@ -2932,6 +2969,37 @@ mod tests {
         while let Ok(event) = rx.try_recv() {
             if let EventPayload::PermissionRequested { .. } = event.payload {
                 panic!("界内编辑不应 emit PermissionRequested");
+            }
+        }
+    }
+
+    /// 架构 §4.4.2：系统临时目录由 Workspace 统一视为界内，用于 agent 写测试夹、
+    /// 临时脚本和中间产物；不应触发 PathAccess 审批。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn temp_dir_edit_auto_allowed_without_path_prompt() {
+        use protocol::EventPayload;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let (dispatcher, mut rx) = default_mode_edit_dispatcher(workspace);
+
+        let target = std::env::temp_dir().join("hebbian-dispatch-temp-approval/output.rs");
+        let call = ToolCall {
+            id: "call_edit_tmp".into(),
+            name: "Edit".into(),
+            input: serde_json::json!({ "file_path": target.to_string_lossy() }),
+        };
+
+        let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("/tmp 编辑不应卡在审批")
+            .expect("dispatch 不应返回错误");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "edited");
+
+        while let Ok(event) = rx.try_recv() {
+            if let EventPayload::PermissionRequested { .. } = event.payload {
+                panic!("/tmp 编辑不应 emit PermissionRequested");
             }
         }
     }
@@ -3062,7 +3130,10 @@ mod tests {
             &["rm-rf-root".to_string()],
         ) {
             Some(PermissionDecision::Denied { reason }) => {
-                assert!(reason.contains("rm-rf-root"), "reason 应带 dangerous_kind: {reason}")
+                assert!(
+                    reason.contains("rm-rf-root"),
+                    "reason 应带 dangerous_kind: {reason}"
+                )
             }
             other => panic!("危险模式应 Denied，实际 {other:?}"),
         }
@@ -4240,7 +4311,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = Workspace::new(tmp.path(), Vec::new());
         let registry = Arc::new(ToolRegistry::new(vec![
-            Box::new(DestructiveNoopTool) as Box<dyn crate::tools::Tool>,
+            Box::new(DestructiveNoopTool) as Box<dyn crate::tools::Tool>
         ]));
         let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
         let run_state = Arc::new(RunState::new(RunId::new()));

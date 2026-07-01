@@ -10,6 +10,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use tokio::sync::watch;
+
 use agent_core::core_client::LocalCoreClient;
 use agent_core::permissions::PermissionStore;
 use anyhow::Result;
@@ -117,6 +119,85 @@ pub enum HebcoreResponse<'a> {
     Log {
         line: observability::LogLine,
     },
+}
+
+#[derive(Clone)]
+pub struct SurfaceLifecycle {
+    state: Arc<std::sync::Mutex<LifecycleState>>,
+    exit_tx: Arc<watch::Sender<bool>>,
+}
+
+impl Default for SurfaceLifecycle {
+    fn default() -> Self {
+        let (exit_tx, _) = watch::channel(false);
+        Self {
+            state: Arc::new(std::sync::Mutex::new(LifecycleState::default())),
+            exit_tx: Arc::new(exit_tx),
+        }
+    }
+}
+
+#[derive(Default)]
+struct LifecycleState {
+    connections: usize,
+    active_run: bool,
+    exit_requested: bool,
+}
+
+pub struct SurfaceConnection {
+    lifecycle: SurfaceLifecycle,
+    released: bool,
+}
+
+impl SurfaceLifecycle {
+    pub async fn attach(&self) -> SurfaceConnection {
+        let mut state = self.state.lock().expect("surface lifecycle lock poisoned");
+        state.connections += 1;
+        SurfaceConnection {
+            lifecycle: self.clone(),
+            released: false,
+        }
+    }
+
+    pub async fn set_active_run(&self, active: bool) {
+        let mut state = self.state.lock().expect("surface lifecycle lock poisoned");
+        state.active_run = active;
+        self.request_exit_if_idle(&mut state);
+    }
+
+    pub async fn should_exit(&self) -> bool {
+        self.state
+            .lock()
+            .expect("surface lifecycle lock poisoned")
+            .exit_requested
+    }
+
+    pub fn subscribe_exit(&self) -> watch::Receiver<bool> {
+        self.exit_tx.subscribe()
+    }
+
+    fn detach(&self) {
+        let mut state = self.state.lock().expect("surface lifecycle lock poisoned");
+        state.connections = state.connections.saturating_sub(1);
+        self.request_exit_if_idle(&mut state);
+    }
+
+    fn request_exit_if_idle(&self, state: &mut LifecycleState) {
+        if state.connections == 0 && !state.active_run && !state.exit_requested {
+            state.exit_requested = true;
+            let _ = self.exit_tx.send(true);
+        }
+    }
+}
+
+impl Drop for SurfaceConnection {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        self.released = true;
+        self.lifecycle.detach();
+    }
 }
 
 /// 处理一条 unix-socket 连接：逐行读 [`HebcoreRequest`]，按通路分派。
@@ -478,5 +559,31 @@ mod tests {
             }
             other => panic!("应是 Inject，实际 {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn surface_lifecycle_exits_after_last_idle_connection_drops() {
+        let lifecycle = SurfaceLifecycle::default();
+        let first = lifecycle.attach().await;
+        let second = lifecycle.attach().await;
+
+        drop(first);
+        assert!(!lifecycle.should_exit().await);
+
+        drop(second);
+        assert!(lifecycle.should_exit().await);
+    }
+
+    #[tokio::test]
+    async fn surface_lifecycle_keeps_process_alive_when_run_is_active() {
+        let lifecycle = SurfaceLifecycle::default();
+        let conn = lifecycle.attach().await;
+        lifecycle.set_active_run(true).await;
+
+        drop(conn);
+        assert!(!lifecycle.should_exit().await);
+
+        lifecycle.set_active_run(false).await;
+        assert!(lifecycle.should_exit().await);
     }
 }

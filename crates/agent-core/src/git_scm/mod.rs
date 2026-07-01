@@ -327,9 +327,17 @@ mod tests {
         std::fs::write(root.join("a.txt"), "v2\n").unwrap();
 
         stage(root, "a.txt").unwrap();
-        assert!(status(root).unwrap().files.iter().any(|f| f.path == "a.txt" && f.staged));
+        assert!(status(root)
+            .unwrap()
+            .files
+            .iter()
+            .any(|f| f.path == "a.txt" && f.staged));
         unstage(root, "a.txt").unwrap();
-        assert!(status(root).unwrap().files.iter().any(|f| f.path == "a.txt" && !f.staged && f.unstaged));
+        assert!(status(root)
+            .unwrap()
+            .files
+            .iter()
+            .any(|f| f.path == "a.txt" && !f.staged && f.unstaged));
     }
 
     #[test]

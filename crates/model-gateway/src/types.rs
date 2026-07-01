@@ -105,6 +105,12 @@ pub enum ModelStreamEvent {
     ReasoningSignature {
         signature: String,
     },
+    /// 思考（thinking block）的墙钟时长，在该块结束（`content_block_stop`）时 emit 一次。
+    /// OAuth 直连官方时 thinking 文本被清空、拿不到 `ReasoningDelta`，但 block 的
+    /// start/stop 边界仍在，故时长是这条路上唯一能展示的「思考用时」信号。
+    ReasoningDuration {
+        ms: u64,
+    },
     ToolCallDelta(ToolCallStreamDelta),
 }
 

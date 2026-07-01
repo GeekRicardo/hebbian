@@ -200,8 +200,15 @@ async fn run_r2e(cfg: &RunnerConfig, task: &R2eTask) -> Result<(bool, String, St
     // 起一个长驻容器（sleep 保活），失败直接返回。
     let _ = docker(&["rm", "-f", &cname]).await; // 清理同名残留
     let create = docker_capture(&[
-        "run", "-d", "--name", &cname, "--platform", "linux/amd64",
-        &task.docker_image, "sleep", "infinity",
+        "run",
+        "-d",
+        "--name",
+        &cname,
+        "--platform",
+        "linux/amd64",
+        &task.docker_image,
+        "sleep",
+        "infinity",
     ])
     .await?;
     if !create.code.map(|c| c == 0).unwrap_or(false) {
@@ -224,13 +231,20 @@ async fn run_r2e_inner(
     workdir: &Path,
 ) -> Result<(bool, String, String)> {
     // 1. 导出容器 /testbed 到宿主 workdir（agent 在宿主改）。
-    let cp_out = docker_capture(&["cp", &format!("{cname}:/testbed/."), &workdir.to_string_lossy()])
-        .await?;
+    let cp_out = docker_capture(&[
+        "cp",
+        &format!("{cname}:/testbed/."),
+        &workdir.to_string_lossy(),
+    ])
+    .await?;
     if !cp_out.code.map(|c| c == 0).unwrap_or(false) {
         return Ok((
             false,
             "skipped".to_string(),
-            format!("docker cp 导出 /testbed 失败：{}", truncate(&cp_out.merged, 200)),
+            format!(
+                "docker cp 导出 /testbed 失败：{}",
+                truncate(&cp_out.merged, 200)
+            ),
         ));
     }
 
@@ -253,7 +267,10 @@ async fn run_r2e_inner(
         return Ok((
             false,
             agent.outcome,
-            format!("docker cp 回写 /testbed 失败：{}", truncate(&cp_in.merged, 200)),
+            format!(
+                "docker cp 回写 /testbed 失败：{}",
+                truncate(&cp_in.merged, 200)
+            ),
         ));
     }
 
@@ -388,8 +405,7 @@ fn prepare_workdir(cfg: &RunnerConfig, id: &str, template: Option<&str>) -> Resu
     let _ = std::fs::remove_dir_all(&dest);
     std::fs::create_dir_all(&dest)?;
     if let Some(tpl) = template {
-        copy_dir(Path::new(tpl), &dest)
-            .with_context(|| format!("拷贝 workdir 模板失败：{tpl}"))?;
+        copy_dir(Path::new(tpl), &dest).with_context(|| format!("拷贝 workdir 模板失败：{tpl}"))?;
     }
     Ok(dest)
 }
@@ -455,7 +471,10 @@ async fn docker(args: &[&str]) -> Result<std::process::ExitStatus> {
 
 /// 跑一条 docker 命令，捕获 stdout+stderr 与退出码。
 async fn docker_capture(args: &[&str]) -> Result<ShOut> {
-    let out = tokio::process::Command::new("docker").args(args).output().await?;
+    let out = tokio::process::Command::new("docker")
+        .args(args)
+        .output()
+        .await?;
     let mut merged = String::from_utf8_lossy(&out.stdout).into_owned();
     merged.push_str(&String::from_utf8_lossy(&out.stderr));
     Ok(ShOut {
@@ -467,7 +486,13 @@ async fn docker_capture(args: &[&str]) -> Result<ShOut> {
 /// 把 id 转成安全的目录名。
 fn sanitize(id: &str) -> String {
     id.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 

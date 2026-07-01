@@ -50,7 +50,9 @@ impl CdpSession {
                 .ok_or_else(|| AppError::msg("CDP 连接中断"))?
                 .map_err(|e| AppError::msg(format!("CDP 读取失败: {e}")))?;
             let WsMessage::Text(text) = msg else { continue };
-            let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
+            let Ok(v) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
             if v.get("id").and_then(|i| i.as_u64()) != Some(id) {
                 continue; // 跳过事件与他人响应
             }
@@ -202,8 +204,7 @@ async fn get_json_local(url: &str) -> AppResult<Value> {
             buf.extend_from_slice(&chunk[..n]);
         }
         let body = &buf[headers_end..(headers_end + content_len).min(buf.len())];
-        serde_json::from_slice(body)
-            .map_err(|e| AppError::msg(format!("CDP 发现响应非 JSON: {e}")))
+        serde_json::from_slice(body).map_err(|e| AppError::msg(format!("CDP 发现响应非 JSON: {e}")))
     })
     .await
     .map_err(|e| AppError::msg(format!("CDP 发现任务失败: {e}")))?
@@ -217,7 +218,9 @@ fn format_matched_rules(result: &Value, selector: &str) -> String {
     )];
     if let Some(rules) = result.get("matchedCSSRules").and_then(|v| v.as_array()) {
         for entry in rules {
-            let Some(rule) = entry.get("rule") else { continue };
+            let Some(rule) = entry.get("rule") else {
+                continue;
+            };
             if rule.get("origin").and_then(|v| v.as_str()) == Some("user-agent") {
                 continue; // UA 默认样式噪音大，模型要的是项目自己的规则
             }
@@ -269,8 +272,12 @@ impl PreviewBridge for CdpBridge {
             if let Ok(bm) = s.cmd("DOM.getBoxModel", json!({ "nodeId": node_id })).await {
                 if let Some(quad) = bm.pointer("/model/border").and_then(|v| v.as_array()) {
                     let xs: Vec<f64> = quad.iter().step_by(2).filter_map(|v| v.as_f64()).collect();
-                    let ys: Vec<f64> =
-                        quad.iter().skip(1).step_by(2).filter_map(|v| v.as_f64()).collect();
+                    let ys: Vec<f64> = quad
+                        .iter()
+                        .skip(1)
+                        .step_by(2)
+                        .filter_map(|v| v.as_f64())
+                        .collect();
                     let x = xs.iter().cloned().fold(f64::MAX, f64::min);
                     let y = ys.iter().cloned().fold(f64::MAX, f64::min);
                     let w = xs.iter().cloned().fold(f64::MIN, f64::max) - x;
@@ -373,7 +380,12 @@ mod tests {
         let part = bridge.capture(Some(".card-list")).await.unwrap();
         assert!(part.len() > 100, "局部截图应非空: {}", part.len());
         assert_eq!(&part[1..4], b"PNG", "应是合法 PNG");
-        eprintln!("LIVE OK: rules {} chars, full {} B, part {} B", rules.len(), full.len(), part.len());
+        eprintln!(
+            "LIVE OK: rules {} chars, full {} B, part {} B",
+            rules.len(),
+            full.len(),
+            part.len()
+        );
     }
 
     /// 端到端现象级验证（需真实 Chromium，同上测试页）：旁支工具经 PreviewBridge
@@ -413,7 +425,10 @@ mod tests {
         // 眼睛：截图工具产出真实图片附件（非降级提示）
         let capture = PreviewCaptureTool::new(Some(bridge));
         let out = capture
-            .execute_rich(ToolCtx::noop(), serde_json::json!({ "selector": ".card-list" }))
+            .execute_rich(
+                ToolCtx::noop(),
+                serde_json::json!({ "selector": ".card-list" }),
+            )
             .await
             .unwrap();
         assert!(!out.is_error, "不应降级: {}", out.text);
@@ -422,4 +437,3 @@ mod tests {
         eprintln!("LIVE TOOLS OK:\n--- rules ---\n{rules}\n--- siblings ---\n{sibs}");
     }
 }
-

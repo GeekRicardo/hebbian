@@ -42,7 +42,11 @@ impl WeChatState {
 
     /// 取当前运行中的 bridge（供 HITL 转发）。未运行返回 None。
     pub fn bridge(&self) -> Option<ChannelBridge> {
-        self.running.lock().unwrap().as_ref().map(|r| r.bridge.clone())
+        self.running
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|r| r.bridge.clone())
     }
 
     fn stop(&self) {
@@ -105,10 +109,7 @@ pub async fn wechat_login_start() -> AppResult<QrCodePayload> {
 
 /// 轮询一次扫码状态。confirmed 时存凭证并在进程内启动渠道运行。
 #[tauri::command]
-pub async fn wechat_login_poll(
-    app: AppHandle,
-    qrcode_id: String,
-) -> AppResult<LoginPollResult> {
+pub async fn wechat_login_poll(app: AppHandle, qrcode_id: String) -> AppResult<LoginPollResult> {
     let status = login::poll_qrcode_status(&qrcode_id)
         .await
         .map_err(|e| AppError::msg(format!("查询扫码状态失败：{e}")))?;
@@ -134,7 +135,9 @@ pub fn wechat_status(app: AppHandle) -> AppResult<WeChatStatus> {
         .try_state::<Arc<WeChatState>>()
         .ok_or_else(|| AppError::msg("WeChatState 未注册"))?;
     let running_bot_id = state.running_bot_id();
-    let logged_in_bot_id = running_bot_id.clone().or_else(|| latest_credentials_bot_id());
+    let logged_in_bot_id = running_bot_id
+        .clone()
+        .or_else(|| latest_credentials_bot_id());
     Ok(WeChatStatus {
         logged_in: logged_in_bot_id.is_some(),
         running: running_bot_id.is_some(),
@@ -191,11 +194,7 @@ fn spawn_channel(app: &AppHandle, bot_token: String, bot_id: String) {
     let bridge_for_task = bridge.clone();
     let bot_id_for_task = bot_id.clone();
     let handle = spawn(async move {
-        let channel = Arc::new(WeChatChannel::new(
-            bot_token,
-            bot_id_for_task.clone(),
-            &dir,
-        ));
+        let channel = Arc::new(WeChatChannel::new(bot_token, bot_id_for_task.clone(), &dir));
         let mut owner_state = OwnerState::load(&dir, "wechat", &bot_id_for_task);
         if let Err(err) = bridge_for_task
             .run_loop(channel, &mut owner_state, &bot_id_for_task)

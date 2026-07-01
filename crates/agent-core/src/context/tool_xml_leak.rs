@@ -27,10 +27,8 @@ use regex::Regex;
 /// - 前导 `call` / `court` 仅在紧贴开标签（中间只允许空白 / 单个换行）时才一并吞掉，
 ///   避免误伤正文里恰好出现的这两个词
 static LEAK_START: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?is)\n?[ \t]*(?:call|court)?[ \t]*\n?[ \t]*<\s*(?:function_calls|invoke)\b",
-    )
-    .expect("tool-xml-leak 正则必然合法")
+    Regex::new(r"(?is)\n?[ \t]*(?:call|court)?[ \t]*\n?[ \t]*<\s*(?:function_calls|invoke)\b")
+        .expect("tool-xml-leak 正则必然合法")
 });
 
 /// 检测文本里是否含工具调用 XML 残骸。

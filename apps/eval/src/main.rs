@@ -129,8 +129,7 @@ async fn main() -> Result<()> {
             }
             // 按任务集原顺序还原（并发完成顺序乱）。
             collected.sort_by_key(|(idx, _)| *idx);
-            let results: Vec<runner::TaskResult> =
-                collected.into_iter().map(|(_, r)| r).collect();
+            let results: Vec<runner::TaskResult> = collected.into_iter().map(|(_, r)| r).collect();
 
             let report = Report::build(results);
             report.print_table();

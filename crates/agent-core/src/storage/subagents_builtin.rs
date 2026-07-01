@@ -128,7 +128,10 @@ mod tests {
     fn builtin_has_four_with_expected_names() {
         let b = builtin_subagents();
         let names: Vec<&str> = b.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, vec!["explore", "plan", "code-reviewer", "general-purpose"]);
+        assert_eq!(
+            names,
+            vec!["explore", "plan", "code-reviewer", "general-purpose"]
+        );
     }
 
     #[test]

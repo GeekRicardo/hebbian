@@ -80,9 +80,7 @@ fn entry_tokens(entry: &TranscriptEntry) -> usize {
                     common::attachments::MessageAttachment::TextFile { content, .. } => {
                         estimate_tokens(content) + 16
                     }
-                    common::attachments::MessageAttachment::Image { .. } => {
-                        IMAGE_TOKENS_ESTIMATE
-                    }
+                    common::attachments::MessageAttachment::Image { .. } => IMAGE_TOKENS_ESTIMATE,
                 })
                 .sum();
             estimate_tokens(&user.text) + attachment_tokens + 4

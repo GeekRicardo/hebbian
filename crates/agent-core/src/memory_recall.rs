@@ -83,7 +83,8 @@ pub fn activate(
     params: &RecallParams,
 ) -> Activation {
     // 汇集两作用域的记忆 + 边。
-    let mut mems: Vec<MemoryL0> = memory::list_l0(data_dir, None, MemoryScope::Global).unwrap_or_default();
+    let mut mems: Vec<MemoryL0> =
+        memory::list_l0(data_dir, None, MemoryScope::Global).unwrap_or_default();
     let mut links = memory::load_links(data_dir, None, MemoryScope::Global).unwrap_or_default();
     if let Some(wd) = project_workdir {
         if let Ok(mut v) = memory::list_l0(data_dir, Some(wd), MemoryScope::Project) {
@@ -104,7 +105,11 @@ pub fn activate(
 
     // ── 第1级：倒排表种子激活 ──
     // 现场建倒排：token → [(mem_idx, weight)]。记忆侧 token 来自 summary+tags+category。
-    let by_id: HashMap<&str, usize> = mems.iter().enumerate().map(|(i, m)| (m.id.as_str(), i)).collect();
+    let by_id: HashMap<&str, usize> = mems
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id.as_str(), i))
+        .collect();
     let mut seed_strength: HashMap<usize, f32> = HashMap::new();
     for (i, m) in mems.iter().enumerate() {
         let mtokens = memory_tokens(m);
@@ -127,17 +132,18 @@ pub fn activate(
         };
     }
 
-    let seed_ids: HashSet<String> = seed_strength
-        .keys()
-        .map(|&i| mems[i].id.clone())
-        .collect();
+    let seed_ids: HashSet<String> = seed_strength.keys().map(|&i| mems[i].id.clone()).collect();
 
     // ── 第2级：沿 links 扩散点亮邻居 ──
     // 邻接表（无向）：id → [(邻居 id, 边权)]。
     let mut adj: HashMap<&str, Vec<(&str, f32)>> = HashMap::new();
     for l in &links {
-        adj.entry(l.from.as_str()).or_default().push((l.to.as_str(), l.weight));
-        adj.entry(l.to.as_str()).or_default().push((l.from.as_str(), l.weight));
+        adj.entry(l.from.as_str())
+            .or_default()
+            .push((l.to.as_str(), l.weight));
+        adj.entry(l.to.as_str())
+            .or_default()
+            .push((l.from.as_str(), l.weight));
     }
     // 一跳扩散：邻居强度 = 种子强度 × 边权 × 衰减。多种子点亮同一邻居取 max。
     let mut strength: HashMap<usize, f32> = seed_strength.clone();
@@ -193,14 +199,21 @@ pub fn activate(
 
 /// 话题漂移检测（架构 §3.1 / 批5）：当前 query token 集与上轮的重合度低于阈值 → 漂移。
 /// 重合度 = |交集| / |当前 query token|（当前话题有多少落在上轮里）。
-pub fn topic_drifted(prev_tokens: &HashSet<String>, cur_tokens: &HashSet<String>, threshold: f32) -> bool {
+pub fn topic_drifted(
+    prev_tokens: &HashSet<String>,
+    cur_tokens: &HashSet<String>,
+    threshold: f32,
+) -> bool {
     if cur_tokens.is_empty() {
         return true;
     }
     if prev_tokens.is_empty() {
         return true; // 没有上轮 → 当漂移（首轮）
     }
-    let overlap = cur_tokens.iter().filter(|t| prev_tokens.contains(*t)).count();
+    let overlap = cur_tokens
+        .iter()
+        .filter(|t| prev_tokens.contains(*t))
+        .count();
     let ratio = overlap as f32 / cur_tokens.len() as f32;
     ratio < threshold
 }
@@ -295,12 +308,18 @@ mod tests {
 
     #[test]
     fn topic_drift_detection() {
-        let prev: HashSet<String> = ["架构", "session", "记忆"].iter().map(|s| s.to_string()).collect();
+        let prev: HashSet<String> = ["架构", "session", "记忆"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         // 高重合 → 不漂移
         let same: HashSet<String> = ["架构", "session"].iter().map(|s| s.to_string()).collect();
         assert!(!topic_drifted(&prev, &same, 0.5));
         // 低重合 → 漂移
-        let diff: HashSet<String> = ["天气", "吃饭", "电影"].iter().map(|s| s.to_string()).collect();
+        let diff: HashSet<String> = ["天气", "吃饭", "电影"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert!(topic_drifted(&prev, &diff, 0.5));
         // 首轮（prev 空）→ 漂移
         assert!(topic_drifted(&HashSet::new(), &same, 0.5));
@@ -315,29 +334,70 @@ mod tests {
         std::fs::create_dir_all(&dd).unwrap();
 
         // A：直接命中查询「partial sidecar」；B：与 A 有强边，但本身不含查询词。
-        write(&dd, None, MemoryScope::Global, "a-partial", MemoryKind::Stable,
-            "bugfix", &["partial".into()], "partial sidecar 落盘用临时文件原子替换", "## 详情\nA 正文").unwrap();
-        write(&dd, None, MemoryScope::Global, "b-buf", MemoryKind::Episode,
-            "bug", &["drop".into()], "BufWriter 在进程被杀时 Drop 不跑导致丢数据", "## 详情\nB 正文").unwrap();
+        write(
+            &dd,
+            None,
+            MemoryScope::Global,
+            "a-partial",
+            MemoryKind::Stable,
+            "bugfix",
+            &["partial".into()],
+            "partial sidecar 落盘用临时文件原子替换",
+            "## 详情\nA 正文",
+        )
+        .unwrap();
+        write(
+            &dd,
+            None,
+            MemoryScope::Global,
+            "b-buf",
+            MemoryKind::Episode,
+            "bug",
+            &["drop".into()],
+            "BufWriter 在进程被杀时 Drop 不跑导致丢数据",
+            "## 详情\nB 正文",
+        )
+        .unwrap();
         // A—B 强边（深睡建的「症状↔根因」）。
-        save_links(&dd, None, MemoryScope::Global, &[MemoryLink {
-            from: "global/a-partial".into(),
-            to: "global/b-buf".into(),
-            weight: 0.9,
-            updated_at: "2026-06-23T00:00:00Z".into(),
-        }]).unwrap();
+        save_links(
+            &dd,
+            None,
+            MemoryScope::Global,
+            &[MemoryLink {
+                from: "global/a-partial".into(),
+                to: "global/b-buf".into(),
+                weight: 0.9,
+                updated_at: "2026-06-23T00:00:00Z".into(),
+            }],
+        )
+        .unwrap();
 
-        let act = activate(&dd, None, "partial sidecar 怎么实现的", &RecallParams::default());
+        let act = activate(
+            &dd,
+            None,
+            "partial sidecar 怎么实现的",
+            &RecallParams::default(),
+        );
 
         // A 应是种子（直接命中 partial/sidecar）。
         assert!(act.seed_ids.contains("global/a-partial"), "A 应命中为种子");
         let ids: Vec<&str> = act.activated.iter().map(|a| a.l0.id.as_str()).collect();
         assert!(ids.contains(&"global/a-partial"), "A 应被激活");
         // B 不含查询词，但应被 A 沿边扩散点亮——这正是「联想」。
-        assert!(ids.contains(&"global/b-buf"), "B 应被 A 沿 links 扩散点亮（联想）");
-        let b = act.activated.iter().find(|a| a.l0.id == "global/b-buf").unwrap();
+        assert!(
+            ids.contains(&"global/b-buf"),
+            "B 应被 A 沿 links 扩散点亮（联想）"
+        );
+        let b = act
+            .activated
+            .iter()
+            .find(|a| a.l0.id == "global/b-buf")
+            .unwrap();
         assert!(!b.is_seed, "B 是扩散点亮的，非种子");
-        assert!(b.strength < 1.0 && b.strength > 0.0, "B 强度被边权×衰减压低");
+        assert!(
+            b.strength < 1.0 && b.strength > 0.0,
+            "B 强度被边权×衰减压低"
+        );
     }
 
     /// gate：查询与任何记忆都不沾边 → 零激活（挡掉无关轮次）。
@@ -346,8 +406,18 @@ mod tests {
         use crate::storage::memory::{write, MemoryKind};
         let dd = std::env::temp_dir().join(format!("heb-recall-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dd).unwrap();
-        write(&dd, None, MemoryScope::Global, "a", MemoryKind::Stable,
-            "c", &[], "数据库连接池配置", "正文").unwrap();
+        write(
+            &dd,
+            None,
+            MemoryScope::Global,
+            "a",
+            MemoryKind::Stable,
+            "c",
+            &[],
+            "数据库连接池配置",
+            "正文",
+        )
+        .unwrap();
         let act = activate(&dd, None, "今天天气真好适合爬山", &RecallParams::default());
         assert!(act.activated.is_empty(), "无关查询应零激活");
     }

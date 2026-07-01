@@ -327,7 +327,10 @@ mod tests {
         drop(listener);
 
         // socket 文件在 macOS 上不会随 listener drop 自动删除 → stale。
-        assert!(sock.exists(), "stale socket 文件应残留（旧逻辑据此误判 daemon 还活着）");
+        assert!(
+            sock.exists(),
+            "stale socket 文件应残留（旧逻辑据此误判 daemon 还活着）"
+        );
         assert!(
             UnixStream::connect(&sock).is_err(),
             "stale socket connect 必须失败——connect 才是 daemon 存活的唯一可信判据"

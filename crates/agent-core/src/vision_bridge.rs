@@ -222,7 +222,7 @@ impl VisionBridgeClient {
                 effort: None,
                 long_context: None,
             }),
-                    meta: model_gateway::types::ModelCallMeta {
+            meta: model_gateway::types::ModelCallMeta {
                 tag: model_gateway::types::ModelCallTag::Vision,
                 ..Default::default()
             },
@@ -422,7 +422,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let cancel: CancelFlag = Arc::new(AtomicBool::new(false));
@@ -470,7 +470,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let cancel: CancelFlag = Arc::new(AtomicBool::new(false));
@@ -518,7 +518,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let cancel: CancelFlag = Arc::new(AtomicBool::new(false));
@@ -561,7 +561,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         };
 
         let cancel: CancelFlag = Arc::new(AtomicBool::new(false));

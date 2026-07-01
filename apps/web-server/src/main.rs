@@ -5,7 +5,7 @@
 //! ```bash
 //! hebweb                                    # 默认 127.0.0.1:3030，data_dir ~/.hebbian
 //! hebweb --port 4040                        # 自定义端口
-//! hebweb --static-dir apps/desktop/frontend/dist  # 指定前端打包产物
+//! hebweb --static-dir apps/desktop/dist  # 指定前端打包产物
 //! hebweb --data-dir /tmp/hebbian-test       # 隔离的数据目录（多 AI 测试用）
 //! ```
 //!
@@ -46,7 +46,7 @@ struct Args {
     #[arg(long)]
     data_dir: Option<PathBuf>,
 
-    /// 前端静态文件目录（默认自动探测 apps/desktop/frontend/dist）
+    /// 前端静态文件目录（默认自动探测 apps/desktop/dist）
     #[arg(long)]
     static_dir: Option<PathBuf>,
 }
@@ -129,6 +129,7 @@ fn spawn_hebcore_transport(data_dir: &std::path::Path, state: &server::ServerSta
         build_version: env!("HEBBIAN_BUILD_VERSION").to_string(),
         bin_name: "hebweb".to_string(),
     });
+    surface_session::register_wakeup_resume_handler(ctx.clone());
     let sock_for_log = sock.clone();
     tokio::spawn(async move {
         // 锁句柄 move 进 task 常驻持有（task 活着 = 锁不释放）。
@@ -159,13 +160,13 @@ fn spawn_hebcore_transport(data_dir: &std::path::Path, state: &server::ServerSta
     });
 }
 
-/// 探测前端 dist 目录。优先 cwd 下 `apps/desktop/frontend/dist`，
+/// 探测前端 dist 目录。优先 cwd 下 `apps/desktop/dist`，
 /// 找不到时返回 None（用户用 vite dev server 自行访问）。
 fn autodetect_static_dir() -> Option<PathBuf> {
     let candidates = [
-        "apps/desktop/frontend/dist",
-        "../apps/desktop/frontend/dist",
-        "../../apps/desktop/frontend/dist",
+        "apps/desktop/dist",
+        "../apps/desktop/dist",
+        "../../apps/desktop/dist",
     ];
     candidates
         .iter()
@@ -174,7 +175,7 @@ fn autodetect_static_dir() -> Option<PathBuf> {
         .or_else(|| {
             // 同时尝试 CARGO_MANIFEST_DIR 相邻
             let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            here.join("../desktop/frontend/dist")
+            here.join("../desktop/dist")
                 .canonicalize()
                 .ok()
                 .filter(|p| p.exists())

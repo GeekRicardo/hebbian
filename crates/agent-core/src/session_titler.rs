@@ -68,7 +68,7 @@ pub async fn generate_title(
             effort: None,
             long_context: None,
         }),
-            meta: model_gateway::types::ModelCallMeta {
+        meta: model_gateway::types::ModelCallMeta {
             tag: model_gateway::types::ModelCallTag::Title,
             ..Default::default()
         },

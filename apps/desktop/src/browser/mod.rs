@@ -164,7 +164,9 @@ fn decode_bridge(url: &Url) -> Option<serde_json::Value> {
 
 /// 把下行消息 eval 进 inspector。
 fn send_down(inst: &BrowserInstance, ty: &str, payload: serde_json::Value) -> Result<(), String> {
-    inst.webview.eval(&rx_js(ty, payload)).map_err(|e| e.to_string())
+    inst.webview
+        .eval(&rx_js(ty, payload))
+        .map_err(|e| e.to_string())
 }
 
 /// 创建子 webview 并加载首个 URL。已存在则复用（先关再建，保证 init script 干净）。
@@ -198,7 +200,9 @@ pub fn browser_open(
             inst.history.push(target_str.clone());
             inst.cursor = inst.history.len() - 1;
             inst.programmatic = true;
-            inst.webview.navigate(target.clone()).map_err(|e| e.to_string())?;
+            inst.webview
+                .navigate(target.clone())
+                .map_err(|e| e.to_string())?;
             emit_state(&app, inst, true);
             return Ok(target_str);
         }
@@ -262,7 +266,9 @@ fn main_window_content_view(window: &tauri::Window) -> Result<*mut std::ffi::c_v
 
 /// cef 模块用：暴露 contentView 取法（keep-alive 在 RunEvent 里建时取主窗 NSView）。
 #[cfg(all(feature = "cef-preview", target_os = "macos"))]
-pub fn main_window_content_view_pub(window: &tauri::Window) -> Result<*mut std::ffi::c_void, String> {
+pub fn main_window_content_view_pub(
+    window: &tauri::Window,
+) -> Result<*mut std::ffi::c_void, String> {
     main_window_content_view(window)
 }
 
@@ -409,8 +415,14 @@ fn forward_inspector_message(app: &AppHandle, session_id: &str, msg: serde_json:
     // 多实例下 session_id 就是绑定的对话——注释/队列/标题事件都带上它，前端按它路由 + 提交回去
     let with_session = |mut p: serde_json::Value| -> serde_json::Value {
         if let Some(obj) = p.as_object_mut() {
-            obj.insert("boundSessionId".to_string(), serde_json::Value::String(session_id.to_string()));
-            obj.insert("sessionId".to_string(), serde_json::Value::String(session_id.to_string()));
+            obj.insert(
+                "boundSessionId".to_string(),
+                serde_json::Value::String(session_id.to_string()),
+            );
+            obj.insert(
+                "sessionId".to_string(),
+                serde_json::Value::String(session_id.to_string()),
+            );
         }
         p
     };
@@ -450,7 +462,10 @@ fn forward_inspector_message(app: &AppHandle, session_id: &str, msg: serde_json:
             send_aside_models(app, session_id, surface);
         }
         "heb:picker:cancelled" => {
-            let _ = app.emit("browser://picker-off", serde_json::json!({ "sessionId": session_id }));
+            let _ = app.emit(
+                "browser://picker-off",
+                serde_json::json!({ "sessionId": session_id }),
+            );
         }
         "heb:ready" | "heb:navigated" => {
             // 携带 title，补一条 state（loading=false）
@@ -512,7 +527,9 @@ pub fn browser_navigate(
         return Ok(target.to_string());
     }
     let mut guard = state.instances.lock().unwrap();
-    let inst = guard.get_mut(&session_id).ok_or_else(|| "浏览器未打开".to_string())?;
+    let inst = guard
+        .get_mut(&session_id)
+        .ok_or_else(|| "浏览器未打开".to_string())?;
     inst.history.truncate(inst.cursor + 1);
     inst.history.push(target.to_string());
     inst.cursor = inst.history.len() - 1;
@@ -536,7 +553,9 @@ pub fn browser_back(
         return Ok(());
     }
     let mut guard = state.instances.lock().unwrap();
-    let inst = guard.get_mut(&session_id).ok_or_else(|| "浏览器未打开".to_string())?;
+    let inst = guard
+        .get_mut(&session_id)
+        .ok_or_else(|| "浏览器未打开".to_string())?;
     if inst.cursor == 0 {
         return Ok(());
     }
@@ -562,7 +581,9 @@ pub fn browser_forward(
         return Ok(());
     }
     let mut guard = state.instances.lock().unwrap();
-    let inst = guard.get_mut(&session_id).ok_or_else(|| "浏览器未打开".to_string())?;
+    let inst = guard
+        .get_mut(&session_id)
+        .ok_or_else(|| "浏览器未打开".to_string())?;
     if inst.cursor + 1 >= inst.history.len() {
         return Ok(());
     }
@@ -587,7 +608,9 @@ pub fn browser_reload(
         return Ok(());
     }
     let mut guard = state.instances.lock().unwrap();
-    let inst = guard.get_mut(&session_id).ok_or_else(|| "浏览器未打开".to_string())?;
+    let inst = guard
+        .get_mut(&session_id)
+        .ok_or_else(|| "浏览器未打开".to_string())?;
     let url: Url = inst
         .history
         .get(inst.cursor)
@@ -608,7 +631,12 @@ pub fn browser_set_bounds(
 ) -> Result<(), String> {
     #[cfg(feature = "cef-preview")]
     if cef::cef_ready() {
-        let b = cef::Rect { x: x as i32, y: y as i32, width: (width.max(1.0)) as i32, height: (height.max(1.0)) as i32 };
+        let b = cef::Rect {
+            x: x as i32,
+            y: y as i32,
+            width: (width.max(1.0)) as i32,
+            height: (height.max(1.0)) as i32,
+        };
         state.cef.with(&session_id, |inst| inst.set_bounds(b));
         return Ok(());
     }
@@ -775,7 +803,9 @@ pub fn browser_popout(
         .add_child(
             tauri::webview::WebviewBuilder::new(&page_label, WebviewUrl::External(page_url))
                 .user_agent(BROWSER_UA)
-                .initialization_script(format!("window.__HEB_EMBEDDED__=true;window.__HEB_POPOUT__=true;\n{INSPECTOR_JS}"))
+                .initialization_script(format!(
+                    "window.__HEB_EMBEDDED__=true;window.__HEB_POPOUT__=true;\n{INSPECTOR_JS}"
+                ))
                 .on_navigation(move |url: &Url| handle_popout_page_nav(&app_pg, &sid_pg, url)),
             LogicalPosition::new(0.0, POPOUT_TOOLBAR_H),
             LogicalSize::new(1280.0, (800.0 - POPOUT_TOOLBAR_H).max(1.0)),
@@ -885,7 +915,10 @@ fn handle_toolbar_nav(app: &AppHandle, session_id: &str, url: &Url) -> bool {
         return true; // 初始 data URL 加载放行
     };
     let ty = msg.get("type").and_then(|v| v.as_str()).unwrap_or_default();
-    let payload = msg.get("payload").cloned().unwrap_or(serde_json::Value::Null);
+    let payload = msg
+        .get("payload")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     match ty {
         "tb:navigate" => {
             if let Some(raw) = payload.get("url").and_then(|v| v.as_str()) {
@@ -954,7 +987,9 @@ fn handle_popout_page_nav(app: &AppHandle, session_id: &str, url: &Url) -> bool 
 
 fn send_toolbar_picker(app: &AppHandle, session_id: &str, active: bool) {
     with_popout(app, session_id, |p| {
-        let _ = p.window.eval(&tb_js(serde_json::json!({ "picker": active })));
+        let _ = p
+            .window
+            .eval(&tb_js(serde_json::json!({ "picker": active })));
     });
 }
 
@@ -1002,7 +1037,11 @@ fn popout_toggle_picker(app: &AppHandle, session_id: &str) {
     with_popout(app, session_id, |p| {
         p.picker_active = !p.picker_active;
         active = p.picker_active;
-        let ty = if active { "heb:picker:start" } else { "heb:picker:stop" };
+        let ty = if active {
+            "heb:picker:start"
+        } else {
+            "heb:picker:stop"
+        };
         let _ = p.page.eval(&rx_js(ty, serde_json::json!({})));
     });
     send_toolbar_picker(app, session_id, active);
@@ -1219,14 +1258,18 @@ fn route_aside_event(
                 serde_json::json!({ "sessionId": aside_session, "prop": prop, "value": value, "target": target, "allMatches": all_matches }),
             );
         }
-        protocol::WireEvent::ToolStart { name, mut input, .. } if name == "PreviewMutate" => {
+        protocol::WireEvent::ToolStart {
+            name, mut input, ..
+        } if name == "PreviewMutate" => {
             if input.get("target").and_then(|v| v.as_str()).is_none() {
                 input["target"] = serde_json::json!("@1");
             }
             input["sessionId"] = serde_json::json!(aside_session);
             eval_aside_down(app, host_session, surface, "heb:aside:mutate", input);
         }
-        protocol::WireEvent::ToolStart { name, mut input, .. } if name == "PreviewAct" => {
+        protocol::WireEvent::ToolStart {
+            name, mut input, ..
+        } if name == "PreviewAct" => {
             if input.get("target").and_then(|v| v.as_str()).is_none() {
                 input["target"] = serde_json::json!("@1");
             }
@@ -1308,13 +1351,20 @@ fn preview_bridge_for(
     // wry：取当前对话预览 webview。popout 用 page 子 webview，embedded 用主实例 webview。
     let st = app.try_state::<BrowserState>()?;
     let webview = if surface == "popout" {
-        st.popout.lock().unwrap().get(session_id).map(|p| p.page.clone())
+        st.popout
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map(|p| p.page.clone())
     } else {
-        st.instances.lock().unwrap().get(session_id).map(|i| i.webview.clone())
+        st.instances
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map(|i| i.webview.clone())
     }?;
     Some(wry_bridge::WryEvalBridge::shared(webview))
 }
-
 
 /// 处理 heb:aside:send：建/续旁支会话，驱动一轮，事件流下发卡片。
 fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_json::Value) {
@@ -1514,7 +1564,7 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
         )
         .await;
         watchdog.abort(); // run 已结束（成功/失败/取消），撤掉看门狗
-        // run 结束移除 cancel flag（无论成功/失败/取消）
+                          // run 结束移除 cancel flag（无论成功/失败/取消）
         if let Some(st) = app2.try_state::<BrowserState>() {
             st.aside_cancels.lock().unwrap().remove(&aside_id);
         }
@@ -1564,13 +1614,20 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
 
 /// 处理 heb:annotation:submit-all：注释列表全部提交——LLM 把多条注释（多元素 +
 /// 对话 + 样式 diff + 结构改动）合并总结成一条给主对话的消息。
-fn handle_annotation_submit_all(app: &AppHandle, main_session_id: &str, payload: &serde_json::Value) {
+fn handle_annotation_submit_all(
+    app: &AppHandle,
+    main_session_id: &str,
+    payload: &serde_json::Value,
+) {
     let surface = payload
         .get("surface")
         .and_then(|v| v.as_str())
         .unwrap_or("embedded")
         .to_string();
-    let items = payload.get("items").cloned().unwrap_or(serde_json::json!([]));
+    let items = payload
+        .get("items")
+        .cloned()
+        .unwrap_or(serde_json::json!([]));
     if items.as_array().map(|a| a.is_empty()).unwrap_or(true) {
         return;
     }

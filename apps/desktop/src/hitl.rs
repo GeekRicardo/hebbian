@@ -231,12 +231,10 @@ pub fn answer_question_from_island(
     // 架构 §7.8.6：同 island_approve——先经 hebcore 的 Answer 协议代理，回退本地 gate。
     if let Some(session_id) = state.remote_session_of(request_id) {
         match crate::data_dir(app) {
-            Ok(dd) => {
-                match crate::hebcore_client::answer(&dd, &session_id, request_id, answer) {
-                    Ok(()) => state.forget_remote(request_id),
-                    Err(e) => tracing::warn!(error = %e, "island_answer: hebcore 代理结算失败"),
-                }
-            }
+            Ok(dd) => match crate::hebcore_client::answer(&dd, &session_id, request_id, answer) {
+                Ok(()) => state.forget_remote(request_id),
+                Err(e) => tracing::warn!(error = %e, "island_answer: hebcore 代理结算失败"),
+            },
             Err(e) => tracing::warn!(error = %e, "island_answer: data_dir 不可用"),
         }
         return;
@@ -273,8 +271,11 @@ mod tests {
     /// island 单选回传须解析成带真实 label 的 Selected（而非历史的 option_N 占位）。
     #[test]
     fn island_single_selected_carries_real_label() {
-        let ans = parse_island_answer("submit", Some(json!({"type": "selected", "label": "右上角"})))
-            .unwrap();
+        let ans = parse_island_answer(
+            "submit",
+            Some(json!({"type": "selected", "label": "右上角"})),
+        )
+        .unwrap();
         match ans {
             protocol::UserAnswer::Selected { label } => assert_eq!(label, "右上角"),
             other => panic!("期望 Selected，得到 {other:?}"),
@@ -297,7 +298,9 @@ mod tests {
             protocol::UserAnswer::Multi { items } => {
                 assert_eq!(items.len(), 3);
                 assert_eq!(items[0].title, "策略");
-                assert!(matches!(&items[1].answer, protocol::SingleAnswer::SelectedMulti { labels } if labels == &["x", "y"]));
+                assert!(
+                    matches!(&items[1].answer, protocol::SingleAnswer::SelectedMulti { labels } if labels == &["x", "y"])
+                );
             }
             other => panic!("期望 Multi，得到 {other:?}"),
         }

@@ -178,7 +178,7 @@ fn assistant_blocks(msg: &Message, include_thinking: bool) -> (Vec<Value>, Vec<(
     if !msg.parts.is_empty() {
         for part in &msg.parts {
             match part {
-                MessagePart::Reasoning { text } => {
+                MessagePart::Reasoning { text, .. } => {
                     if include_thinking && !text.trim().is_empty() {
                         // thinking block 需要 API 颁发的 signature，本侧未存储无法伪造；
                         // 包成 thinking 标签的 text block，续聊时上下文仍可见，且不触发签名校验。
@@ -277,6 +277,7 @@ mod tests {
                 vec![
                     MessagePart::Reasoning {
                         text: "我应该先 Read".into(),
+                        duration_ms: None,
                     },
                     MessagePart::Text {
                         text: "先读文件".into(),

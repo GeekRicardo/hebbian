@@ -285,6 +285,7 @@ fn assistant_message(v: &Value, ts: i64) -> (Message, Vec<String>) {
                         if !t.trim().is_empty() {
                             parts.push(MessagePart::Reasoning {
                                 text: t.to_string(),
+                                duration_ms: None,
                             });
                         }
                     }
@@ -505,7 +506,10 @@ mod tests {
         assert_eq!(run1.tool_calls[0].result.as_deref(), Some("fn a(){}"));
         assert_eq!(run1.tool_calls[1].result.as_deref(), Some("ok"));
         // created_at 取 run 首行时间。
-        assert_eq!(run1.created_at, parse_iso_millis("2026-05-29T08:00:01.000Z").unwrap());
+        assert_eq!(
+            run1.created_at,
+            parse_iso_millis("2026-05-29T08:00:01.000Z").unwrap()
+        );
 
         // run2：真用户输入后另起一条，不与 run1 混。
         assert_eq!(p.messages[3].content, "好");

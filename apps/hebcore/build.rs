@@ -30,7 +30,10 @@ fn main() {
                 .filter(|s| !s.is_empty())
         })
         .unwrap_or_else(|| "dev".into());
-    let version = format!("v{pkg}-{short}{}-{build_id}", if dirty { "-dirty" } else { "" });
+    let version = format!(
+        "v{pkg}-{short}{}-{build_id}",
+        if dirty { "-dirty" } else { "" }
+    );
     println!("cargo:rustc-env=HEBBIAN_BUILD_VERSION={version}");
     // build_id 文件变（每次 tauri build）/ env 变（app:build）/ commit 移动时重算版本号。
     println!("cargo:rerun-if-env-changed=HEBBIAN_BUILD_ID");

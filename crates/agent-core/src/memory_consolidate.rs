@@ -261,10 +261,7 @@ fn parse_links(raw: &str, valid_ids: &std::collections::HashSet<&str>) -> Vec<Me
 /// 拿 session 绑定的 project workdir（用于 project 作用域整合）。无绑定 → None。
 fn session_workdir(data_dir: &Path, session_id: &str) -> Option<std::path::PathBuf> {
     let session = crate::storage::sessions::load(data_dir, session_id).ok()?;
-    session
-        .workdir
-        .as_deref()
-        .and_then(memory_project_workdir)
+    session.workdir.as_deref().and_then(memory_project_workdir)
 }
 
 #[cfg(test)]
@@ -275,12 +272,20 @@ mod tests {
     fn sleep_depth_thresholds() {
         let t = 10.0;
         assert_eq!(decide_sleep_depth(3.0, t), SleepDepth::None, "连续工作不睡");
-        assert_eq!(decide_sleep_depth(10.0, t), SleepDepth::Light, "刚到 T → light");
+        assert_eq!(
+            decide_sleep_depth(10.0, t),
+            SleepDepth::Light,
+            "刚到 T → light"
+        );
         assert_eq!(decide_sleep_depth(45.0, t), SleepDepth::Light);
         assert_eq!(decide_sleep_depth(60.0, t), SleepDepth::Deep, "1h → deep");
         assert_eq!(decide_sleep_depth(300.0, t), SleepDepth::Deep);
         assert_eq!(decide_sleep_depth(480.0, t), SleepDepth::Full, "8h → full");
-        assert_eq!(decide_sleep_depth(2000.0, t), SleepDepth::Full, "跨天 → full");
+        assert_eq!(
+            decide_sleep_depth(2000.0, t),
+            SleepDepth::Full,
+            "跨天 → full"
+        );
     }
 
     #[test]
@@ -311,4 +316,3 @@ mod tests {
         assert!(parse_links("[]", &ids).is_empty());
     }
 }
-

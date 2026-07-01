@@ -153,7 +153,7 @@ pub async fn judge_auto_mode(
         // ASK reason 要按段拆解，原 200 不够；保守留 300 token 上限。
         max_tokens: 300,
         reasoning: None,
-            meta: model_gateway::types::ModelCallMeta {
+        meta: model_gateway::types::ModelCallMeta {
             tag: model_gateway::types::ModelCallTag::Judge,
             ..Default::default()
         },

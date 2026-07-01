@@ -880,7 +880,8 @@ async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse
             request_id,
             feedback,
         } => {
-            if state.resolve_approval(&request_id, ApprovalDecision::DenyWithFeedback { feedback }) {
+            if state.resolve_approval(&request_id, ApprovalDecision::DenyWithFeedback { feedback })
+            {
                 IpcResponse::ok()
             } else {
                 IpcResponse::err(format!("未找到 request_id: {request_id}"))
@@ -1428,7 +1429,10 @@ mod translate_tests {
         );
         let de = translate_event(&perm).expect("permission_requested 应翻译");
         let json = serde_json::to_value(&de).unwrap();
-        assert_eq!(json["risk"], "critical", "risk 必须是小写规范形态，与 to_wire 一致");
+        assert_eq!(
+            json["risk"], "critical",
+            "risk 必须是小写规范形态，与 to_wire 一致"
+        );
         assert_eq!(json["event"], "permission_requested");
 
         // suspend reason: Cron → "cron"（不是 Debug 的 "Cron"）
@@ -1443,7 +1447,10 @@ mod translate_tests {
         );
         let de = translate_event(&susp).expect("run_suspended 应翻译");
         let json = serde_json::to_value(&de).unwrap();
-        assert_eq!(json["reason"], "cron", "suspend reason 必须走 protocol mapper，与 to_wire 一致");
+        assert_eq!(
+            json["reason"], "cron",
+            "suspend reason 必须走 protocol mapper，与 to_wire 一致"
+        );
 
         // 与 to_wire 交叉验证：同一 payload 两侧 risk 字段逐字节一致
         let wire = protocol::to_wire(&perm).unwrap();

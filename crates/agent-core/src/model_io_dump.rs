@@ -74,7 +74,10 @@ pub fn default_path(data_dir: &Path, session_id: &str) -> PathBuf {
 
 /// 检查 [`ENV_VAR`]：开启则按 [`default_path`] 打开一份 dump，失败仅记 trace 不传播。
 /// CLI / desktop 启动时调用。
-pub async fn open_for_session_if_enabled(_data_dir: &Path, _session_id: &str) -> Option<ModelIoDump> {
+pub async fn open_for_session_if_enabled(
+    _data_dir: &Path,
+    _session_id: &str,
+) -> Option<ModelIoDump> {
     // 停用：落盘已下沉 model-gateway 的 InstrumentedClient（任务2）。返回 None，避免与新两条式
     // 格式双落污染同一份 model_io.jsonl；旧 ModelIoDump 创建/record 路径不再走。
     None
@@ -417,7 +420,7 @@ mod tests {
             }],
             max_tokens: 4096,
             reasoning: None,
-                    meta: Default::default(),
+            meta: Default::default(),
         }
     }
 

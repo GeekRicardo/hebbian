@@ -10645,3 +10645,155 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx): 文件行状态 badge 改为 `M` / `U` / `D`；移除字节变化展示，仅保留 diff 行数统计。
 - **影响范围**: Desktop/hebweb 右侧工作台「修改文件」tab 展示层；不改协议、core、持久化，不破坏兼容。
 - **留尾巴**: 无。
+
+### 2026-06-30 — 对齐运行中工具块与详情行
+
+- **Why**: running 展开后 thinking 不应被工具连接线穿过，且 thinking 图标要和工具状态点处于同一列。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 运行中展开详情里的 thinking 改为同列轻量行，图标与工具点列对齐，且不参与工具连接线。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改协议、core、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-30 — 收紧运行中工具块高度
+
+- **Why**: running 未展开的工具块应只比 thinking 内容块高一行，避免占用过多垂直空间。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 将运行中紧凑工具块最大高度从 `14lh` 调整为 `11lh`。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改协议、core、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-30 — 停止跨 thinking 连接工具竖线
+
+- **Why**: 完成态工具详情里，tool 和 thinking 之间不应被工具连接线贯穿；连接线只应连接原始顺序中相邻的两个 tool 行。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 工具行竖线判断改为检查下一条 activity 是否仍是 tool，避免跨过 thinking 画线。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改协议、core、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-30 — 对齐运行中工具块与正文块
+
+- **Why**: running 未展开的工具名紧凑块左侧仍与正文 content 块不齐，需要去掉工具组外层额外缩进。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 移除 running 工具组外层 `pl-3`，让未展开 toolname 块与 content 块左侧对齐。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改协议、core、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-30 — 调整 Desktop/Web 为 session 级长期订阅并批处理流式文本
+
+- **Why**: 用户希望 Desktop 退出后 hebcore 继续跑，重启 Desktop / 打开 Web 后能重新订阅同一个 session；Desktop 与 Web 同时观察同一 session 时，一端继续操作另一端也能收到后续事件。同时 Desktop 前端长回答时按 token 触发 store 写入和重渲染，造成明显卡顿。
+- **改动**:
+  - [apps/desktop/src/hebcore_client.rs](../apps/desktop/src/hebcore_client.rs) / [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 拆分 `StartRun` 投递与 `Subscribe` 长期订阅，新增 `subscribe_session_events` Tauri command；`send_message` 只投递输入、accepted 后返回，不再持有事件流到终态。
+  - [apps/desktop/frontend/src/desktop/bridge/transport.ts](../apps/desktop/frontend/src/desktop/bridge/transport.ts) / [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): 前端桥接新增 session 订阅入口；Tauri 走长期 Channel，Web 走既有 WS subscribe/listen。
+  - [apps/desktop/frontend/src/desktop/ui/store/eventBatcher.ts](../apps/desktop/frontend/src/desktop/ui/store/eventBatcher.ts) / [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts) / [apps/desktop/frontend/src/desktop/ui/store/slotReducer.test.ts](../apps/desktop/frontend/src/desktop/ui/store/slotReducer.test.ts): 按 session 管理事件订阅，连续 `text_delta` 合并到一帧一次；终态由长期订阅统一 reload session、清理 live slot 与续跑输入队列。
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs): Web idle `send_message` 改为向 runtime input loop 投递后立即返回，不再 await 整轮 run。
+  - [apps/web-server/src/main.rs](../apps/web-server/src/main.rs): hebweb 兼任 hebcore 时补注册 wakeup resume handler，保持与独立 hebcore 一致。
+  - [docs/架构.md](架构.md): 明确 `Subscribe` 是 session 级长期观察通道，重连历史靠 session.jsonl 补齐，订阅只保证后续事件。
+- **影响范围**: Desktop / Web / hebcore transport 使用方式；不新增 WireEvent 或 HebcoreRequest 字段，协议向后兼容。Desktop 前端流式渲染频率从 token 级降到帧级。
+- **留尾巴**: 断线期间不做 replay buffer；需要真机跑 Desktop/Web 同 session 双订阅与退出重连现象级验证。
+
+### 2026-06-30 — 恢复旁支对话底部输入框
+
+- **Why**: 用户需要在旁支对话里继续输入提问；此前旁支面板只读展示，底部输入框被移除。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/BranchChatTab.tsx](../apps/desktop/frontend/src/desktop/ui/components/BranchChatTab.tsx): 恢复旁支底部 `AsideComposer` 输入区，接回输入草稿、附件、发送与停止回调。
+- **影响范围**: Desktop/hebweb 右侧工作台旁支对话 UI；不改协议、core、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-30 — 调整系统临时目录访问免 PathAccess 审批
+
+- **Why**: 用户希望 `/tmp` 路径不再弹审批、默认通过；临时目录是 agent 写复现脚本、中间产物和测试夹的高频安全边界，逐次 PathAccess 弹窗噪音大。
+- **改动**:
+  - [crates/agent-core/src/workspace.rs](../crates/agent-core/src/workspace.rs): `Workspace::allows` 增加系统临时目录判定，复用 canonicalize_lossy，保证 `/tmp` 及其真实系统 temp 路径前缀默认视为允许。
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 增加 `/tmp` 编辑不触发 `PermissionRequested` 的 dispatcher 回归测试。
+- **影响范围**: agent-core 权限路径闸；不改协议、不改 surface。系统临时目录内的读写不再触发 PathAccess，危险命令 / 不可记忆命令仍按工具审批链处理。
+- **留尾巴**: 无。
+
+### 2026-06-30 — 修复 Desktop 发送消息时 Channel 参数传空导致失败
+
+- **Why**: 新 build 后 Desktop 发消息报 `invalid args onEvent for command send_message: invalid type: null, expected a string`。根因是前端桥接在长期订阅改造中把 `send_message` 的 `onEvent` 传成 `null`，但 Rust Tauri command 当前仍需要 `Channel<WireEvent>` 完成参数反序列化。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): `sendMessage` 恢复创建并传入真实 `Channel<EngineEvent>`；session 级长期订阅仍由 `subscribeSessionEvents` 独立负责。
+- **影响范围**: Desktop 前端 Tauri 调用参数；不改协议、不改 core、不影响 Web。
+- **留尾巴**: 后续若彻底移除 `send_message` 的 per-message Channel，需要同步改 Rust command 签名和前端调用，不能只在前端传 `null`。
+
+### 2026-06-30 — 给运行中工具名增加 Text Shimmer
+
+- **Why**: 用户希望正在跑的工具块里，当前运行中的 tool 文本有闪烁流光效果，避免和已完成工具混在一起看不出状态。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 运行中紧凑工具块按 tool 状态给未完成工具名加 `text-shimmer`，thinking 与已完成工具不闪。
+  - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css): 新增 Text Shimmer keyframes 与文本渐变样式。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改协议、core、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-30 — 将运行中工具块改为左轨预览
+
+- **Why**: 用户希望工具组首层不要只显示 toolname，而是直接展示 tool 名、desc 与参数；左轨用颜色体现状态（完成绿、运行蓝，中间渐变），运行中工具文本保留 Text Shimmer，点击整体块后展开为完整左轨内容；完成态展开后还要能像旧版一样点开单个 tool 详情，不能点左轨任意位置就把整个组折叠。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): running 工具组改为左轨预览，显示 desc 与参数摘要；参数值放在 desc 后同一行，只展示值不展示参数名；预览态限高且固定高度内默认滚到最新 tool call；展开后只显示完整左轨预览，不再追加旧的点/竖线详情列表。完成态仍收成“已运行 xxx”摘要，点开后同样显示左轨样式；展开态左轨里的单个 tool 行可继续展开/收起原详情，只有“已运行 xxx”摘要行负责折叠整个组。左轨改为连续竖线，并按相邻行状态做颜色渐变过渡；Bash/PowerShell 运行中默认展开原黑底终端详情。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改协议、core、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-30 — 让 hebcore 随最后一个 surface 断开退出
+
+- **Why**: 用户明确要求 agent-core/hebcore 进程与 surface 端绑定：最后一个 surface 连接断开时视为用户主动退出，避免 core 在没有壳的情况下长期驻留。
+- **改动**:
+  - [crates/surface-session/src/transport.rs](../crates/surface-session/src/transport.rs): 新增 `SurfaceLifecycle` 连接计数与退出通知，覆盖“最后连接断开退出 / 活跃 run 时先不判空退出”的单元测试。
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): `RuntimeRegistry` 增加取消全部活跃 run 并等待收尾的入口，用于最后 surface 断开时按用户主动退出语义关闭。
+  - [apps/hebcore/src/main.rs](../apps/hebcore/src/main.rs): accept loop 接入连接生命周期，最后连接断开后 cancel 活跃 run、等待持久化收尾并结束进程。
+  - [docs/架构.md](架构.md): 修订 §7.8.7，把 hebcore 从“无连接计数、最后客户端退出也不退”改为 surface 连接持有的生命周期模型，同时保留显式版本协商换版机制。
+- **影响范围**: `surface-session` / `hebcore` / 架构文档；不改线协议字段、不影响 session 文件格式。Desktop/hebweb/heb connect 通过 unix-socket 连接自然触发生命周期；`heb run`/`heb new` 隔离模式不受常驻 hebcore 连接计数影响。
+- **留尾巴**: ws transport 接入后也必须复用同一 `SurfaceLifecycle` attach/detach；当前改动覆盖已落地的 unix-socket transport。
+
+### 2026-07-01 — 修复 Read 长中文行卡死与 cron 唤醒前端分段
+
+- **Why**: 真实 session `202607010135-64eaafcd` 在 `Read` 读取 tool sidecar 时卡死；根因是按字节截断 UTF-8 长行切在中文字符中间导致 panic，且工具 panic 未被 dispatcher 捕获。另一个 session `202606301122-a8e28a53` 后端落盘正常，但 Desktop 前端在 cron 唤醒后未把新轮次分段，导致后续内容和工具展示堆进同一个 streaming bubble。
+- **改动**:
+  - [crates/agent-core/src/tools/read.rs](../crates/agent-core/src/tools/read.rs): 长行截断改为先回退到合法 UTF-8 边界，并增加多字节字符回归测试。
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 工具执行外层捕获 panic，把异常转成工具错误结果，避免整个 run task 静默死亡，并增加 dispatcher 回归测试。
+  - [apps/desktop/frontend/src/desktop/ui/store/slotReducer.ts](../apps/desktop/frontend/src/desktop/ui/store/slotReducer.ts): `cron_fired` system notification 视为新轮次分段触发；`bg_task_finished` 保持钉在对应工具调用后的语义，不触发分段。
+  - [apps/desktop/frontend/src/desktop/ui/store/slotReducer.test.ts](../apps/desktop/frontend/src/desktop/ui/store/slotReducer.test.ts): 固化 cron 分段、后台任务不分段、普通用户插队仍分段的回归脚本。
+  - [apps/desktop/frontend/src/desktop/ui/components/SuspendedBanner.tsx](../apps/desktop/frontend/src/desktop/ui/components/SuspendedBanner.tsx) / [ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx) / [BackgroundTaskPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx): 主时间线和侧栏复用挂起提示，cron 挂起显示倒计时。
+- **影响范围**: agent-core 工具执行与 Desktop/hebweb 前端流式时间线；不改 WireEvent 协议字段、不改 session 文件格式。cron 唤醒 UI 行为变为独立轮次，后台任务完成仍维持原排序语义。
+- **留尾巴**: 已用脚本与构建验证核心回归；仍建议在 Desktop 真机打开上述两个历史 session 做一次视觉抽查。
+
+### 2026-07-01 — 修复 daemon 崩溃时 partial 文件残留无法恢复
+
+- **Why**: session `202607010516-11154072`（试图修另一个卡死 session 的对话）自己也卡住了：daemon 进程在 ToolStep 中崩溃/被杀后，partial 文件残留在磁盘上未被 finalize 成 assistant message。虽然 per-session 加载时有 `load_with_partial_recovery` 恢复路径，但它只在用户打开那个特定 session 时才触发——daemon 重启后用户不一定会立刻打开崩溃的 session，导致对话历史「丢失」一段模型回复。更深层看：`spawn_run` 的 tokio task panic 时 `runs` 表也不会被清理，残留僵尸 run 条目。
+- **改动**:
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs):
+    - 新增 `recover_all_dead_partials` 函数：daemon 启动时扫描所有 session 的 dead partial 并折叠进各自的 session.jsonl（活 partial 跳过）。
+    - 新增回归测试 `recover_all_dead_partials_scans_all_sessions`：覆盖死 partial 折叠、活 partial 跳过、幂等二次扫描。
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs): `spawn_run` 新增 `RunCleanup` Drop guard——即使 run_loop task panic，Drop 仍保证 `runs` 表清理 + `LiveRunModeRegistry` 取消注册，杜绝僵尸 run 条目。
+  - [apps/hebcore/src/main.rs](../apps/hebcore/src/main.rs): daemon 启动时立即调用 `recover_all_dead_partials`，在 singleton lock 获取后、socket bind 前完成恢复。
+- **影响范围**: `agent-core` storage 模块 / harness / `hebcore` daemon 启动流程。不改线协议字段、不影响 session 文件格式（仅新增恢复步骤，落盘格式与 per-session 恢复完全一致）。
+- **留尾巴**:
+  - `hebweb` standalone 模式（不连 hebcore daemon）和 CLI `heb new` 仍然只对当前 session 做 per-session 恢复，不做全量扫描——它们都是单 session 短生命周期进程，全量扫描收益极小。
+  - `recover_all_dead_partials` 失败不阻塞 daemon 启动（仅 warn），保证 daemon 总能起来。极端情况（磁盘满/权限错误）需人工干预。
+
+### 2026-07-01 — 调整运行工具块为可直接交互的轻量左轨
+
+- **Why**: 用户用真实 `?tool-preview` 多轮标注运行中 tool 展示：手写 HTML 预览会偏离生产组件，运行块也不应像外层卡片；未展开时要直接滚动和点击内部 tool/thinking，thinking 折叠态要同行露出摘要，完成态 `已运行 xxx` 要与 content 外框对齐；固定高度区域需要更高，展开整个 group 改为点击左侧彩色轨道；完成态绿色要更亮；并且后续 content 刚开始流式输出时，前一个 tool group 不应立刻折叠。
+- **改动**:
+  - [apps/desktop/frontend/src/main.tsx](../apps/desktop/frontend/src/main.tsx): 新增 `?tool-preview` 入口，正常 Desktop / hebweb 入口不受影响。
+  - [apps/desktop/frontend/src/desktop/ui/components/ToolRenderPreviewApp.tsx](../apps/desktop/frontend/src/desktop/ui/components/ToolRenderPreviewApp.tsx): 新增调试页面，直接渲染生产 `MessageBubble`，支持运行态/完成态切换、自动播放/暂停/继续、part 截止滑块，并把当前最后一个 tool mock 成 running。
+  - [apps/desktop/frontend/src/desktop/ui/fixtures/toolPreviewLatestRun.json](../apps/desktop/frontend/src/desktop/ui/fixtures/toolPreviewLatestRun.json): 内嵌最新 session `202606300935-e71321b3` 的最新 assistant run `202607010647-edcb4e99` mock 数据。
+  - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css): 新增运行中 tool 名称的 Text Shimmer 动画。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `RunningActivityBlock` 去掉外层 button / border / radius / 背景 / 裁剪卡片，只保留透明固定高度滚动区域；折叠态高度调到 13rem；删除底部“展开运行详情”按钮，改为点击每段左轨展开/收起整个 group；tool/thinking 行标题继续只控制自己的详情。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): thinking 行在运行中左轨和完成态详情里都可展开 `ReasoningScrollArea`，折叠态同行显示摘要；Task/TodoWrite 小方块图标补齐 inline-block / shrink-0 / transparent / shadow-none 等显式样式。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 完成态 `已运行 xxx` 摘要与 content 外框左边缘对齐；运行左轨 done 段渐变色从 emerald-500 调到 emerald-400；streaming 中最后一个正在增长的 text 不再触发前一个 tool group 折叠，等后续 content 稳定后再收成 `已运行 xxx`。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层与 dev 预览入口；不改协议、core、持久化，不破坏兼容。
+- **留尾巴**: fixture 是一次性快照；需要换数据时重新从目标 session/run 生成。
+
+### 2026-07-01 — 前台 Bash/PowerShell 工具卡片显示终止按钮、修复与放大按钮重叠
+
+- **Why**:
+  - 用户发现只有后台 Bash（`run_in_background=true`）的工具卡片上能看到「终止」按钮，前台长时间运行的命令（如 `docker pull`）没有入口终止它，只能等超时或 cancel 整个 run。
+  - 实际上前台的 Bash 也注册在 `BgTaskRegistry` 里（`is_background=false`），`listBackgroundTasks` 能查到，前端只是漏掉了前台匹配逻辑（只对 `name === "Bash"` 生效，PowerShell 被漏掉；轮询间隔 2s 也太慢）。
+  - 此外「终止」按钮和「放大」按钮同为 `absolute right-2 top-2`，在 Bash 卡片上完全重叠。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx):
+    - 前台 task_id 匹配补上 `PowerShell`（`name !== "Bash"` → `name !== "Bash" && name !== "PowerShell"`）
+    - 轮询间隔从 2000ms 降到 500ms，让终止按钮在命令启动后更快出现
+    - 终止按钮从 `right-2` 改为 `right-10`，与放大按钮（`right-2`）不再重叠
+- **影响范围**: 纯前端渲染层（Desktop + hebweb 共享）；不改协议、agent-core、数据格式。`killBackgroundTask` 后端本就支持杀任意注册表中的 shell（包括前台 is_background=false 的命令），无需改动。
+- **留尾巴**: 无。

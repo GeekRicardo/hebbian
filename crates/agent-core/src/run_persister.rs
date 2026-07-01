@@ -171,8 +171,7 @@ impl RunPersister {
     /// 起一个落盘协调器。`msg_id` 是本 run 的 partial 文件名（恢复时折叠成 assistant）。
     pub fn new(data_dir: PathBuf, session_id: String) -> Self {
         let msg_id = sessions::new_id();
-        let partial =
-            PartialActor::spawn(data_dir.clone(), session_id.clone(), msg_id.clone());
+        let partial = PartialActor::spawn(data_dir.clone(), session_id.clone(), msg_id.clone());
         let last_message: Arc<Mutex<Option<Message>>> = Arc::new(Mutex::new(None));
         Self {
             inner: Arc::new(Mutex::new(PersistState {
@@ -404,9 +403,7 @@ impl RunPersisterHandle {
 fn partial_fragment_of(payload: &EventPayload) -> Option<PartialFragment> {
     match payload {
         EventPayload::TextDelta { text } => Some(PartialFragment::Text { text: text.clone() }),
-        EventPayload::Reasoning { text } => {
-            Some(PartialFragment::Reasoning { text: text.clone() })
-        }
+        EventPayload::Reasoning { text } => Some(PartialFragment::Reasoning { text: text.clone() }),
         EventPayload::ToolCallStarted {
             index, name, input, ..
         } => {
@@ -473,15 +470,23 @@ mod tests {
         let state = RunState::new(RunId::new());
 
         // 段1：模型产出一段文本 → 中间 flush（模拟 goal NotYet 续跑前先落段排 marker）。
-        handle.observe(&state.event(EventPayload::TextDelta { text: "第一轮".into() }));
+        handle.observe(&state.event(EventPayload::TextDelta {
+            text: "第一轮".into(),
+        }));
         let seg1 = persister.flush_segment().await.expect("段1 应落盘");
 
         // 段2：续跑后再产出一段 → run 收尾 finish 盖耗时。
-        handle.observe(&state.event(EventPayload::TextDelta { text: "第二轮".into() }));
+        handle.observe(&state.event(EventPayload::TextDelta {
+            text: "第二轮".into(),
+        }));
         let seg2 = persister.finish(1234).await.expect("段2 应落盘");
 
         // finish 返回的末段带耗时（surface 透传）。
-        assert_eq!(seg2.run_duration_ms, Some(1234), "finish 返回的末段应带耗时");
+        assert_eq!(
+            seg2.run_duration_ms,
+            Some(1234),
+            "finish 返回的末段应带耗时"
+        );
 
         // 落盘 jsonl 的事实校验：段1 无耗时，段2 有。
         let loaded = sessions::load(&dir, &sid).unwrap();
@@ -515,7 +520,9 @@ mod tests {
         let state = RunState::new(RunId::new());
 
         // 唯一一段文本 → flush（模拟 goal achieved：裁决前先 flush 让 marker 排其后）。
-        handle.observe(&state.event(EventPayload::TextDelta { text: "唯一段".into() }));
+        handle.observe(&state.event(EventPayload::TextDelta {
+            text: "唯一段".into(),
+        }));
         let seg = persister.flush_segment().await.expect("段应落盘");
 
         // 收尾 finish：累积器已空，无新段——耗时应回填到已落盘的 seg。
@@ -543,11 +550,7 @@ mod tests {
         };
         entries
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .ends_with(".partial.jsonl")
-            })
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".partial.jsonl"))
             .count()
     }
 

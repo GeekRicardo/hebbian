@@ -25,8 +25,7 @@ use common::{
 };
 use model_gateway::{self, config::Provider};
 use protocol::{
-    ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption,
-    UserAnswer,
+    ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption, UserAnswer,
 };
 use std::{
     path::{Path, PathBuf},
@@ -874,7 +873,7 @@ pub async fn send_once(
         tools: Vec::new(),
         max_tokens: 4096,
         reasoning: None,
-            meta: Default::default(),
+        meta: Default::default(),
     };
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     match client
@@ -1013,8 +1012,12 @@ pub fn push_engine_event_to_island(client: &HebislandClient, event: &protocol::W
             multi,
             questions,
         } => {
-            let mut card =
-                IslandCard::new(format!("question-{request_id}"), "question", "需要你的回答", "");
+            let mut card = IslandCard::new(
+                format!("question-{request_id}"),
+                "question",
+                "需要你的回答",
+                "",
+            );
             if questions.is_empty() {
                 // 单题：顶层 question / options / multi。
                 card.body = question.clone();
@@ -1429,7 +1432,9 @@ mod tests {
                         index: 0,
                         id: Some("call_bash".to_string()),
                         name: Some("Bash".to_string()),
-                        arguments_delta: Some("{\"command\":\"chmod 755 automode-ok\"}".to_string()),
+                        arguments_delta: Some(
+                            "{\"command\":\"chmod 755 automode-ok\"}".to_string(),
+                        ),
                     }));
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),
@@ -2052,7 +2057,10 @@ mod tests {
             // 自身契约：三场景都得发出关键事件，防止 emit 整条断了还以为"指纹一致"。
             assert!(all.contains("\"type\":\"text_delta\""), "应含 text_delta");
             assert!(all.contains("\"type\":\"tool_start\""), "应含 tool_start");
-            assert!(all.contains("\"type\":\"run_finished\""), "应含 run_finished");
+            assert!(
+                all.contains("\"type\":\"run_finished\""),
+                "应含 run_finished"
+            );
             assert_eq!(all.matches("### SCENARIO").count(), 3, "应覆盖 3 个场景");
         });
     }
@@ -2300,7 +2308,9 @@ mod tests {
                 })
                 .collect();
             assert!(
-                texts.iter().any(|t| t.contains("第一段") && !t.contains("第二段")),
+                texts
+                    .iter()
+                    .any(|t| t.contains("第一段") && !t.contains("第二段")),
                 "第一段不应吞并第二段，parts.texts={texts:?}"
             );
 
@@ -2369,7 +2379,8 @@ mod tests {
                 .filter(|m| m.role == Role::Assistant)
                 .count();
             assert_eq!(
-                assistant_count, 1,
+                assistant_count,
+                1,
                 "无插队的多 ToolStep run 应只落一条 assistant，实际落了 {assistant_count} 条：{:?}",
                 saved
                     .messages

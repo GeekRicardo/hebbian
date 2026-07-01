@@ -76,7 +76,12 @@ impl DumpActor {
                     return;
                 }
             }
-            let mut file = match OpenOptions::new().create(true).append(true).open(&path).await {
+            let mut file = match OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .await
+            {
                 Ok(f) => f,
                 Err(e) => {
                     warn!(error = %e, path = %path.display(), "model_io 打开失败");
@@ -292,12 +297,16 @@ fn attachment_meta(att: &MessageAttachment) -> Value {
             name,
             media_type,
             data,
-        } => json!({"kind": "image", "name": name, "media_type": media_type, "size_bytes": data.len()}),
+        } => {
+            json!({"kind": "image", "name": name, "media_type": media_type, "size_bytes": data.len()})
+        }
         MessageAttachment::TextFile {
             name,
             media_type,
             content,
-        } => json!({"kind": "text_file", "name": name, "media_type": media_type, "size_bytes": content.len()}),
+        } => {
+            json!({"kind": "text_file", "name": name, "media_type": media_type, "size_bytes": content.len()})
+        }
     }
 }
 

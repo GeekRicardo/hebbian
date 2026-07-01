@@ -117,12 +117,6 @@ export function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionSt
       modelRetry: { attempt: e.attempt, max: e.max, reason: e.reason },
     };
   }
-  if (e.type === "context_compacted") {
-    return {
-      ...slot,
-      contextCompacted: { before_tokens: e.before_tokens, after_tokens: e.after_tokens },
-    };
-  }
   if (e.type === "text_delta") {
     if (!e.text) return slot;
     // 失败 attempt 的残片已在 model_retry 时回退掉，这里只管正常追加；清空 modelRetry

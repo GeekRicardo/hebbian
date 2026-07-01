@@ -192,6 +192,11 @@ pub enum MessagePart {
     /// 模型的思维链 / 推理过程。落盘后 UI 以折叠块呈现。
     Reasoning {
         text: String,
+        /// 思考（thinking block）的墙钟时长（毫秒）。流式路径从 thinking block 的
+        /// start/stop 边界算得；非流式或不支持的 provider 为 None。OAuth 直连官方时
+        /// thinking 文本被清空（text 为空），但时长仍在——UI 据此显示「思考用时 N 秒」。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
     },
     ToolCall {
         id: String,
@@ -1651,9 +1656,7 @@ fn partial_to_interrupted_message(
 /// 渲染，**不加中断话术、不落盘**（架构 §7.8.5 步骤⑥）。surface 加载会话历史时把它
 /// 拼进返回的 Session，让用户看到正在跑的 run 的已累积内容；hebcore run 收尾会把这段
 /// 正式落进 jsonl，下次加载 partial 已删、读正式的。
-fn partial_to_live_message(
-    partial: &super::sessions_dir::RecoveredPartial,
-) -> Option<Message> {
+fn partial_to_live_message(partial: &super::sessions_dir::RecoveredPartial) -> Option<Message> {
     partial_to_message(partial, true)
 }
 
@@ -1685,6 +1688,7 @@ fn partial_to_message(
     if !partial.reasoning.is_empty() {
         parts.push(MessagePart::Reasoning {
             text: partial.reasoning.clone(),
+            duration_ms: None,
         });
     }
     if !partial.text.is_empty() {
@@ -2294,11 +2298,7 @@ pub fn set_active_plan(data_dir: &Path, id: &str, plan_path: Option<String>) -> 
 
 /// 设置 / 清空会话目标（架构 §4.8.3 / §8）。
 /// `Some(goal)` 写入或覆盖；`None` 清空。沿用 [`set_active_plan`] 的 append-only 模式。
-pub fn set_active_goal(
-    data_dir: &Path,
-    id: &str,
-    goal: Option<ActiveGoal>,
-) -> AppResult<Session> {
+pub fn set_active_goal(data_dir: &Path, id: &str, goal: Option<ActiveGoal>) -> AppResult<Session> {
     let path = ensure_jsonl(data_dir, id)?;
     let (set, clear) = match goal {
         Some(g) => (Some(g), false),
@@ -2595,7 +2595,7 @@ mod tests {
                 created_at: now(),
                 meta: None,
                 subagent_call_id: None,
-            run_duration_ms: None,
+                run_duration_ms: None,
             },
         )
         .expect("append message")
@@ -2717,7 +2717,7 @@ mod tests {
                     created_at: now(),
                     meta: None,
                     subagent_call_id: None,
-            run_duration_ms: None,
+                    run_duration_ms: None,
                 },
             )
             .unwrap();
@@ -3063,11 +3063,7 @@ mod tests {
         append_message(&dir, &s.id, mk(Role::Assistant, "助手回答", 150)).unwrap();
 
         let loaded = load(&dir, &s.id).unwrap();
-        let order: Vec<&str> = loaded
-            .messages
-            .iter()
-            .map(|m| m.content.as_str())
-            .collect();
+        let order: Vec<&str> = loaded.messages.iter().map(|m| m.content.as_str()).collect();
         assert_eq!(
             order,
             vec!["原始问题", "助手回答", "插队消息"],
@@ -3098,11 +3094,7 @@ mod tests {
         append_message(&dir, &s.id, mk(Role::User, "c", 100)).unwrap();
 
         let loaded = load(&dir, &s.id).unwrap();
-        let order: Vec<&str> = loaded
-            .messages
-            .iter()
-            .map(|m| m.content.as_str())
-            .collect();
+        let order: Vec<&str> = loaded.messages.iter().map(|m| m.content.as_str()).collect();
         assert_eq!(order, vec!["a", "b", "c"], "相等时刻保持物理序");
     }
 
@@ -3161,7 +3153,7 @@ mod tests {
                 created_at: now_ts,
                 meta: None,
                 subagent_call_id: None,
-            run_duration_ms: None,
+                run_duration_ms: None,
             }],
             workdir: None,
             allowed_paths: None,
@@ -3231,7 +3223,7 @@ mod tests {
                 created_at: now(),
                 meta: None,
                 subagent_call_id: None,
-            run_duration_ms: None,
+                run_duration_ms: None,
             },
         )
         .unwrap();
@@ -3629,7 +3621,10 @@ mod tests {
             .iter()
             .find(|m| m.role == Role::Assistant)
             .expect("活 partial 应被读出渲染成 assistant message");
-        assert_eq!(live.content, "正在流式输出中", "活 partial 流式文本应完整读出");
+        assert_eq!(
+            live.content, "正在流式输出中",
+            "活 partial 流式文本应完整读出"
+        );
         assert!(
             !live.content.contains(INTERRUPTED_TAIL_NOTICE),
             "活 partial 不该带「输出中断」话术（它还在跑）"

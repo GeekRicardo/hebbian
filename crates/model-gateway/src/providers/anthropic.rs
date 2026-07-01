@@ -70,62 +70,6 @@ impl AnthropicClient {
         )
     }
 
-    /// 走 `complete()` 拿到完整响应后，把 reasoning / text / tool_use 一次性 emit
-    /// 成 stream events，让上层 (`agent_loop`) 看起来像走了 stream 路径。
-    /// 用于 Opus 4.7 + thinking 这种 stream 模式服务端不发 thinking_delta 的场景。
-    async fn complete_then_emit(
-        &self,
-        req: ModelRequest,
-        cancel: CancelFlag,
-        on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
-    ) -> Result<ModelResponse, ModelError> {
-        tracing::info!(model = %req.model, "anthropic: 4.7 thinking → complete_then_emit");
-        let resp = self.complete(req, cancel).await?;
-        match &resp {
-            ModelResponse::Done {
-                text, reasoning, ..
-            } => {
-                tracing::info!(
-                    reasoning_len = reasoning.len(),
-                    text_len = text.len(),
-                    "anthropic complete_then_emit: Done"
-                );
-                if !reasoning.is_empty() {
-                    on_event(ModelStreamEvent::ReasoningDelta {
-                        text: reasoning.clone(),
-                    });
-                }
-                if !text.is_empty() {
-                    on_event(ModelStreamEvent::TextDelta { text: text.clone() });
-                }
-            }
-            ModelResponse::ToolCalls {
-                text,
-                reasoning,
-                calls,
-                ..
-            } => {
-                if !reasoning.is_empty() {
-                    on_event(ModelStreamEvent::ReasoningDelta {
-                        text: reasoning.clone(),
-                    });
-                }
-                if !text.is_empty() {
-                    on_event(ModelStreamEvent::TextDelta { text: text.clone() });
-                }
-                for (i, call) in calls.iter().enumerate() {
-                    on_event(ModelStreamEvent::ToolCallDelta(ToolCallStreamDelta {
-                        index: i,
-                        id: Some(call.id.clone()),
-                        name: Some(call.name.clone()),
-                        arguments_delta: Some(call.input.to_string()),
-                    }));
-                }
-            }
-        }
-        Ok(resp)
-    }
-
     fn is_claude_code_oauth(&self) -> bool {
         matches!(self.provider.auth_mode, AuthMode::OauthClaudeCode)
             || self.provider.claude_code_compat
@@ -246,29 +190,11 @@ impl ModelClient for AnthropicClient {
         cancel: CancelFlag,
         on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
     ) -> Result<ModelResponse, ModelError> {
-        // Opus 4.7/4.8 在 stream 模式下不发 thinking_delta（实测：只有 signature_delta），
-        // 即使显式 display:"summarized" 也没用。要拿到 thinking 文本只能走 complete()——
-        // 非流式响应的 content 里带完整 thinking block。这里检查到「4.7 模式 + 请求体会带
-        // thinking」就回退到 complete，拿到 reasoning 后一次性 emit ReasoningDelta，再分别
-        // emit text 和 tool_use。
-        //
-        // 「请求体会带 thinking」的判定必须与 build_body 一致：OAuth / CC 路径**无条件**注入
-        // adaptive thinking（与 reasoning.enabled 无关），所以这里也要无条件回退；其余路径
-        // 只在 reasoning 显式开启时才带 thinking。漏掉 OAuth 分支会让 reasoning=None 的
-        // 会话走纯 stream → opus 不发 thinking_delta → 拿不到推理摘要。
-        if matches!(
-            common::reasoning::anthropic_thinking_mode(&req.model),
-            Some(common::reasoning::AnthropicThinkingMode::Opus47Adaptive)
-        ) && (self.is_claude_code_oauth()
-            || req
-                .reasoning
-                .as_ref()
-                .map(|r| r.is_enabled())
-                .unwrap_or(false))
-        {
-            return self.complete_then_emit(req, cancel, on_event).await;
-        }
-
+        // Opus 4.7/4.8 + OAuth 直连官方时，thinking block 的文本被官方清空（只回
+        // signature），但 `content_block_start/stop` 边界仍正常到达——靠这对边界算
+        // 思考墙钟时长（emit ReasoningDuration），让 UI 显示「思考用时 N 秒」。
+        // 故这里不再回退到非流式：流式既能拿到（代理路径的）thinking_delta，又能拿到
+        // 时长边界，还能让正文逐字流，全面优于一次性 complete。
         reject_image_generation_tool(&req)?;
         let resp = self.send_with_refresh(&req, true, &cancel).await?;
 
@@ -279,6 +205,9 @@ impl ModelClient for AnthropicClient {
         let mut full_signature = String::new();
         let mut current_event_type = String::new();
         let mut thinking_deltas_seen: u64 = 0;
+        // thinking block 的开始墙钟时刻（按 block index 记）。收到对应 content_block_stop
+        // 时算出时长并 emit 一次 ReasoningDuration。只对 thinking 块计时，其余块忽略。
+        let mut thinking_started_at: BTreeMap<usize, std::time::Instant> = BTreeMap::new();
 
         // tool_use 累积：按 Anthropic content block index 跟踪每个 tool 的 id/name/args。
         // 用 BTreeMap 保留 index 顺序。
@@ -344,6 +273,9 @@ impl ModelClient for AnthropicClient {
                                 });
                                 full_text.push_str(&delta);
                             }
+                            proto::AnthropicStreamEvent::ThinkingStart { index } => {
+                                thinking_started_at.insert(index, std::time::Instant::now());
+                            }
                             proto::AnthropicStreamEvent::Thinking { delta, .. } => {
                                 if thinking_deltas_seen == 0 {
                                     debug!("anthropic stream: first thinking_delta arrived");
@@ -355,6 +287,14 @@ impl ModelClient for AnthropicClient {
                             proto::AnthropicStreamEvent::Signature { signature, .. } => {
                                 full_signature = signature.clone();
                                 on_event(ModelStreamEvent::ReasoningSignature { signature });
+                            }
+                            proto::AnthropicStreamEvent::BlockStop { index } => {
+                                // 只对 thinking 块计时；收到其结束边界时算墙钟时长并 emit 一次。
+                                if let Some(started) = thinking_started_at.remove(&index) {
+                                    on_event(ModelStreamEvent::ReasoningDuration {
+                                        ms: started.elapsed().as_millis() as u64,
+                                    });
+                                }
                             }
                             proto::AnthropicStreamEvent::ToolUseStart { index, id, name } => {
                                 tracing::info!(
@@ -390,12 +330,14 @@ impl ModelClient for AnthropicClient {
                                 // 用 ToolUseStart 时建立的 block→ordinal 映射透出归一序号，
                                 // 保证 start 与后续 delta 落在上层同一个 tool part 上。
                                 if let Some(&ordinal) = block_to_ordinal.get(&index) {
-                                    on_event(ModelStreamEvent::ToolCallDelta(ToolCallStreamDelta {
-                                        index: ordinal,
-                                        id: None,
-                                        name: None,
-                                        arguments_delta: Some(partial_json),
-                                    }));
+                                    on_event(ModelStreamEvent::ToolCallDelta(
+                                        ToolCallStreamDelta {
+                                            index: ordinal,
+                                            id: None,
+                                            name: None,
+                                            arguments_delta: Some(partial_json),
+                                        },
+                                    ));
                                 }
                             }
                             proto::AnthropicStreamEvent::MessageStart { usage: u } => {

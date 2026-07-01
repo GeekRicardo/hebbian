@@ -1,4 +1,4 @@
-import { invoke, Channel } from "./transport";
+import { invoke, Channel, listen, subscribeSession, transportMode } from "./transport";
 import type {
   AppSettings,
   ActiveGoal,
@@ -255,6 +255,25 @@ export const api = {
       continueRun: continueRun ?? false,
       onEvent: channel,
     });
+  },
+
+  subscribeSessionEvents: async (
+    sessionId: string,
+    onEvent: (e: EngineEvent) => void
+  ) => {
+    await subscribeSession(sessionId);
+    if (transportMode === "web") {
+      return listen<EngineEvent>("engine-event", (e) => onEvent(e.payload));
+    }
+    const channel = new Channel<EngineEvent>();
+    channel.onmessage = onEvent;
+    await invoke<void>("subscribe_session_events", {
+      sessionId,
+      onEvent: channel,
+    });
+    return () => {
+      channel.onmessage = null;
+    };
   },
 
   cancelMessage: (requestId: string) =>

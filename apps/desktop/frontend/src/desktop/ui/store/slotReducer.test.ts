@@ -1,4 +1,5 @@
 import { applyEventToSlot } from "./slotReducer.ts";
+import { createEventBatcher } from "./eventBatcher.ts";
 import type { SessionStream } from "./useStore.ts";
 import type { EngineEvent, StreamingAssistantPart } from "../types.ts";
 
@@ -28,7 +29,6 @@ function makeSlot(over: Partial<SessionStream> = {}): SessionStream {
     activePlan: null,
     planComments: {},
     modelRetry: null,
-    contextCompacted: null,
     ...over,
   } as SessionStream;
 }
@@ -67,6 +67,45 @@ const toolCalls = (p: StreamingAssistantPart[]) => p.filter((x) => x.type === "t
   slot = applyEventToSlot(slot, ev({ type: "text_delta", text: "完整答案" }));
 
   check("单 turn retry 丢弃失败残片、不叠加", slot.streamingText, "完整答案");
+}
+
+// ── 高频 text_delta 必须被批处理成每帧一次 store 写入。否则 Desktop 端模型流式输出
+// 会按 token 触发 Zustand set + ChatView 重渲染，长回答时主线程明显卡顿。
+{
+  const handled: EngineEvent[] = [];
+  let scheduled = 0;
+  const batcher = createEventBatcher({
+    dispatch: (event) => handled.push(event),
+    schedule: (flush) => {
+      scheduled += 1;
+      return flush;
+    },
+  });
+
+  batcher.push(ev({ type: "text_delta", text: "你" }));
+  batcher.push(ev({ type: "text_delta", text: "好" }));
+
+  check("连续 text_delta 入队前不立刻 dispatch", handled.length, 0);
+  check("连续 text_delta 只调度一次 flush", scheduled, 1);
+  batcher.flushNow();
+  check("连续 text_delta 合并成一条", handled, [ev({ type: "text_delta", text: "你好" })]);
+}
+
+// ── 非文本事件是边界：先 flush 已累积文本，再按原顺序派发边界事件。
+{
+  const handled: EngineEvent[] = [];
+  const batcher = createEventBatcher({
+    dispatch: (event) => handled.push(event),
+    schedule: (flush) => flush,
+  });
+
+  batcher.push(ev({ type: "text_delta", text: "A" }));
+  batcher.push(ev({ type: "tool_start", id: "t1", index: 0, name: "Read", input: {} }));
+
+  check("边界事件前刷新文本", handled, [
+    ev({ type: "text_delta", text: "A" }),
+    ev({ type: "tool_start", id: "t1", index: 0, name: "Read", input: {} }),
+  ]);
 }
 
 console.log("ALL PASS");

@@ -158,7 +158,7 @@ impl Workspace {
     /// 路径是否在允许范围内：先 canonicalize 再做前缀匹配，防止 `..` 绕过。
     /// canonicalize 失败时退回到 `canonicalize_lossy`（处理"打算写入但还未创建"的场景）。
     pub fn allows(&self, path: &Path) -> bool {
-        if is_unrestricted_device(path) {
+        if is_unrestricted_device(path) || is_temporary_path(path) {
             return true;
         }
         let canon = canonicalize_lossy(path);
@@ -233,6 +233,11 @@ fn is_unrestricted_device(path: &Path) -> bool {
     false
 }
 
+fn is_temporary_path(path: &Path) -> bool {
+    let canon = canonicalize_lossy(path);
+    canon.starts_with(canonicalize_lossy(&std::env::temp_dir()))
+}
+
 fn canonicalize_lossy(path: &Path) -> PathBuf {
     if let Ok(p) = std::fs::canonicalize(path) {
         return p;
@@ -279,6 +284,15 @@ mod tests {
         let ws = Workspace::new(tmp.path(), Vec::new());
 
         assert!(!ws.allows(Path::new("/etc/passwd")));
+    }
+
+    #[test]
+    fn allows_paths_inside_system_temp_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(tmp.path(), Vec::new());
+        let target = std::env::temp_dir().join("hebbian-temp-approval-check/output.txt");
+
+        assert!(ws.allows(&target));
     }
 
     #[test]

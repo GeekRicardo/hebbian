@@ -762,14 +762,14 @@ function ToolIcon({ name }: { name?: string | null }) {
   if (name === "Read") return <ScrollText className={cls} />;
   if (name === "ReadMemory") return <BookOpen className={cls} />;
   if (name === "WriteMemory") return <NotebookPen className={cls} />;
-  if (name === "Write" || name === "Edit") return <Edit3 className={cls} />;
+  if (name === "Write" || name === "Edit") return <Pencil className={cls} />;
   if (name === "Grep" || name === "Glob") return <Search className={cls} />;
   if (name === "Skill") return <Sparkles className={cls} />;
   if (name === "Ask") return <MessageSquare className={cls} />;
   if (name === "WebSearch" || name === "Fetch") return <Globe2 className={cls} />;
   if (name === "image_generation") return <ImageIcon className={cls} />;
   if (isTaskListTool(name)) {
-    return <span className="h-3 w-3 rounded-[2px] border border-current" />;
+    return <span className="inline-block h-3 w-3 shrink-0 rounded-[2px] border border-current bg-transparent text-current shadow-none transform-none" />;
   }
   if (name === "ExitPlanMode") return <ClipboardCheck className={cls} />;
   return <Boxes className={cls} />;
@@ -1396,7 +1396,7 @@ function ToolCallDetail({
   // 前台 Bash 运行中时，轮询 listBackgroundTasks 按 command 匹配 task_id
   useEffect(() => {
     // 仅对运行中的前台 Bash 生效（真后台从 result 已能提取 task_id）
-    if (!sessionId || killedLocally || taskIdFromResult || name !== "Bash" || call.status === "done" || !cmd) {
+    if (!sessionId || killedLocally || taskIdFromResult || (name !== "Bash" && name !== "PowerShell") || call.status === "done" || !cmd) {
       return;
     }
 
@@ -1419,7 +1419,7 @@ function ToolCallDetail({
     };
 
     poll();
-    const interval = setInterval(poll, 2000);
+    const interval = setInterval(poll, 500);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -1521,7 +1521,7 @@ function ToolCallDetail({
         {canKill && (
           <button
             onClick={handleKill}
-            className="absolute top-2 right-2 flex items-center gap-1 rounded-md bg-red-500/10 px-2 py-1 text-xs text-red-500 hover:bg-red-500/20 transition-colors"
+            className="absolute top-2 right-10 flex items-center gap-1 rounded-md bg-red-500/10 px-2 py-1 text-xs text-red-500 hover:bg-red-500/20 transition-colors"
             title="终止任务"
           >
             <Square className="w-3 h-3 fill-current" />
@@ -1727,37 +1727,348 @@ function formatToolSummary(calls: ToolCallItem[], reasonings: ReasoningRenderPar
   return `${hasThinking ? "thinking、" : ""}${names.slice(0, 2).join("、")} 等 ${calls.length} 个工具`;
 }
 
+function toolPreviewArgs(call: ToolCallItem): Array<{ key: string; value: string }> {
+  const hidden = new Set(["description"]);
+  return buildArgsPreview(call.argumentsText)
+    .filter((arg) => arg.key && !hidden.has(arg.key))
+    .slice(0, 3);
+}
+
+function runningRailClass(
+  item: ToolActivityItem,
+  index: number,
+  total: number,
+  next?: ToolActivityItem,
+): string {
+  type RailTone = "done" | "running" | "reasoning";
+  const color = (entry?: ToolActivityItem): RailTone => {
+    if (!entry) return "reasoning";
+    if (entry.type === "reasoning") return "reasoning";
+    return entry.call.status === "done" ? "done" : "running";
+  };
+  const fromClass = (tone: RailTone) =>
+    tone === "done"
+      ? "from-emerald-400"
+      : tone === "running"
+        ? "from-blue-500"
+        : "from-violet-400";
+  const toClass = (tone: RailTone) =>
+    tone === "done"
+      ? "to-emerald-400"
+      : tone === "running"
+        ? "to-blue-500"
+        : "to-violet-400";
+
+  const current = color(item);
+  const following = color(next ?? item);
+  return cn(
+    "bg-gradient-to-b",
+    fromClass(current),
+    toClass(following),
+    index === 0 && "rounded-t-full",
+    index === total - 1 && "rounded-b-full"
+  );
+}
+
+function InlineReasoningDetail({
+  text,
+  streaming,
+  active,
+}: {
+  text: string;
+  streaming: boolean;
+  active: boolean;
+}) {
+  const [mounted, setMounted] = useState(active);
+  useEffect(() => {
+    if (active) {
+      setMounted(true);
+      return;
+    }
+    const t = window.setTimeout(() => setMounted(false), 350);
+    return () => window.clearTimeout(t);
+  }, [active]);
+
+  return (
+    <div
+      className={cn(
+        "grid transition-[grid-template-rows] duration-300 ease-out",
+        active ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+      )}
+      onTransitionEnd={() => {
+        if (!active) setMounted(false);
+      }}
+    >
+      <div className="overflow-hidden">
+        {mounted && (
+          <div className="mt-1 bg-transparent">
+            <ReasoningScrollArea text={text} streaming={streaming} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function InlineToolDetail({
+  call,
+  active,
+  appSettings,
+  sessionId,
+}: {
+  call: ToolCallItem;
+  active: boolean;
+  appSettings?: AppSettings;
+  sessionId?: string;
+}) {
+  const [mounted, setMounted] = useState(active);
+  useEffect(() => {
+    if (active) {
+      setMounted(true);
+      return;
+    }
+    const t = window.setTimeout(() => setMounted(false), 350);
+    return () => window.clearTimeout(t);
+  }, [active]);
+
+  return (
+    <div
+      className={cn(
+        "grid transition-[grid-template-rows] duration-300 ease-out",
+        active ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+      )}
+      onTransitionEnd={() => {
+        if (!active) setMounted(false);
+      }}
+    >
+      <div className="overflow-hidden">
+        {mounted && (
+          <div className="mt-1 overflow-hidden rounded-md bg-background">
+            <ToolCallDetail call={call} appSettings={appSettings} sessionId={sessionId} />
+            {call.name === "Task" && call.nestedParts && call.nestedParts.length > 0 && (
+              <div className="border-t border-border">
+                <NestedTaskContent
+                  nestedParts={call.nestedParts}
+                  appSettings={appSettings}
+                  sessionId={sessionId}
+                />
+              </div>
+            )}
+            {call.artifactPath && (
+              <div className="border-t border-border p-2">
+                <ArtifactBadge path={call.artifactPath} />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function RunningActivityBlock({
   items,
   expanded,
-  onToggle,
+  onGroupToggle,
+  expandedKeys,
+  onToolToggle,
+  appSettings,
+  sessionId,
 }: {
   items: ToolActivityItem[];
   expanded: boolean;
-  onToggle: () => void;
+  onGroupToggle: () => void;
+  expandedKeys?: Set<string>;
+  onToolToggle?: (key: string) => void;
+  appSettings?: AppSettings;
+  sessionId?: string;
 }) {
+  const canToggleItems = !!expandedKeys && !!onToolToggle;
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const setContainerRef = useCallback((node: HTMLDivElement | null) => {
+    containerRef.current = node;
+  }, []);
+
+  useEffect(() => {
+    if (expanded) return;
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [expanded, items]);
+
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className="mt-0.5 block max-h-[14lh] w-full overflow-y-auto rounded-md bg-muted/60 px-3 py-1.5 text-left text-[12px] leading-[1.25] text-muted-foreground hover:bg-muted/80"
-      title={expanded ? "收起运行详情" : "展开运行详情"}
-    >
-      <div className="space-y-0.5">
-        {items.map((item) => (
-          <div key={item.key} className="flex min-w-0 items-center gap-1.5">
-            {item.type === "reasoning" ? (
-              <Brain className="h-3 w-3 shrink-0" />
-            ) : (
-              <ToolIcon name={item.call.name} />
-            )}
-            <span className="min-w-0 truncate font-medium text-foreground/80">
-              {item.type === "reasoning" ? "thinking" : toolDisplayName(item.call)}
-            </span>
-          </div>
-        ))}
+    <div className="mt-0.5 text-[12px] leading-[1.35] text-left">
+      <div
+        ref={setContainerRef}
+        className={cn(
+          "w-full border-0 bg-transparent outline-0 shadow-none",
+          expanded ? "max-h-none overflow-visible" : "max-h-[13rem] overflow-y-auto overflow-x-visible",
+        )}
+      >
+        <div className="py-0.5 pr-2 border-0 bg-transparent outline-0 shadow-none">
+          {items.map((item, index) => {
+            const next = items[index + 1];
+            if (item.type === "reasoning") {
+              const active = !!expandedKeys?.has(item.key);
+              const text = item.text.trim().replace(/\s+/g, " ");
+              return (
+                <div key={item.key} className="grid min-h-6 grid-cols-[3px_minmax(0,1fr)] gap-1.5 pl-2 border-0 bg-transparent outline-0 shadow-none">
+                  <button
+                    type="button"
+                    onClick={onGroupToggle}
+                    className={cn("w-[3px] cursor-pointer appearance-none border-0 bg-transparent p-0", runningRailClass(item, index, items.length, next))}
+                    title={expanded ? "收起运行详情" : "展开运行详情"}
+                    aria-label={expanded ? "收起运行详情" : "展开运行详情"}
+                  />
+                  <div className="min-w-0 py-0.5">
+                    <button
+                      type="button"
+                      onClick={() => onToolToggle?.(item.key)}
+                      className={cn(
+                        "-mx-1 -my-0.5 flex min-w-0 cursor-pointer select-none items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-muted/30",
+                        active && "bg-muted/25",
+                      )}
+                      aria-expanded={active}
+                      aria-label={active ? "折叠思考过程" : "展开思考过程"}
+                    >
+                      <Brain className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <span className="font-medium text-foreground/85">thinking</span>
+                      <span className="shrink-0 text-muted-foreground">思考过程</span>
+                      {text && !active && (
+                        <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+                          {text}
+                        </span>
+                      )}
+                    </button>
+                    <InlineReasoningDetail
+                      text={item.text}
+                      streaming={item.streaming}
+                      active={canToggleItems && active}
+                    />
+                  </div>
+                </div>
+              );
+            }
+
+            const call = item.call;
+            const running = call.status !== "done";
+            const active = !!expandedKeys?.has(call.key);
+            const args = toolPreviewArgs(call);
+            const showDefaultDetail = running && (call.name === "Bash" || call.name === "PowerShell");
+            const detailActive = canToggleItems ? active || showDefaultDetail : showDefaultDetail;
+            const rowTitle = (
+              <div className="flex min-w-0 items-center gap-1.5 py-0.5">
+                <ToolIcon name={call.name} />
+                <span
+                  className={cn(
+                    "min-w-0 shrink-0 truncate font-semibold text-foreground/85",
+                    running && "text-shimmer"
+                  )}
+                >
+                  {toolDisplayName(call)}
+                </span>
+                <span className="shrink-0 text-muted-foreground">
+                  {callDescription(call)}
+                </span>
+                {args.length > 0 && (
+                  <code className="min-w-0 truncate font-mono text-[11px] text-foreground/75">
+                    {args.map((arg) => arg.value).join("  ")}
+                  </code>
+                )}
+              </div>
+            );
+            const rowDetail = (canToggleItems || showDefaultDetail) && (
+              <InlineToolDetail
+                call={call}
+                active={detailActive}
+                appSettings={appSettings}
+                sessionId={sessionId}
+              />
+            );
+
+            return (
+              <div
+                key={item.key}
+                data-tool-call-id={call.id}
+                className={cn(
+                  "grid min-h-7 grid-cols-[3px_minmax(0,1fr)] gap-1.5 pl-2 border-0 bg-transparent outline-0 shadow-none",
+                  canToggleItems && call.isJudging && "judge-breathe",
+                )}
+              >
+                <button
+                  type="button"
+                  onClick={onGroupToggle}
+                  className={cn("w-[3px] cursor-pointer appearance-none border-0 bg-transparent p-0", runningRailClass(item, index, items.length, next))}
+                  title={expanded ? "收起运行详情" : "展开运行详情"}
+                  aria-label={expanded ? "收起运行详情" : "展开运行详情"}
+                />
+                <div className="min-w-0 py-0.5">
+                  {canToggleItems ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => onToolToggle?.(call.key)}
+                        className={cn(
+                          "w-full min-w-0 rounded-[5px] text-left hover:bg-muted/30",
+                          active && "bg-muted/25",
+                        )}
+                        aria-expanded={active}
+                        aria-label={active ? "折叠工具调用" : "展开工具调用"}
+                      >
+                        {rowTitle}
+                      </button>
+                      {rowDetail}
+                    </>
+                  ) : (
+                    <>
+                      {rowTitle}
+                      {rowDetail}
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
-    </button>
+    </div>
+  );
+}
+
+function RunningReasoningRow({
+  part,
+  active,
+  onToggle,
+}: {
+  part: ReasoningRenderPart;
+  active: boolean;
+  onToggle: (key: string) => void;
+}) {
+  const shownDuration = part.durationMs ?? 0;
+  const text = part.text.trim().replace(/\s+/g, " ");
+  return (
+    <div className="grid min-h-5 w-full grid-cols-[16px_minmax(0,1fr)] items-start gap-1.5 px-1 py-0 text-left text-[12px] text-muted-foreground">
+      <span className="grid h-4 w-4 place-items-center text-muted-foreground">
+        <Brain className="h-3 w-3" />
+      </span>
+      <div className="min-w-0">
+        <button
+          type="button"
+          onClick={() => onToggle(part.key)}
+          className="-mx-1 -my-0.5 flex min-w-0 cursor-pointer select-none items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-muted/30 hover:text-foreground"
+          title={active ? "折叠思考过程" : "展开思考过程"}
+          aria-expanded={active}
+        >
+          <span className="shrink-0">思考过程 {formatCompactDuration(shownDuration)} &gt;</span>
+          {text && !active && (
+            <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+              {text}
+            </span>
+          )}
+        </button>
+        <InlineReasoningDetail text={part.text} streaming={part.streaming} active={active} />
+      </div>
+    </div>
   );
 }
 
@@ -1818,17 +2129,15 @@ function ToolCallTimeline({
     let toolIndex = 0;
     return (
       <div className="relative mt-px space-y-0 py-0 pl-6 pr-2">
-        {activityItems.map((item) => {
+        {activityItems.map((item, activityIndex) => {
           if (item.type === "reasoning") {
             return (
-              <div key={item.key} className="-ml-6 pl-0">
-                <ReasoningBlock
-                  text={item.text}
-                  streaming={item.streaming}
-                  durationMs={item.durationMs}
-                  compact
-                />
-              </div>
+              <RunningReasoningRow
+                key={item.key}
+                part={item}
+                active={expandedKeys.has(item.key)}
+                onToggle={onToggle}
+              />
             );
           }
           const call = item.call;
@@ -1837,6 +2146,8 @@ function ToolCallTimeline({
           const autoExpand = !READ_LIKE.has(call.name ?? "");
           const defaultExpanded = autoExpand && call.status !== "done";
           const active = expandedKeys.has(call.key) ? !defaultExpanded : defaultExpanded;
+          const nextActivity = activityItems[activityIndex + 1];
+          const connectsToNextTool = nextActivity?.type === "tool_call";
           return (
             <ToolCallRow
               key={call.key}
@@ -1844,7 +2155,7 @@ function ToolCallTimeline({
               index={index}
               total={calls.length}
               active={active}
-              showConnector={allDone || collapseAfterContent}
+              showConnector={(allDone || collapseAfterContent) && connectsToNextTool}
               onToggle={onToggle}
               workdir={workdir}
               allowedPaths={allowedPaths}
@@ -1859,33 +2170,23 @@ function ToolCallTimeline({
 
   if (showRunningMinimal) {
     return (
-      <div className="mt-0.5 pl-3">
-        {groupExpanded ? (
-          <>
-            <button
-              type="button"
-              onClick={() => onToggle(groupKey)}
-              className="mb-px inline-flex cursor-pointer items-center text-left text-[12px] leading-[1.25] text-muted-foreground hover:text-foreground"
-              title="收起运行详情"
-            >
-              已运行 {formatToolSummary(calls, reasonings)}
-            </button>
-            {detailList}
-          </>
-        ) : (
-          <RunningActivityBlock
-            items={activityItems}
-            expanded={groupExpanded}
-            onToggle={() => onToggle(groupKey)}
-          />
-        )}
+      <div className="mt-0.5">
+        <RunningActivityBlock
+          items={activityItems}
+          expanded={groupExpanded}
+          onGroupToggle={() => onToggle(groupKey)}
+          expandedKeys={expandedKeys}
+          onToolToggle={onToggle}
+          appSettings={appSettings}
+          sessionId={sessionId}
+        />
       </div>
     );
   }
 
   if (collapsibleSummary) {
     return (
-      <div className="mt-0.5 pl-3">
+      <div className="mt-0.5">
         <button
           type="button"
           onClick={() => onToggle(groupKey)}
@@ -1894,7 +2195,17 @@ function ToolCallTimeline({
         >
           已运行 {formatToolSummary(calls, reasonings)}
         </button>
-        {groupExpanded && detailList}
+        {groupExpanded && (
+          <RunningActivityBlock
+            items={activityItems}
+            expanded
+            onGroupToggle={() => onToggle(groupKey)}
+            expandedKeys={expandedKeys}
+            onToolToggle={onToggle}
+            appSettings={appSettings}
+            sessionId={sessionId}
+          />
+        )}
       </div>
     );
   }
@@ -2249,9 +2560,13 @@ function AssistantParts({
   return (
     <div className="space-y-1">
       {parts.map((part, index) => {
-        const hasContentAfter = parts.slice(index + 1).some(
-          (next) => next.type === "text" && stripToolXmlLeak(splitFailureMarker(next.text).body).trim().length > 0,
-        );
+        const hasCompletedContentAfter = parts.slice(index + 1).some((next, nextOffset) => {
+          if (next.type !== "text") return false;
+          const text = stripToolXmlLeak(splitFailureMarker(next.text).body).trim();
+          if (!text) return false;
+          const nextIndex = index + 1 + nextOffset;
+          return !streaming || nextIndex < parts.length - 1;
+        });
         if (part.type === "text") {
           // 先拆末尾错误 marker（它在所有内容之后），正文再去掉工具 XML 残骸。
           // marker 单独走纯文本折行块，杜绝 markdown <p> 里的逐字竖排；
@@ -2292,7 +2607,7 @@ function AssistantParts({
             reasonings={part.activityItems.filter((item): item is ReasoningRenderPart => item.type === "reasoning")}
             activityItems={part.activityItems}
             assistantStreaming={streaming}
-            collapseAfterContent={hasContentAfter}
+            collapseAfterContent={hasCompletedContentAfter}
             expandedKeys={expandedKeys}
             onToggle={onToggle}
             appSettings={appSettings}
