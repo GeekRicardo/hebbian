@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useRef, useState, type CSSProperties } from "react";
 import { usePerfRender } from "@/desktop/ui/store/perfMonitor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -1749,26 +1749,38 @@ function toolPreviewArgs(call: ToolCallItem): Array<{ key: string; value: string
     .slice(0, 3);
 }
 
-function runningRailClass(
-  item: ToolActivityItem,
-  index: number,
-  total: number,
-  _next?: ToolActivityItem,
-): string {
-  type RailTone = "done" | "running" | "reasoning";
-  const color = (entry: ToolActivityItem): RailTone => {
-    if (entry.type === "reasoning") return "reasoning";
-    return entry.call.status === "done" ? "done" : "running";
-  };
-  const toneClass = (tone: RailTone) => {
-    if (tone === "done") return "from-emerald-300 via-emerald-400 to-emerald-500";
-    if (tone === "running") return "from-sky-300 via-blue-500 to-indigo-500";
-    return "from-fuchsia-300 via-pink-500 to-rose-400";
-  };
+type RailTone = "done" | "running" | "reasoning";
 
+function runningRailTone(entry?: ToolActivityItem): RailTone | null {
+  if (!entry) return null;
+  if (entry.type === "reasoning") return "reasoning";
+  return entry.call.status === "done" ? "done" : "running";
+}
+
+function runningRailColor(tone: RailTone | "transition"): string {
+  if (tone === "done") return "#34d399";
+  if (tone === "running") return "#38bdf8";
+  if (tone === "reasoning") return "#ec4899";
+  return "#f59e0b";
+}
+
+function runningRailGradient(
+  item: ToolActivityItem,
+  next?: ToolActivityItem,
+  previous?: ToolActivityItem,
+): string {
+  const current = runningRailTone(item) ?? "reasoning";
+  const previousTone = runningRailTone(previous);
+  const nextTone = runningRailTone(next);
+  const currentColor = runningRailColor(current);
+  const top = previousTone && previousTone !== current ? runningRailColor("transition") : currentColor;
+  const bottom = nextTone && nextTone !== current ? runningRailColor("transition") : currentColor;
+  return `linear-gradient(to bottom, ${top} 0%, ${currentColor} 18%, ${currentColor} 82%, ${bottom} 100%)`;
+}
+
+function runningRailClass(index: number, total: number): string {
   return cn(
-    "bg-gradient-to-b",
-    toneClass(color(item)),
+    "bg-[var(--rail-gradient)]",
     index === 0 && "rounded-t-full",
     index === total - 1 && "rounded-b-full"
   );
@@ -1930,7 +1942,8 @@ function RunningActivityBlock({
                   <button
                     type="button"
                     onClick={onGroupToggle}
-                    className={cn("w-[3px] cursor-pointer appearance-none border-0 bg-transparent p-0", runningRailClass(item, index, items.length, next))}
+                    className={cn("w-[3px] cursor-pointer appearance-none border-0 bg-transparent p-0", runningRailClass(index, items.length))}
+                    style={{ "--rail-gradient": runningRailGradient(item, next, items[index - 1]) } as CSSProperties}
                     title={expanded ? "收起运行详情" : "展开运行详情"}
                     aria-label={expanded ? "收起运行详情" : "展开运行详情"}
                   />
@@ -2012,7 +2025,8 @@ function RunningActivityBlock({
                 <button
                   type="button"
                   onClick={onGroupToggle}
-                  className={cn("w-[3px] cursor-pointer appearance-none border-0 bg-transparent p-0", runningRailClass(item, index, items.length, next))}
+                  className={cn("w-[3px] cursor-pointer appearance-none border-0 bg-transparent p-0", runningRailClass(index, items.length))}
+                  style={{ "--rail-gradient": runningRailGradient(item, next, items[index - 1]) } as CSSProperties}
                   title={expanded ? "收起运行详情" : "展开运行详情"}
                   aria-label={expanded ? "收起运行详情" : "展开运行详情"}
                 />
