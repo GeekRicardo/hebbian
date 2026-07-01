@@ -10780,7 +10780,7 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css): 新增运行中 tool 名称的 Text Shimmer 动画。
   - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `RunningActivityBlock` 去掉外层 button / border / radius / 背景 / 裁剪卡片，只保留透明固定高度滚动区域；折叠态高度调到 15rem；默认贴底滚到最新输出，但用户手动上滚后不再强拉，回到底部后恢复贴底；删除底部“展开运行详情”按钮，改为点击每段左轨展开/收起整个 group；tool/thinking 行标题继续只控制自己的详情。
   - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): thinking 行在运行中左轨和完成态详情里都可展开 `ReasoningScrollArea`，折叠态同行显示摘要；Task/TodoWrite 小方块图标补齐 inline-block / shrink-0 / transparent / shadow-none 等显式样式。
-  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 完成态 `已运行 xxx` 摘要与 content 外框左边缘对齐；运行左轨 done 段渐变色从 emerald-500 调到 emerald-400；streaming 中最后一个正在增长的 text 不再触发前一个 tool group 折叠，等后续 content 稳定后再收成 `已运行 xxx`。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 完成态 `已运行 xxx` 摘要与 content 外框左边缘对齐；运行左轨 done 段渐变色从 emerald-500 调到 emerald-400；thinking 段改为 fuchsia/pink/rose 独立色系，避免与 running 蓝色、done 绿色在相邻渐变里混色；streaming 中最后一个正在增长的 text 不再触发前一个 tool group 折叠，等后续 content 稳定后再收成 `已运行 xxx`。
 - **影响范围**: Desktop/hebweb 前端聊天消息渲染层与 dev 预览入口；不改协议、core、持久化，不破坏兼容。
 - **留尾巴**: fixture 是一次性快照；需要换数据时重新从目标 session/run 生成。
 
@@ -10823,3 +10823,27 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
     - `handleKill` 加 `cancelStreaming()` 兜底分支：有 `effectiveTaskId` → `killBackgroundTask`，没有 → `useStore.getState().cancelStreaming()`
 - **影响范围**: 纯前端渲染层，不改协议/agent-core/数据格式。
 - **留尾巴**: `cancelStreaming` 取消整轮 run（非单工具级），如果同轮有并发工具会被一起中断——Bash 通常单独跑，实际影响很小。精确单工具 kill 需工具级 cancel flag（远期）。
+
+### 2026-07-01 — 统一自动/手动压缩的前端进行中状态
+
+- **Why**: 后端自动压缩调 LLM 时前端没有任何提示，用户会误以为卡住；用户主动点击压缩时也只禁用输入框，没有在输入框上方明确说明正在压缩。
+- **改动**:
+  - [crates/protocol/src/event.rs](../crates/protocol/src/event.rs) / [crates/protocol/src/wire.rs](../crates/protocol/src/wire.rs): 新增 additive 的 `ContextCompactionStarted` / `context_compaction_started` 事件，表示压缩 LLM 调用开始。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 自动 L2 压缩开始前 emit started 事件，成功后继续 emit `ContextCompacted`，失败沿用 `auto_compaction_failed` notice。
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs) / [apps/cli/src/render.rs](../apps/cli/src/render.rs): 把 started 事件纳入关键事件并在 CLI 输出「正在压缩」。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): started 事件按 session 设置 `compactingSessionId`；成功或自动压缩失败 notice 清理该状态；手动压缩入口也投递同一条前端事件，避免按钮 loading 与自动压缩走两套语义。
+  - [apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx](../apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx): 输入框上方展示「正在压缩上下文…」提示，并沿用既有按会话隔离的禁用逻辑。
+  - [docs/架构.md](架构.md): 同步 §3.1 / §4.7 的压缩事件流说明。
+- **影响范围**: protocol / agent-core / CLI / Desktop 与 hebweb 共享前端；WireEvent 仅新增事件 variant，旧事件和 session 文件格式保持兼容。
+- **留尾巴**: 未做真实模型压缩 A/B 复现；本次先用编译、类型检查和现有前端状态测试覆盖协议与 UI 状态链路。
+
+### 2026-07-01 — Bash kill 改为杀进程组，防止子命令变孤儿
+
+- **Why**: 用户发现点终止按钮后，`bash -lc` 的直接子进程（bash）被 kill 了，但 bash 内部跑的真正命令（find / / docker pull / ...）变成 PPID=1 的孤儿进程继续执行。根因是 `child.start_kill()` 只向直接子进程 PID 发 SIGKILL，不管进程组。
+- **方案**: ① `bash -lc` 子进程创建时设 `process_group(0)` 成为独立进程组 leader；② kill 时发 `kill(-pid, SIGKILL)` 杀整组而非仅 leader。PTY 路径同理（`forkpty` 已创独立 session，用 `libc::kill(-pid, SIGKILL)` 替代 `child.kill()`）。
+- **改动**:
+  - [crates/agent-core/Cargo.toml](../crates/agent-core/Cargo.toml): 新增 `libc = "0.2"`（process group kill）
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs): pipe 路径加 `cmd.process_group(0)`（仅 unix）；PTY 路径 `child.kill()` → `pty_kill_process_group(&mut child)`（新 helper：unix 走 libc kill process group，非 unix 回落 child.kill()）
+  - [crates/agent-core/src/tools/background.rs](../crates/agent-core/src/tools/background.rs): `spawn_waiter` 的 kill 分支从 `child.start_kill()` 改为 `libc::kill(-pid, SIGKILL)` 杀进程组
+- **影响范围**: agent-core（bash / background）。Unix-only（Windows/macOS 均走 unix 分支）。63/64 Bash 测试通过（1 个已有 flaky 测试 `run_in_background_returns_immediately` 偶发超时，与本次无关）。
+- **留尾巴**: 无。

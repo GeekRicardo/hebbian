@@ -1753,33 +1753,22 @@ function runningRailClass(
   item: ToolActivityItem,
   index: number,
   total: number,
-  next?: ToolActivityItem,
+  _next?: ToolActivityItem,
 ): string {
   type RailTone = "done" | "running" | "reasoning";
-  const color = (entry?: ToolActivityItem): RailTone => {
-    if (!entry) return "reasoning";
+  const color = (entry: ToolActivityItem): RailTone => {
     if (entry.type === "reasoning") return "reasoning";
     return entry.call.status === "done" ? "done" : "running";
   };
-  const fromClass = (tone: RailTone) =>
-    tone === "done"
-      ? "from-emerald-400"
-      : tone === "running"
-        ? "from-blue-500"
-        : "from-violet-400";
-  const toClass = (tone: RailTone) =>
-    tone === "done"
-      ? "to-emerald-400"
-      : tone === "running"
-        ? "to-blue-500"
-        : "to-violet-400";
+  const toneClass = (tone: RailTone) => {
+    if (tone === "done") return "from-emerald-300 via-emerald-400 to-emerald-500";
+    if (tone === "running") return "from-sky-300 via-blue-500 to-indigo-500";
+    return "from-fuchsia-300 via-pink-500 to-rose-400";
+  };
 
-  const current = color(item);
-  const following = color(next ?? item);
   return cn(
     "bg-gradient-to-b",
-    fromClass(current),
-    toClass(following),
+    toneClass(color(item)),
     index === 0 && "rounded-t-full",
     index === total - 1 && "rounded-b-full"
   );
