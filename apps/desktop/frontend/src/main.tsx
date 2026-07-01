@@ -5,6 +5,7 @@ import App from "./App";
 import LogViewerApp from "./desktop/ui/components/LogViewerApp";
 import { TerminalSurface } from "./desktop/ui/components/TerminalSurface";
 import { ErrorBoundary } from "./desktop/ui/components/ErrorBoundary";
+import { ToolRenderPreviewApp } from "./desktop/ui/components/ToolRenderPreviewApp";
 import "@vscode/codicons/dist/codicon.css";
 import "./index.css";
 
@@ -26,6 +27,15 @@ if (params.has("log-viewer")) {
           <TerminalSurface variant="popout" />
         </div>
       </ErrorBoundary>
+    </React.StrictMode>
+  );
+} else if (params.has("tool-preview")) {
+  ReactDOM.createRoot(document.getElementById("root")!).render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <ToolRenderPreviewApp />
+      </ErrorBoundary>
+      <Toaster position="top-center" richColors closeButton toastOptions={{ className: "text-sm" }} />
     </React.StrictMode>
   );
 } else {

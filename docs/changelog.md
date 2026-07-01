@@ -10778,7 +10778,7 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [apps/desktop/frontend/src/desktop/ui/components/ToolRenderPreviewApp.tsx](../apps/desktop/frontend/src/desktop/ui/components/ToolRenderPreviewApp.tsx): 新增调试页面，直接渲染生产 `MessageBubble`，支持运行态/完成态切换、自动播放/暂停/继续、part 截止滑块，并把当前最后一个 tool mock 成 running。
   - [apps/desktop/frontend/src/desktop/ui/fixtures/toolPreviewLatestRun.json](../apps/desktop/frontend/src/desktop/ui/fixtures/toolPreviewLatestRun.json): 内嵌最新 session `202606300935-e71321b3` 的最新 assistant run `202607010647-edcb4e99` mock 数据。
   - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css): 新增运行中 tool 名称的 Text Shimmer 动画。
-  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `RunningActivityBlock` 去掉外层 button / border / radius / 背景 / 裁剪卡片，只保留透明固定高度滚动区域；折叠态高度调到 13rem；删除底部“展开运行详情”按钮，改为点击每段左轨展开/收起整个 group；tool/thinking 行标题继续只控制自己的详情。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `RunningActivityBlock` 去掉外层 button / border / radius / 背景 / 裁剪卡片，只保留透明固定高度滚动区域；折叠态高度调到 15rem；默认贴底滚到最新输出，但用户手动上滚后不再强拉，回到底部后恢复贴底；删除底部“展开运行详情”按钮，改为点击每段左轨展开/收起整个 group；tool/thinking 行标题继续只控制自己的详情。
   - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): thinking 行在运行中左轨和完成态详情里都可展开 `ReasoningScrollArea`，折叠态同行显示摘要；Task/TodoWrite 小方块图标补齐 inline-block / shrink-0 / transparent / shadow-none 等显式样式。
   - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 完成态 `已运行 xxx` 摘要与 content 外框左边缘对齐；运行左轨 done 段渐变色从 emerald-500 调到 emerald-400；streaming 中最后一个正在增长的 text 不再触发前一个 tool group 折叠，等后续 content 稳定后再收成 `已运行 xxx`。
 - **影响范围**: Desktop/hebweb 前端聊天消息渲染层与 dev 预览入口；不改协议、core、持久化，不破坏兼容。
@@ -10797,3 +10797,29 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
     - 终止按钮从 `right-2` 改为 `right-10`，与放大按钮（`right-2`）不再重叠
 - **影响范围**: 纯前端渲染层（Desktop + hebweb 共享）；不改协议、agent-core、数据格式。`killBackgroundTask` 后端本就支持杀任意注册表中的 shell（包括前台 is_background=false 的命令），无需改动。
 - **留尾巴**: 无。
+
+### 2026-07-01 — Bash 工具新增 PTY（伪终端）执行模式
+
+- **Why**: `bash -lc` 以管道（`Stdio::piped()`）连接子进程 stdout/stderr，导致 `docker pull` / `npm install` / `apt` 等程序检测到 `isatty() == false` 后禁用实时进度条、切换为块缓冲输出。用户要能看实时进度。
+- **方案**: 引入 `portable-pty` 0.9，在 `BashTool` 新增 `pty: true` 参数——启用后走 PTY spawn 子进程，进程以为自己连的是真实终端，正常输出 ANSI 进度条（前端已有的 `ansiToHtml` 直接渲染）。
+- **改动**:
+  - [crates/agent-core/Cargo.toml](../crates/agent-core/Cargo.toml): 新增 `portable-pty = "0.9"` 依赖
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs):
+    - `parameters_schema` 加 `pty: boolean` 参数（默认 false，保持向后兼容）
+    - `run` 方法开头检查 `pty=true && !run_in_background` → 调 `run_pty`
+    - 新增 `run_pty` 方法：自包含的 PTY 执行路径——openpty → spawn → spawn_blocking 读 master → mpsc 回传异步上下文 → 读到的 chunk 通过 `ctx.emit_chunk` 推到 surface 端实时渲染。不支持转后台（超时直接 kill 返回已产出内容）
+    - 新增 3 条单测：`pty_echo_basic` / `pty_multiline_output` / `pty_exit_code_nonzero`
+- **架构边界**: PTY 路径与原有 `BackgroundShell` / `BgTaskRegistry` 完全解耦——不注册、不写 log、不转后台。`run_pty` 函数自管理子进程生命周期，与 `run` 共享 `MAX_OUTPUT_BYTES` 截断、`wait_for_cancel` 取消信号、`emit_chunk` 流式推送。
+- **影响范围**: agent-core（Bash 工具 + 新依赖）。**不破坏向后兼容**——默认 `pty: false` 走原管道路径。不改协议、不改前端（ANSI 转义码 `ansiToHtml` 已支持）、不改其他工具。
+- **留尾巴**: ① PTY 模式下 `docker pull` 等长命令若超时，已产出内容直接返回（不像管道模式转后台）——未来可考虑给 PTY 也加转后台支持，但需先解 `portable_pty::Child` 与 `tokio::process::Child` 类型不兼容问题；② 当前 PTY 不支持 stdin 交互（前端无输入通道），限纯输出场景。
+
+### 2026-07-01 — 前台 Bash/PowerShell 终止按钮即时显示 + 无 task_id 时走 interrupt 兜底
+
+- **Why**: 上一条加的前台终止按钮依赖轮询获取 task_id（~500ms），并且只对 matchedTaskId 非空时显示——用户反馈「看不到按钮」。根因是 `canKill` 条件绑死了 `effectiveTaskId`：前台命令轮询找到 task_id 之前按钮不出现，短命令甚至永远不出现。
+- **方案**: 所有 running 态 Bash/PowerShell 一视同仁，立即显示终止按钮。有 `task_id` 时走精确 `killBackgroundTask`（后台任务/已匹配到 task_id 的前台），没有时走 `cancelStreaming` 取消整轮 run——`BashTool::run` 和 `run_pty` 本就已经监听 cancel flag 并 kill 子进程。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx):
+    - `canKill` 条件改为 `sessionId && !killedLocally && (isRunning || isBgTaskRunning) && (name === "Bash" || name === "PowerShell")`——去掉了对 `effectiveTaskId` 和 `!call.result` 的依赖
+    - `handleKill` 加 `cancelStreaming()` 兜底分支：有 `effectiveTaskId` → `killBackgroundTask`，没有 → `useStore.getState().cancelStreaming()`
+- **影响范围**: 纯前端渲染层，不改协议/agent-core/数据格式。
+- **留尾巴**: `cancelStreaming` 取消整轮 run（非单工具级），如果同轮有并发工具会被一起中断——Bash 通常单独跑，实际影响很小。精确单工具 kill 需工具级 cancel flag（远期）。

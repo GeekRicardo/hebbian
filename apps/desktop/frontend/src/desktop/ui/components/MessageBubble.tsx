@@ -1,4 +1,5 @@
 import { createContext, memo, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { usePerfRender } from "@/desktop/ui/store/perfMonitor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -1463,22 +1464,36 @@ function ToolCallDetail({
   // 最终用于 kill 的 task_id
   const effectiveTaskId = taskIdFromResult || matchedTaskId;
 
-  // Kill 处理函数
+  // Kill 处理函数：有 task_id 精确杀，没有走 interrupt 取消整轮 run
   const handleKill = async () => {
-    if (!effectiveTaskId || !sessionId) return;
-    try {
-      await api.killBackgroundTask(sessionId, effectiveTaskId);
-      setKilledLocally(true);
-      setBgTaskState("killed");
-      toast.success(`已终止任务 ${effectiveTaskId}`);
-    } catch (err) {
-      toast.error(`终止失败: ${err instanceof Error ? err.message : String(err)}`);
+    if (!sessionId) return;
+    if (effectiveTaskId) {
+      // 精确 kill（后台任务 / 已匹配到 task_id 的前台）
+      try {
+        await api.killBackgroundTask(sessionId, effectiveTaskId);
+        setKilledLocally(true);
+        setBgTaskState("killed");
+        toast.success(`已终止任务 ${effectiveTaskId}`);
+      } catch (err) {
+        toast.error(`终止失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else {
+      // 前台命令，还没有 task_id → 取消整轮 run
+      try {
+        useStore.getState().cancelStreaming();
+        setKilledLocally(true);
+        toast.success("已终止当前命令");
+      } catch (err) {
+        toast.error(`终止失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   };
 
   const isBgTaskRunning = bgTaskState === "running";
   const isRunning = call.status === "running";
-  const canKill = effectiveTaskId && sessionId && !killedLocally && (isBgTaskRunning || (isRunning && !call.result));
+  // 所有 running 的 Bash/PowerShell 都显示按钮。
+  // 有 task_id 时精确 kill，没有时走 interrupt 取消整轮 run。
+  const canKill = sessionId && !killedLocally && (isRunning || isBgTaskRunning) && (name === "Bash" || name === "PowerShell");
 
   if (
     name === "Bash" ||
@@ -1885,24 +1900,34 @@ function RunningActivityBlock({
 }) {
   const canToggleItems = !!expandedKeys && !!onToolToggle;
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const stickRef = useRef(true);
   const setContainerRef = useCallback((node: HTMLDivElement | null) => {
     containerRef.current = node;
   }, []);
 
   useEffect(() => {
     if (expanded) return;
+    if (!stickRef.current) return;
     const el = containerRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [expanded, items]);
 
+  const handleScroll = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickRef.current = distFromBottom < 30;
+  }, []);
+
   return (
     <div className="mt-0.5 text-[12px] leading-[1.35] text-left">
       <div
         ref={setContainerRef}
+        onScroll={handleScroll}
         className={cn(
           "w-full border-0 bg-transparent outline-0 shadow-none",
-          expanded ? "max-h-none overflow-visible" : "max-h-[13rem] overflow-y-auto overflow-x-visible",
+          expanded ? "max-h-none overflow-visible" : "max-h-[15rem] overflow-y-auto overflow-x-visible",
         )}
       >
         <div className="py-0.5 pr-2 border-0 bg-transparent outline-0 shadow-none">
@@ -2645,6 +2670,7 @@ export const MessageBubble = memo(function MessageBubble({
   hookOutcomes,
   goalOutcomes,
 }: Props) {
+  usePerfRender("MessageBubble");
   const [copied, setCopied] = useState(false);
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(
     () => new Set()
