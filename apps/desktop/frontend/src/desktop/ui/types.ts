@@ -786,6 +786,11 @@ export type EngineEvent =
       reason: string;
     }
   | {
+      // 自动/手动压缩开始。前端用它显示输入框上方的压缩中状态。
+      type: "context_compaction_started";
+      before_tokens: number;
+    }
+  | {
       // 自动压缩完成。后端已在 session 消息流里落 compact_boundary marker；前端收到后刷新消息流。
       type: "context_compacted";
       before_tokens: number;

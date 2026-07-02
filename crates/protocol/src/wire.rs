@@ -135,6 +135,9 @@ pub enum WireEvent {
         from: String,
         to: String,
     },
+    ContextCompactionStarted {
+        before_tokens: usize,
+    },
     ContextCompacted {
         before_tokens: usize,
         after_tokens: usize,
@@ -443,6 +446,11 @@ pub fn to_wire(event: &Event) -> Option<WireEvent> {
             from: from.clone(),
             to: to.clone(),
         },
+        EventPayload::ContextCompactionStarted { before_tokens } => {
+            WireEvent::ContextCompactionStarted {
+                before_tokens: *before_tokens,
+            }
+        }
         EventPayload::ContextCompacted {
             before_tokens,
             after_tokens,

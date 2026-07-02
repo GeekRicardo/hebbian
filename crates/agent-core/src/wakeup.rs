@@ -9,15 +9,16 @@
 //!
 //! 独立 runtime 让调度器既不依赖 surface 的 runtime 上下文（避免 Tauri 同步 setup
 //! 阶段调 `global()` 时 `tokio::spawn` 因无 reactor 而 panic），也不会随某个 surface
-//! runtime 一起死。进程退出 = 整个 scheduler 一起死（§13 决策：不自动 resume 跨进程
-//! 的 checkpoint）。
+//! runtime 一起死。进程退出后重启时，`recover_pending_crons` 从
+//! `run_checkpoint.json` 恢复未过期的 cron（bg task 不恢复，被杀的子进程已不存在）。
 
+use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::Utc;
 use tokio::sync::mpsc;
 
-use crate::storage::run_checkpoint::RunPhase;
+use crate::storage::run_checkpoint::{self as run_checkpoint, RunPhase};
 use crate::tools::background::BgTaskRegistry;
 
 /// PhaseChannel：dispatcher 与 agent_loop 之间共享的"当前 ToolStep 跑完后要不要挂起"
@@ -444,6 +445,73 @@ impl WakeupScheduler {
         inner
             .bg_watches
             .retain(|w| !(w.session_id == session_id && w.run_id == run_id));
+    }
+
+    /// 进程重启后扫描所有 session 的 `run_checkpoint.json`，把未过期的
+    /// `AwaitingCron` 重新登记到进程内调度器。**必须在 `set_resume_handler` 之后调用**
+    /// ——否则到点时 handler 未注册，事件被丢弃。
+    ///
+    /// 同一 (session_id, run_id) 已存在则不重复 arm（防止多次 startup 堆积）。
+    pub fn recover_pending_crons(&self, data_dir: &Path) {
+        let sessions_dir = match std::fs::read_dir(data_dir.join("sessions")) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::debug!(error = %e, "recover_pending_crons: 无法列出 sessions 目录");
+                return;
+            }
+        };
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut armed = 0usize;
+        for entry in sessions_dir.flatten() {
+            let cp_path = entry.path().join("run_checkpoint.json");
+            if !cp_path.exists() {
+                continue;
+            }
+            let ckpt = match run_checkpoint::load(data_dir, &entry.file_name().to_string_lossy()) {
+                Ok(Some(ck)) => ck,
+                _ => continue,
+            };
+            let (fire_at_ms, reason) = match &ckpt.phase {
+                RunPhase::AwaitingCron {
+                    fire_at_ms, reason, ..
+                } => (*fire_at_ms, reason.clone()),
+                _ => continue,
+            };
+            if fire_at_ms <= now {
+                tracing::debug!(
+                    session = %ckpt.session_id,
+                    fire_at_ms,
+                    "recover_pending_crons: 已过期，跳过"
+                );
+                continue;
+            }
+            // 去重：同 session+run 已在 cron 表里不重复 arm。
+            {
+                let inner = self.inner.lock().unwrap();
+                let already = inner
+                    .crons
+                    .iter()
+                    .any(|c| c.session_id == ckpt.session_id && c.run_id == ckpt.run_id);
+                if already {
+                    tracing::debug!(
+                        session = %ckpt.session_id,
+                        run = %ckpt.run_id,
+                        "recover_pending_crons: 已登记，跳过"
+                    );
+                    continue;
+                }
+            }
+            self.arm_cron(
+                ckpt.session_id.clone(),
+                ckpt.run_id.clone(),
+                fire_at_ms,
+                reason,
+            );
+            armed += 1;
+        }
+        if armed > 0 {
+            tracing::info!(armed, "recover_pending_crons: 恢复挂起的 cron");
+        }
     }
 
     /// 列出指定 session 当前还在等的 cron（distant：fire_at_ms - now）。

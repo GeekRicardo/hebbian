@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::collections::BTreeMap;
 
 use serde_json::Value;
+use tracing::{info, warn};
 
 use crate::config::{AuthMode, Provider};
 use crate::{
@@ -137,6 +138,10 @@ impl ModelClient for OpenAiClient {
         let mut full = String::new();
         let mut full_reasoning = String::new();
         let mut tool_call_parts = Vec::new();
+        let mut tool_delta_frames = 0usize;
+        let mut tool_delta_with_id = 0usize;
+        let mut tool_delta_with_name = 0usize;
+        let mut tool_delta_argument_bytes = 0usize;
         // OpenAI Chat Completions：开了 stream_options.include_usage 后，最后一帧
         // `choices` 为空、只带 `usage`。多次出现以最新一次为准。
         let mut usage = Usage::default();
@@ -181,6 +186,16 @@ impl ModelClient for OpenAiClient {
                                 full.push_str(&delta);
                             }
                             for delta in parsed.tool_calls {
+                                tool_delta_frames += 1;
+                                if clean_optional(delta.id.as_deref()).is_some() {
+                                    tool_delta_with_id += 1;
+                                }
+                                if clean_optional(delta.name.as_deref()).is_some() {
+                                    tool_delta_with_name += 1;
+                                }
+                                if let Some(arguments) = nonempty_optional(delta.arguments.as_deref()) {
+                                    tool_delta_argument_bytes += arguments.len();
+                                }
                                 emit_tool_call_delta(
                                     on_event,
                                     delta.index,
@@ -202,8 +217,35 @@ impl ModelClient for OpenAiClient {
             }
         }
 
+        let tool_part_slots = tool_call_parts.len();
         let calls = finish_tool_calls(tool_call_parts);
+        let dropped_tool_part_slots = tool_part_slots.saturating_sub(calls.len());
         if calls.is_empty() {
+            if tool_delta_frames > 0 {
+                warn!(
+                    provider_id = %self.provider.id,
+                    model = %req.model,
+                    finish_reason = finish_reason.as_deref().unwrap_or(""),
+                    tool_delta_frames,
+                    tool_delta_with_id,
+                    tool_delta_with_name,
+                    tool_delta_argument_bytes,
+                    tool_part_slots,
+                    dropped_tool_part_slots,
+                    text_len = full.len(),
+                    reasoning_len = full_reasoning.len(),
+                    "openai chat stream produced tool deltas but no executable tool calls"
+                );
+            } else {
+                info!(
+                    provider_id = %self.provider.id,
+                    model = %req.model,
+                    finish_reason = finish_reason.as_deref().unwrap_or(""),
+                    text_len = full.len(),
+                    reasoning_len = full_reasoning.len(),
+                    "openai chat stream done"
+                );
+            }
             Ok(ModelResponse::Done {
                 finish: proto::map_openai_finish(finish_reason.as_deref().unwrap_or("")),
                 text: full,
@@ -213,6 +255,37 @@ impl ModelClient for OpenAiClient {
                 usage,
             })
         } else {
+            if dropped_tool_part_slots > 0 {
+                warn!(
+                    provider_id = %self.provider.id,
+                    model = %req.model,
+                    finish_reason = finish_reason.as_deref().unwrap_or(""),
+                    tool_delta_frames,
+                    tool_delta_with_id,
+                    tool_delta_with_name,
+                    tool_delta_argument_bytes,
+                    tool_part_slots,
+                    calls_count = calls.len(),
+                    dropped_tool_part_slots,
+                    text_len = full.len(),
+                    reasoning_len = full_reasoning.len(),
+                    "openai chat stream dropped incomplete tool call slots"
+                );
+            } else {
+                info!(
+                    provider_id = %self.provider.id,
+                    model = %req.model,
+                    finish_reason = finish_reason.as_deref().unwrap_or(""),
+                    tool_delta_frames,
+                    tool_delta_with_id,
+                    tool_delta_with_name,
+                    tool_delta_argument_bytes,
+                    calls_count = calls.len(),
+                    text_len = full.len(),
+                    reasoning_len = full_reasoning.len(),
+                    "openai chat stream tool calls"
+                );
+            }
             Ok(ModelResponse::ToolCalls {
                 text: full,
                 reasoning: full_reasoning,

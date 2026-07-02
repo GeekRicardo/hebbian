@@ -17,6 +17,8 @@ pub use error::{AppError, AppResult};
 pub use force_automode::ForceAutomodeState;
 pub use hitl::HitlState;
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use agent_core::core_client::{CoreClient, LocalCoreClient};
@@ -1133,25 +1135,64 @@ async fn send_message(
     Ok(empty_assistant_message())
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct SessionSubscriptionResyncedPayload {
+    session_id: String,
+}
+
+	/// 各 session 当前活跃的前端事件订阅 cancel token。
+/// 新订阅到来时 cancel 旧 token，避免热重载后旧 `spawn_blocking` 继续往已销毁的 Channel 发事件。
+#[derive(Default)]
+struct SessionSubscriptions(std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>);
+
 #[tauri::command]
 async fn subscribe_session_events(
     app: AppHandle,
     hitl: State<'_, Arc<HitlState>>,
+    subs: State<'_, SessionSubscriptions>,
     session_id: String,
     on_event: Channel<protocol::WireEvent>,
 ) -> AppResult<()> {
-    let dd = chat::data_dir(&app)?;
-    let sink = DesktopHebcoreSink {
-        app: app.clone(),
-        session_id: session_id.clone(),
-        on_event,
-        hitl: hitl.inner().clone(),
-    };
-    tokio::task::spawn_blocking(move || {
-        if let Err(e) = hebcore_client::subscribe_session(&app, &dd, &session_id, &sink) {
-            tracing::warn!(session_id = %session_id, error = %e, "desktop session 事件订阅结束");
+    // 取消该 session 的上一次订阅（热重载 / 重复订阅场景），等它退出后再起新的。
+    {
+        let mut map = subs.0.lock().unwrap();
+        if let Some(old) = map.remove(&session_id) {
+            old.store(true, Ordering::Relaxed);
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        map.insert(session_id.clone(), cancel.clone());
+        drop(map);
+
+        let dd = chat::data_dir(&app)?;
+        let sink = DesktopHebcoreSink {
+            app: app.clone(),
+            session_id: session_id.clone(),
+            on_event,
+            hitl: hitl.inner().clone(),
+            cancel,
+        };
+        let sid = session_id.clone();
+        tokio::task::spawn_blocking(move || {
+            let emit_app = sink.app.clone();
+            let emit_session_id = sid.clone();
+            if let Err(e) = hebcore_client::subscribe_session_reconnecting(
+                &sink.app,
+                &dd,
+                &sid,
+                &sink,
+                move || {
+                    let _ = emit_app.emit(
+                        "session-subscription-resynced",
+                        SessionSubscriptionResyncedPayload {
+                            session_id: emit_session_id.clone(),
+                        },
+                    );
+            },
+        ) {
+            tracing::warn!(session_id = %sid, error = %e, "desktop session 事件订阅结束");
         }
     });
+    }
     Ok(())
 }
 
@@ -1161,10 +1202,16 @@ struct DesktopHebcoreSink {
     session_id: String,
     on_event: Channel<protocol::WireEvent>,
     hitl: Arc<HitlState>,
+    /// 新订阅到来时设为 true，旧任务检查到此标记后立即停止往已销毁 Channel 发事件。
+    cancel: Arc<AtomicBool>,
 }
 
 impl hebcore_client::RunEventSink for DesktopHebcoreSink {
     fn on_event(&self, event: protocol::WireEvent) -> bool {
+        // 热重载后旧订阅被新订阅 cancel——直接告诉调用方 Channel 已关闭，退出读循环。
+        if self.cancel.load(Ordering::Relaxed) {
+            return false;
+        }
         // HITL pending 登记：审批 / 提问到达时记下 request_id → session，让 approve_permission /
         // answer_question 命令能按 request_id 经 hebcore 代理回结算（§7.8.6 控制 Op）。
         match &event {
@@ -2893,6 +2940,7 @@ pub fn run() {
         .manage(Arc::new(channel_forward::ChannelForwardState::default()))
         .manage(permission_store)
         .manage(core_client)
+        .manage(SessionSubscriptions::default())
         .setup(|app| {
             // 架构 §7.8.1：任何 surface 启动时确保常驻 hebcore 在跑（谁先启动谁拉 core）。
             // 后台线程拉起避免阻塞 UI——hebcore 二进制冷启动需若干百 ms，setup 不能等。
@@ -2962,6 +3010,9 @@ pub fn run() {
                     }
                 },
             ));
+            // 进程重启后恢复挂起的 cron（必须在 set_resume_handler 之后，否则到点无 handler）
+            agent_core::wakeup::WakeupScheduler::global()
+                .recover_pending_crons(&agent_core::storage::default_data_dir());
 
             Ok(())
         })

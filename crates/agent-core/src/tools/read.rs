@@ -28,6 +28,19 @@ const MAX_LINE_LENGTH: usize = 2_000;
 const MAX_OUTPUT_BYTES: usize = 100_000;
 const MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
 
+/// 找到 `<= idx` 的最近 UTF-8 字符边界。等价 nightly `str::floor_char_boundary`，
+/// 用于把按字节算出的切点回退到合法边界，避免切在多字节字符中间导致切片 panic。
+fn floor_char_boundary(s: &str, idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    let mut end = idx;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
 pub struct ReadTool {
     data_dir: Option<PathBuf>,
     session_id: Option<String>,
@@ -227,8 +240,11 @@ impl ReadTool {
             }
 
             let formatted = if line.len() > MAX_LINE_LENGTH {
-                let visible = &line[..MAX_LINE_LENGTH];
-                let remainder = &line[MAX_LINE_LENGTH..];
+                // 按字节判长，切点须落在 UTF-8 字符边界——否则 `&line[..n]` 会 panic
+                // 把整个工具执行 future 打挂（中文/emoji 行极易触发，第 n 字节常在字符中间）。
+                let split = floor_char_boundary(line, MAX_LINE_LENGTH);
+                let visible = &line[..split];
+                let remainder = &line[split..];
                 let remainder_len = remainder.len();
                 match self.save_line_remainder(file_path_str, total_lines, remainder) {
                     Some(saved_path) => format!(
@@ -347,6 +363,31 @@ mod tests {
         assert_eq!(saved.len(), 1);
         let saved_content = std::fs::read_to_string(saved[0].path()).unwrap();
         assert_eq!(saved_content, format!("{}\n", "a".repeat(1_000)));
+    }
+
+    #[tokio::test]
+    async fn long_line_with_multibyte_char_does_not_panic() {
+        // 回归：超长行的字节切点落在多字节 UTF-8 字符中间时，旧实现
+        // `&line[..MAX_LINE_LENGTH]` 会 panic 把整个工具执行 future 打挂。
+        // 构造一行全中文（每字 3 字节），使第 2000 字节必落在某个字符内部。
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("hebbian");
+        let sid = "test-session";
+        let file = tmp.path().join("cjk.txt");
+        let long = "中".repeat(1_000); // 3000 字节，2000 不是字符边界（2000 % 3 != 0）
+        assert!(!long.is_char_boundary(MAX_LINE_LENGTH));
+        std::fs::write(&file, format!("{long}\n")).unwrap();
+
+        let tool = ReadTool::new(Some(data_dir.clone()), Some(sid.into()), None);
+        let out = tool
+            .execute(json!({"file_path": file.to_string_lossy()}))
+            .await
+            .unwrap();
+
+        // 没 panic 且正常截断落盘
+        assert!(out.contains("…[截断，剩余"));
+        let trunc_dir = data_dir.join("sessions").join(sid).join("line_trunc");
+        assert!(std::fs::read_dir(&trunc_dir).unwrap().next().is_some());
     }
 
     #[tokio::test]

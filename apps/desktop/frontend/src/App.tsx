@@ -19,6 +19,10 @@ interface WakeupFiredPayload {
   meta: import("@/desktop/ui/types").MessageMeta;
 }
 
+interface SessionSubscriptionResyncedPayload {
+  session_id: string;
+}
+
 interface EditRevertedPayload {
   session_id: string;
   run_id: string;
@@ -101,6 +105,25 @@ export default function App() {
       unlisten?.();
     };
   }, []);
+  // Desktop session 级订阅会在 hebcore 断连后自动重连；每次重连成功后补读一次
+  // session.jsonl，填平断线窗口里已经落盘但没实时推到前端的消息。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    listen<SessionSubscriptionResyncedPayload>("session-subscription-resynced", (e) => {
+      useStore.getState().handleSessionSubscriptionResynced(e.payload.session_id);
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => console.warn("session-subscription-resynced listener failed:", err));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // 的注释卡片提交 → 主进程 emit browser://annotation → 这里组装成 user message 发进
   // 当前对话。放 App 级（常驻）而非 BrowserPanel——popout 注释时浏览器 tab 可能没在前台。
   useEffect(() => {

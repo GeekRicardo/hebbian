@@ -21,6 +21,7 @@ use std::time::Instant;
 
 use futures_util::future::BoxFuture;
 use futures_util::stream::{self, StreamExt};
+use futures_util::FutureExt;
 use observability::attr;
 use protocol::{
     ApprovalDecision, AskQuestion, EventPayload, PermissionKind, PermissionRequestId,
@@ -29,7 +30,7 @@ use protocol::{
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::oneshot;
-use tracing::{field::Empty, info, warn, Instrument};
+use tracing::{error, field::Empty, info, warn, Instrument};
 
 use crate::{
     agent_loop::EventSink,
@@ -70,6 +71,18 @@ impl ToolProgress for ToolProgressEmitter {
             call_id: self.call_id.clone(),
             chunk,
         }));
+    }
+}
+
+/// 从 `catch_unwind` 捕获的 panic payload 提取可读消息。panic 的 payload 通常是
+/// `&str` 或 `String`（`panic!` / `unwrap` / 切片越界都是），取不到则回退占位符。
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
     }
 }
 
@@ -1028,13 +1041,31 @@ impl ToolDispatcher {
                     cancel: Some(cancel.clone()),
                 };
                 let (raw, attachments, exec_failed, semantic_failed) = match tool {
-                    Some(t) => match t.execute_rich(tool_ctx, effective_input.clone()).await {
-                        Ok(out) => (out.text, out.attachments, false, out.is_error),
-                        Err(e) => {
-                            warn!(tool = %call.name, error = %e, "tool exec error");
-                            (format!("工具执行错误: {e}"), Vec::new(), true, false)
+                    Some(t) => {
+                        // catch_unwind 兜底：工具内部 panic（如切片越界、unwrap）不再 unwind
+                        // 穿透 dispatch 打挂整个 run task——转成 exec error result，让本轮工具
+                        // 失败但 run 继续。否则一个工具 bug 会让整条会话静默死亡、前端永久等待。
+                        let fut = std::panic::AssertUnwindSafe(
+                            t.execute_rich(tool_ctx, effective_input.clone()),
+                        );
+                        match fut.catch_unwind().await {
+                            Ok(Ok(out)) => (out.text, out.attachments, false, out.is_error),
+                            Ok(Err(e)) => {
+                                warn!(tool = %call.name, error = %e, "tool exec error");
+                                (format!("工具执行错误: {e}"), Vec::new(), true, false)
+                            }
+                            Err(panic) => {
+                                let msg = panic_message(&*panic);
+                                error!(tool = %call.name, call_id = %call.id, panic = %msg, "tool panicked");
+                                (
+                                    format!("工具执行 panic: {msg}"),
+                                    Vec::new(),
+                                    true,
+                                    false,
+                                )
+                            }
                         }
-                    },
+                    }
                     None => {
                         warn!(tool = %call.name, "tool not in registry");
                         (
@@ -2722,6 +2753,30 @@ mod tests {
         }
     }
 
+    /// 测试用 panic 工具：模拟工具内部 panic（切片越界 / unwrap）。dispatch 必须
+    /// catch_unwind 兜住转成 error result，而非让 panic 打挂整个 run task。name="Read"
+    /// 走只读免审路径，聚焦验证执行层兜底。
+    struct PanickingTool;
+
+    #[async_trait]
+    impl crate::tools::Tool for PanickingTool {
+        fn name(&self) -> &str {
+            "Read"
+        }
+
+        fn description(&self) -> &str {
+            "test panicking tool"
+        }
+
+        fn parameters_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(&self, _input: Value) -> AppResult<String> {
+            panic!("boom in tool");
+        }
+    }
+
     /// 测试用 Edit 工具：name="Edit"，effects 走 `Effects::mutating(file_path)`。
     /// 不真正落盘，只验证 dispatcher 的免审 / 审批决策。
     struct NoopEditTool;
@@ -2849,6 +2904,67 @@ mod tests {
                 panic!("只读访问 data_dir 不应 emit PermissionRequested");
             }
         }
+    }
+
+    /// 回归（问题 2）：工具内部 panic 必须被 catch_unwind 兜成 error result，run 继续，
+    /// 而非 unwind 穿透 dispatch 打挂整个 run task（会导致会话静默死亡、前端永久等待）。
+    /// 修前 `execute_rich().await` 直接 await，panic 会让本测试 abort；修后返回 is_error 结果。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tool_panic_is_caught_and_run_continues() {
+        let workdir = tempfile::tempdir().unwrap();
+        let data_dir = tempfile::tempdir().unwrap();
+        let target = data_dir.path().join("sessions/other/session.jsonl");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "{}\n").unwrap();
+
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Box::new(PanickingTool) as Box<dyn crate::tools::Tool>,
+        ]));
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, _rx) = tokio::sync::mpsc::channel(1024);
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.try_send(event);
+        });
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl: Arc::new(crate::tools::hitl::HitlGate::default()),
+            workspace: Workspace::new(workdir.path(), Vec::new()),
+            state: run_state,
+            sink,
+            cancel: Arc::new(AtomicBool::new(false)),
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
+            model_id: None,
+            judge_client: None,
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            session_id_for_hooks: Some("sid-current".into()),
+            data_dir_for_artifacts: Some(data_dir.path().to_path_buf()),
+            permission_store: None,
+            edits_worktree: None,
+            current_run_id: None,
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
+            model_io_dump: None,
+            subagent_bypass: false,
+        };
+
+        let call = ToolCall {
+            id: "call_panic".into(),
+            name: "Read".into(),
+            input: serde_json::json!({ "file_path": target.to_string_lossy() }),
+        };
+
+        let results =
+            tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+                .await
+                .expect("panic 应被兜住、dispatch 正常返回，不 hang")
+                .expect("dispatch 不应报错");
+        assert_eq!(results.len(), 1, "panic 工具仍应产出一条结果");
+        assert!(
+            results[0].content.contains("panic"),
+            "结果文本应说明 panic：{}",
+            results[0].content
+        );
     }
 
     /// 安全底线：写工具（Edit）写 data_dir 下的文件——即便只读工具对同路径免审——

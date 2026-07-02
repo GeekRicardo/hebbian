@@ -5,7 +5,6 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
-  Pause,
   Square,
   Terminal,
 } from "lucide-react";
@@ -19,6 +18,7 @@ import {
   type TaskItem,
 } from "@/desktop/ui/lib/backgroundTasks";
 import type { Message, SessionBackgroundReport } from "@/desktop/ui/types";
+import { SuspendedBanner } from "./SuspendedBanner";
 
 /**
  * 旧版本浮动框——已被 RightSidebar 内的 `BackgroundTaskTab` 替代（架构 §4.12.9 修订）。
@@ -109,10 +109,6 @@ export function BackgroundTaskTab() {
     items.every((it) => it.status !== "running") &&
     pendingCrons.length === 0;
 
-  const suspendedElapsedSec = suspended
-    ? Math.max(0, Math.round((now - suspended.suspendedAtMs) / 1000))
-    : 0;
-
   async function killShell(taskId: string) {
     if (!sessionId) return;
     try {
@@ -126,25 +122,7 @@ export function BackgroundTaskTab() {
   return (
     <div className="flex flex-col text-[12px]">
       {/* 状态横幅（挂起 / 中断 checkpoint） */}
-      {suspended && (
-        <div className="m-2 flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5">
-          <Pause className="mt-0.5 h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
-          <div className="min-w-0 text-[11px] leading-tight">
-            <div className="font-medium text-amber-700 dark:text-amber-300">
-              Run 已挂起 {suspendedElapsedSec}s
-            </div>
-            <div className="mt-0.5 text-amber-700/80 dark:text-amber-300/80">
-              {suspended.reason === "background_task"
-                ? `等 ${suspended.waitingForTaskIds.join(", ") || "?"} 完成`
-                : suspended.reason === "cron"
-                  ? suspended.resumesAtMs != null
-                    ? `${Math.max(0, Math.round((suspended.resumesAtMs - now) / 1000))}s 后唤醒`
-                    : "定时唤醒"
-                  : "等待"}
-            </div>
-          </div>
-        </div>
-      )}
+      {suspended && <SuspendedBanner suspended={suspended} variant="sidebar" />}
       {orphanedCheckpoint && (
         <div className="m-2 flex items-start gap-1.5 rounded-md border border-orange-500/30 bg-orange-500/10 px-2 py-1.5">
           <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-orange-600 dark:text-orange-400" />
@@ -381,9 +359,19 @@ function StatusDot({ status }: { status: TaskItem["status"] }) {
   return <span className={cn("h-2 w-2 shrink-0 rounded-full", color)} />;
 }
 
-// 倒计时：fireAt - now，向下取整到秒，最小 0。
+// 倒计时：fireAt - now，紧凑格式（天/时/分/秒逐级）。
 function cronCountdown(fireAtMs: number, now: number): string {
-  return `${Math.max(0, Math.round((fireAtMs - now) / 1000))}s`;
+  const secs = Math.max(0, Math.round((fireAtMs - now) / 1000));
+  const days = Math.floor(secs / 86400);
+  const hours = Math.floor((secs % 86400) / 3600);
+  const mins = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (mins > 0) parts.push(`${mins}m`);
+  if (s > 0 || parts.length === 0) parts.push(`${s}s`);
+  return parts.join("");
 }
 
 // 唤醒时刻：HH:MM（同一天）/ MM-DD HH:MM（跨天）。

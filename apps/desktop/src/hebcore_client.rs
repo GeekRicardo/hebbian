@@ -11,6 +11,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -363,12 +364,12 @@ pub fn start_run(
 }
 
 /// 长期订阅一个 session 的后续事件。订阅者断开只结束本线程，不影响 hebcore 内的 run。
-pub fn subscribe_session(
+pub fn subscribe_session_once(
     app: &AppHandle,
     data_dir: &Path,
     session_id: &str,
     sink: &dyn RunEventSink,
-) -> Result<(), String> {
+) -> Result<SubscribeSessionEnd, String> {
     let sock = hebcore_sock(data_dir);
     let sub = connect_or_spawn(app, &sock)
         .map_err(|e| format!("连接 hebcore 失败（{}）：{e}", sock.display()))?;
@@ -391,7 +392,7 @@ pub fn subscribe_session(
         match serde_json::from_str::<Resp>(&line) {
             Ok(Resp::Event { event }) => {
                 if !sink.on_event(event) {
-                    break;
+                    return Ok(SubscribeSessionEnd::SinkClosed);
                 }
             }
             Ok(Resp::Error { message }) => return Err(message),
@@ -399,7 +400,31 @@ pub fn subscribe_session(
             Err(e) => tracing::warn!("解析 hebcore 事件失败: {e}"),
         }
     }
-    Ok(())
+    Ok(SubscribeSessionEnd::Subscribed)
+}
+
+/// 长期订阅一个 session 的后续事件；hebcore 断连 / 重启时自动重连。
+/// 每次订阅成功都会调用 `on_subscribed`，调用方用它通知前端按 session.jsonl 补一次快照。
+pub fn subscribe_session_reconnecting(
+    app: &AppHandle,
+    data_dir: &Path,
+    session_id: &str,
+    sink: &dyn RunEventSink,
+    mut on_subscribed: impl FnMut(),
+) -> Result<(), String> {
+    loop {
+        match subscribe_session_once(app, data_dir, session_id, sink) {
+            Ok(SubscribeSessionEnd::Subscribed) => on_subscribed(),
+            Ok(SubscribeSessionEnd::SinkClosed) => return Ok(()),
+            Err(e) => tracing::warn!(session_id = %session_id, error = %e, "desktop session 事件订阅断开，准备重连"),
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
+pub enum SubscribeSessionEnd {
+    Subscribed,
+    SinkClosed,
 }
 
 /// 一次性发一个控制请求到 hebcore（审批 / 提问 / 中断 / 插队 / 切 mode），读一行响应。
@@ -492,4 +517,30 @@ fn write_req(w: &mut impl Write, req: &Req) -> Result<(), String> {
     w.write_all(s.as_bytes()).map_err(|e| e.to_string())?;
     w.flush().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    struct ClosedSink;
+
+    impl RunEventSink for ClosedSink {
+        fn on_event(&self, _event: protocol::WireEvent) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn retry_decision_stops_when_shutdown_requested() {
+        let shutdown = Arc::new(AtomicBool::new(true));
+        assert!(!should_retry_subscription(&ClosedSink, Some(&shutdown)));
+    }
+
+    #[test]
+    fn retry_decision_continues_while_surface_is_alive() {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        assert!(should_retry_subscription(&ClosedSink, Some(&shutdown)));
+    }
 }

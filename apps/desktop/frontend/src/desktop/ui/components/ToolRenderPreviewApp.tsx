@@ -92,7 +92,7 @@ export function ToolRenderPreviewApp() {
   }, [playing, streaming, streamingParts.length]);
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="tool-render-preview min-h-screen bg-background text-foreground">
       <div className="mx-auto max-w-[1180px] px-8 py-6">
         <div className="sticky top-0 z-10 mb-4 flex flex-wrap items-center gap-2 border-b border-border bg-background/95 py-3 text-[12px] text-muted-foreground backdrop-blur">
           <span className="font-medium text-foreground">真实 MessageBubble 预览</span>
@@ -129,7 +129,7 @@ export function ToolRenderPreviewApp() {
             <span>{effectiveSlice}</span>
           </label>
         </div>
-        <div className="rounded-xl border border-border bg-background p-4 shadow-sm">
+        <div className="tool-preview-chat-canvas rounded-2xl p-5 shadow-sm">
           <MessageBubble
             message={shownMessage}
             streaming={streaming}

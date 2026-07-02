@@ -83,6 +83,10 @@ async fn main() -> Result<()> {
     // 单例：拿不到锁就退出（已有同一 sock 的实例）。_lock 持有到 main 结束。
     let _lock = acquire_singleton_lock(&lock_path)?;
 
+    // 启动时扫描所有 session，把上次进程崩溃残留的 dead partial 折叠进 session.jsonl。
+    // 不依赖用户打开对应 session 才触发恢复（架构 §4.9.3 / §7.8.5）。
+    agent_core::storage::sessions::recover_all_dead_partials(&data_dir);
+
     let permission_store = PermissionStore::open(&data_dir).ok().map(Arc::new);
     let core = Arc::new(LocalCoreClient::new(
         None,

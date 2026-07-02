@@ -108,4 +108,238 @@ const toolCalls = (p: StreamingAssistantPart[]) => p.filter((x) => x.type === "t
   ]);
 }
 
+// ── tool_output_delta 批处理：PTY 输出高频 chunk 必须合并到 rAF 帧统一 dispatch，
+// 避免每次 chunk 都触发一次 setState（tool_start / tool_done 正常即时派发）。
+{
+  const handled: EngineEvent[] = [];
+  const batcher = createEventBatcher({
+    dispatch: (event) => handled.push(event),
+    schedule: (flush) => flush,
+  });
+
+  batcher.push(ev({ type: "tool_output_delta", index: 0, id: "t1", chunk: "line1\n" }));
+  batcher.push(ev({ type: "tool_output_delta", index: 0, id: "t1", chunk: "line2\n" }));
+
+  check("tool_output_delta 入队前不立刻 dispatch", handled.length, 0);
+  batcher.flushNow();
+  check("同 tool call 连续 chunk 合并", handled, [
+    ev({ type: "tool_output_delta", index: 0, id: "t1", chunk: "line1\nline2\n" }),
+  ]);
+}
+
+// ── 不同 tool call 的 tool_output_delta 各管各合并，互不串。
+{
+  const handled: EngineEvent[] = [];
+  const batcher = createEventBatcher({
+    dispatch: (event) => handled.push(event),
+    schedule: (flush) => flush,
+  });
+
+  batcher.push(ev({ type: "tool_output_delta", index: 0, id: "t1", chunk: "a" }));
+  batcher.push(ev({ type: "tool_output_delta", index: 1, id: "t2", chunk: "x" }));
+  batcher.push(ev({ type: "tool_output_delta", index: 0, id: "t1", chunk: "b" }));
+
+  // 按 push 顺序 flush 两条
+  batcher.flushNow();
+  // Map 迭代顺序 = 插入顺序 → t1 先 t2 后（t2 在 t1 两次之间插入，key 不同仍保持各自累积）
+  check("不同 tool call 独立合并", handled.length, 2);
+  const t1 = handled.find((e): e is Extract<EngineEvent, { type: "tool_output_delta" }> => e.type === "tool_output_delta" && e.id === "t1");
+  const t2 = handled.find((e): e is Extract<EngineEvent, { type: "tool_output_delta" }> => e.type === "tool_output_delta" && e.id === "t2");
+  check("t1 chunk 合并", t1?.chunk, "ab");
+  check("t2 chunk 不变", t2?.chunk, "x");
+}
+
+// ── 非 output 事件前先 flush 累积的输出（与 text_delta 一致语义）。
+{
+  const handled: EngineEvent[] = [];
+  const batcher = createEventBatcher({
+    dispatch: (event) => handled.push(event),
+    schedule: (flush) => flush,
+  });
+
+  batcher.push(ev({ type: "tool_output_delta", index: 0, id: "t1", chunk: "log\n" }));
+  batcher.push(ev({ type: "tool_done", index: 0, id: "t1", result: "ok", duration_ms: 3 }));
+
+  check("tool_done 前 flush tool_output_delta + 即时派发 tool_done",
+    handled.length >= 2 &&
+    handled[0].type === "tool_output_delta" &&
+    handled[handled.length - 1].type === "tool_done",
+    true
+  );
+}
+
+// ── text_delta 与 tool_output_delta 共享同一个 schedule 槽，flush 时先 text 再 output。
+{
+  const handled: EngineEvent[] = [];
+  const batcher = createEventBatcher({
+    dispatch: (event) => handled.push(event),
+    schedule: (flush) => flush,
+  });
+
+  batcher.push(ev({ type: "text_delta", text: "Hello" }));
+  batcher.push(ev({ type: "tool_output_delta", index: 0, id: "t1", chunk: "out" }));
+  check("text + output 都不立即 dispatch", handled.length, 0);
+  batcher.flushNow();
+  check("flush 后 text_delta 在前、tool_output_delta 在后", handled, [
+    ev({ type: "text_delta", text: "Hello" }),
+    ev({ type: "tool_output_delta", index: 0, id: "t1", chunk: "out" }),
+  ]);
+}
+
+// ── reasoning 批处理：与 text_delta 同语义，按 rAF 帧合并。
+{
+  const handled: EngineEvent[] = [];
+  const batcher = createEventBatcher({
+    dispatch: (event) => handled.push(event),
+    schedule: (flush) => flush,
+  });
+
+  batcher.push(ev({ type: "reasoning", text: "嗯" }));
+  batcher.push(ev({ type: "reasoning", text: "……" }));
+
+  check("reasoning 入队前不立刻 dispatch", handled.length, 0);
+  batcher.flushNow();
+  check("reasoning 合并成一条", handled, [
+    ev({ type: "reasoning", text: "嗯……" }),
+  ]);
+}
+
+// ── tool_call_delta 批处理：按 tool call 累积 arguments_delta。
+{
+  const handled: EngineEvent[] = [];
+  const batcher = createEventBatcher({
+    dispatch: (event) => handled.push(event),
+    schedule: (flush) => flush,
+  });
+
+  batcher.push(ev({ type: "tool_call_delta", index: 0, id: "t1", name: "Bash", arguments_delta: '{"c' }));
+  batcher.push(ev({ type: "tool_call_delta", index: 0, id: "t1", name: "Bash", arguments_delta: 'md":"ls"' }));
+
+  check("tool_call_delta 入队前不立刻 dispatch", handled.length, 0);
+  batcher.flushNow();
+  check("同 tool call 的 arguments_delta 合并", handled, [
+    ev({ type: "tool_call_delta", index: 0, id: "t1", name: "Bash", arguments_delta: '{"cmd":"ls"' }),
+  ]);
+}
+
+// ── 不同 tool call 的 tool_call_delta 各管各合并。
+{
+  const handled: EngineEvent[] = [];
+  const batcher = createEventBatcher({
+    dispatch: (event) => handled.push(event),
+    schedule: (flush) => flush,
+  });
+
+  batcher.push(ev({ type: "tool_call_delta", index: 0, id: "t1", arguments_delta: "a" }));
+  batcher.push(ev({ type: "tool_call_delta", index: 1, id: "t2", arguments_delta: "x" }));
+  batcher.push(ev({ type: "tool_call_delta", index: 0, id: "t1", arguments_delta: "b" }));
+
+  batcher.flushNow();
+  check("不同 tool call delta 独立合并", handled.length, 2);
+  const d1 = handled.find((e): e is Extract<EngineEvent, { type: "tool_call_delta" }> => e.type === "tool_call_delta" && e.id === "t1");
+  const d2 = handled.find((e): e is Extract<EngineEvent, { type: "tool_call_delta" }> => e.type === "tool_call_delta" && e.id === "t2");
+  check("t1 arguments 合并", d1?.arguments_delta, "ab");
+  check("t2 arguments 不变", d2?.arguments_delta, "x");
+}
+
+// ── 四种高频事件共享 schedule 槽，flush 顺序：text → reasoning → call_delta → output。
+{
+  const handled: EngineEvent[] = [];
+  const batcher = createEventBatcher({
+    dispatch: (event) => handled.push(event),
+    schedule: (flush) => flush,
+  });
+
+  batcher.push(ev({ type: "text_delta", text: "Hello" }));
+  batcher.push(ev({ type: "reasoning", text: "think" }));
+  batcher.push(ev({ type: "tool_call_delta", index: 0, id: "t1", arguments_delta: "arg" }));
+  batcher.push(ev({ type: "tool_output_delta", index: 0, id: "t1", chunk: "out" }));
+
+  check("四种都不立即 dispatch", handled.length, 0);
+  batcher.flushNow();
+  check("flush 顺序: text → reasoning → call_delta → output", handled.map((e) => e.type), [
+    "text_delta",
+    "reasoning",
+    "tool_call_delta",
+    "tool_output_delta",
+  ]);
+}
+
+// ── reasoning + text 交替到达时必须保序（不能塌成全 text 先、全 reasoning 后）。
+{
+  const handled: EngineEvent[] = [];
+  const batcher = createEventBatcher({
+    dispatch: (event) => handled.push(event),
+    schedule: (flush) => flush,
+  });
+
+  batcher.push(ev({ type: "reasoning", text: "先想" }));
+  batcher.push(ev({ type: "text_delta", text: "输出" }));
+  batcher.push(ev({ type: "reasoning", text: "再想" }));
+
+  batcher.flushNow();
+  check("reasoning→text→reasoning 保持交替顺序", handled.map((e) => e.type), [
+    "reasoning",
+    "text_delta",
+    "reasoning",
+  ]);
+}
+
+// ── cron 唤醒必须触发 assistant 分段冻结（问题 3 回归）。
+// cron_fired 是新对话轮次（后端也落成独立 assistant message）；若不冻结，每轮唤醒的
+// 输出全叠进同一个 streaming bubble，无限堆叠 + tool 卡片糊成一团。
+// 反例（修前）：system_notification 一律不算插队 → 永不冻结 → 复现堆叠。
+{
+  const cronMsg = {
+    id: "u-cron",
+    role: "user",
+    content: "<wakeup kind=cron_fired>",
+    created_at: 1,
+    meta: { type: "system_notification", kind: "cron_fired" },
+  };
+  let slot = makeSlot({
+    streamingText: "第一轮检查结果",
+    streamingParts: [{ type: "text", text: "第一轮检查结果" } as StreamingAssistantPart],
+    liveTimeline: [{ kind: "user_injected", message: cronMsg } as never],
+    assistantInsertPos: 0,
+  });
+  slot = applyEventToSlot(slot, ev({ type: "turn_finished", stop_reason: "end_turn" }));
+  check("cron 唤醒后当前段被冻结进 liveTimeline", slot.liveTimeline.filter((i) => i.kind === "assistant_frozen").length, 1);
+  check("cron 唤醒后 streaming 段清空（不再堆叠）", slot.streamingText, "");
+}
+
+// ── bg_task_finished 不触发分段：它是某 tool_call 的异步回应、不是新对话轮次，
+// 由 wakeup 排序钉到对应 assistant 段之后，继续累积进当前 bubble。
+{
+  const bgMsg = {
+    id: "u-bg",
+    role: "user",
+    content: "<wakeup kind=bg_task_finished>",
+    created_at: 1,
+    meta: { type: "system_notification", kind: "bg_task_finished", task_id: "bash_001" },
+  };
+  let slot = makeSlot({
+    streamingText: "正在等后台",
+    streamingParts: [{ type: "text", text: "正在等后台" } as StreamingAssistantPart],
+    liveTimeline: [{ kind: "user_injected", message: bgMsg } as never],
+    assistantInsertPos: 0,
+  });
+  slot = applyEventToSlot(slot, ev({ type: "turn_finished", stop_reason: "end_turn" }));
+  check("bg 任务完成不冻结（不分段）", slot.liveTimeline.filter((i) => i.kind === "assistant_frozen").length, 0);
+  check("bg 任务完成保持累积", slot.streamingText, "正在等后台");
+}
+
+// ── 普通用户插队仍触发分段（不被误伤）。
+{
+  const userMsg = { id: "u1", role: "user", content: "顺便看下这个", created_at: 1 };
+  let slot = makeSlot({
+    streamingText: "回答中",
+    streamingParts: [{ type: "text", text: "回答中" } as StreamingAssistantPart],
+    liveTimeline: [{ kind: "user_injected", message: userMsg } as never],
+    assistantInsertPos: 0,
+  });
+  slot = applyEventToSlot(slot, ev({ type: "turn_finished", stop_reason: "end_turn" }));
+  check("普通用户插队仍冻结分段", slot.liveTimeline.filter((i) => i.kind === "assistant_frozen").length, 1);
+}
+
 console.log("ALL PASS");

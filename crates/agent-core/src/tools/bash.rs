@@ -98,6 +98,14 @@ impl Tool for BashTool {
                 "description": {
                     "type": "string",
                     "description": "5-10 字描述这条命令在做什么，便于审批 UI 展示"
+                },
+                "pty": {
+                    "type": "boolean",
+                    "description": "true = 使用 PTY（伪终端）执行。默认 true。\
+                                    子进程以为自己连的是真实终端，docker pull / npm install \
+                                    等命令会正常显示实时进度条。\
+                                    **注意**：PTY 下超时会自动切管道模式转后台。\
+                                    传 false 强制走管道模式（无实时进度，但 stdout/stderr 分离）。"
                 }
             }
         })
@@ -138,6 +146,13 @@ impl BashTool {
             .unwrap_or(DEFAULT_TIMEOUT_SECS)
             .min(MAX_TIMEOUT_SECS);
         let background = input["run_in_background"].as_bool().unwrap_or(false);
+        let use_pty = input["pty"].as_bool().unwrap_or(true);
+
+        // PTY 路径：伪终端执行，独立于 BackgroundShell 体系。
+        // 不支持转后台——PTY 子进程生命周期完全在函数内管理。
+        if use_pty && !background {
+            return self.run_pty(&ctx, command, &cwd.display().to_string(), timeout).await;
+        }
 
         let mut cmd = Command::new("bash");
         cmd.arg("-lc")
@@ -146,6 +161,9 @@ impl BashTool {
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
             .current_dir(&cwd);
+        // 创建独立进程组：kill 时杀整组而非仅 bash，避免子命令（find/docker/…）变孤儿 PPID=1。
+        #[cfg(unix)]
+        cmd.process_group(0);
         if let Some(path) = crate::shell_env::resolve_shell_path(self.shell.as_deref()).await {
             cmd.env("PATH", path);
         }
@@ -257,9 +275,208 @@ impl BashTool {
         self.shells.unregister(&shell.task_id);
         Ok((truncate_bytes(&text, MAX_OUTPUT_BYTES), is_error))
     }
+
+    /// PTY（伪终端）执行路径：让子进程认为自己连的是真实终端，从而获得
+    /// docker pull / npm install / apt 等命令的实时进度条输出。
+    ///
+    /// 与 `run` 的管道模式不同：
+    /// - stdout/stderr 在 PTY 中自然合并（与真实终端行为一致）
+    /// - 输出含 ANSI 转义码（前端 `ansiToHtml` 已处理）
+    /// - 不支持转后台——超时直接返回已产出内容
+    /// - 不经过 BackgroundShell 注册表，生命周期完全自包含
+    async fn run_pty(
+        &self,
+        ctx: &ToolCtx,
+        command: &str,
+        cwd: &str,
+        timeout_secs: u64,
+    ) -> AppResult<(String, bool)> {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        use std::io::Read;
+        use tokio::sync::mpsc;
+
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 120,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| AppError::msg(format!("PTY: 打开失败 {e}")))?;
+
+        let mut cmd_builder = CommandBuilder::new("bash");
+        cmd_builder.arg("-lc");
+        cmd_builder.arg(command);
+        cmd_builder.cwd(cwd);
+        if let Some(path) = crate::shell_env::resolve_shell_path(self.shell.as_deref()).await {
+            cmd_builder.env("PATH", path);
+        }
+
+        let mut child = pair
+            .slave
+            .spawn_command(cmd_builder)
+            .map_err(|e| AppError::msg(format!("PTY: 启动失败 {e}")))?;
+
+        // 父进程关闭 slave 端
+        drop(pair.slave);
+
+        let master_reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|e| AppError::msg(format!("PTY: reader 失败 {e}")))?;
+
+        // mpsc: spawn_blocking reader → async context
+        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(128);
+
+        tokio::task::spawn_blocking(move || {
+            let mut reader = master_reader;
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break, // EOF: 子进程退出，PTY master 关闭
+                    Ok(n) => {
+                        if tx.blocking_send(buf[..n].to_vec()).is_err() {
+                            break; // 接收端已关闭
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+        let mut buffer = String::new();
+
+        // 主循环：读 PTY 输出 → emit chunk → 累积 buffer。
+        // 三个出口都在 select 分支内 return：reader EOF（正常退出）、cancel、timeout。
+        loop {
+            let cancel_flag = ctx.cancel.clone();
+            let cancel_fut = async {
+                match cancel_flag {
+                    Some(flag) => wait_for_cancel(flag).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+
+            tokio::select! {
+                biased;
+                chunk = rx.recv() => {
+                    match chunk {
+                        Some(data) => {
+                            let text = String::from_utf8_lossy(&data);
+                            ctx.emit_chunk(text.to_string());
+                            buffer.push_str(&text);
+                        }
+                        None => {
+                            // PTY master EOF → 子进程已退出。
+                            // child.wait() 是同步调用，必须 spawn_blocking 避免阻塞 tokio worker。
+                            let status = tokio::task::spawn_blocking(move || child.wait())
+                                .await
+                                .map_err(|e| AppError::msg(format!("PTY: join 失败 {e}")))?
+                                .map_err(|e| AppError::msg(format!("PTY: wait 失败 {e}")))?;
+                            let is_error = !status.success();
+                            let suffix = if is_error {
+                                "[exit non-zero]".to_string()
+                            } else {
+                                String::new()
+                            };
+                            let text = if buffer.is_empty() {
+                                if suffix.is_empty() { "(无输出)".to_string() } else { suffix }
+                            } else {
+                                if suffix.is_empty() { buffer } else { format!("{buffer}\n{suffix}") }
+                            };
+                            return Ok((truncate_bytes(&text, MAX_OUTPUT_BYTES), is_error));
+                        }
+                    }
+                }
+                _ = cancel_fut => {
+                    // 杀进程组：PTY 下 forkpty 已创独立 session/进程组，
+                    // child.kill() 只杀 leader，子命令变孤儿。
+                    pty_kill_process_group(&mut child);
+                    rx.close();
+                    while let Ok(data) = rx.try_recv() {
+                        let text = String::from_utf8_lossy(&data);
+                        buffer.push_str(&text);
+                    }
+                    if !buffer.is_empty() && !buffer.ends_with('\n') {
+                        buffer.push('\n');
+                    }
+                    buffer.push_str("[已中断]");
+                    return Ok((truncate_bytes(&buffer, MAX_OUTPUT_BYTES), false));
+                }
+                _ = tokio::time::sleep_until(deadline) => {
+                    // 超时不杀——注册为后台任务，PTY 输出继续灌 tail buffer，
+                    // 模型后续用 BashOutput 读、KillShell 终止。
+                    let pid = child.process_id().unwrap_or(0);
+
+                    let shell = self.shells.register_pty_background(
+                        command.to_string(),
+                        cwd.to_string(),
+                        pid,
+                        self.bg_log_dir.as_deref(),
+                    );
+                    arm_auto_notification(ctx, &shell.task_id);
+
+                    // 后台续跑：继续读 PTY master → 灌 shell tail buffer
+                    let shell_bg = shell.clone();
+                    tokio::spawn(async move {
+                        while let Some(data) = rx.recv().await {
+                            let text = String::from_utf8_lossy(&data);
+                            shell_bg.append(None, text.as_bytes());
+                        }
+                        // PTY master EOF → 子进程已退出
+                        let status = match tokio::task::spawn_blocking(move || child.wait())
+                            .await
+                        {
+                            Ok(Ok(s)) => s,
+                            Ok(Err(e)) => {
+                                shell_bg.finish(super::background::ShellState::Failed {
+                                    error: e.to_string(),
+                                });
+                                return;
+                            }
+                            Err(e) => {
+                                shell_bg.finish(super::background::ShellState::Failed {
+                                    error: e.to_string(),
+                                });
+                                return;
+                            }
+                        };
+                        let code = if status.success() { Some(0) } else { None };
+                        shell_bg.finish(super::background::ShellState::Exited { code });
+                    });
+
+                    let mut text = format!(
+                        "[{}] {timeout_secs}s 内未结束，已转后台",
+                        shell.task_id
+                    );
+                    if !buffer.is_empty() {
+                        text.push_str("\n--- 已产出 ---\n");
+                        text.push_str(&buffer);
+                    }
+                    return Ok((truncate_bytes(&text, MAX_OUTPUT_BYTES), false));
+                }
+            }
+        }
+    }
 }
 
-/// 启动后台 task 后自动 arm 一个 WakeupScheduler 监听（架构 §4.12.5 修订）。
+/// 杀 PTY 子进程所在进程组（而非仅杀 leader）。
+/// PTY 下 forkpty 已创建独立 session，子进程是 session leader，
+/// kill(-pid, SIGKILL) 把整组（含 bash 内部跑的 find/docker 等）一起终止。
+#[cfg(unix)]
+fn pty_kill_process_group(child: &mut Box<dyn portable_pty::Child + Send + Sync>) {
+    if let Some(pid) = child.process_id() {
+        unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+    }
+}
+
+#[cfg(not(unix))]
+fn pty_kill_process_group(child: &mut Box<dyn portable_pty::Child + Send + Sync>) {
+    let _ = child.kill();
+}
 /// task 终态时投递 BgTaskFinished 事件，surface 据此把 task-notification 注入下一轮
 /// user message——CC 2.1 同款"completed 自动通知"。携带 `tool_use_id` 让通知能反查
 /// 到触发它的 tool_call。
@@ -411,7 +628,7 @@ mod tests {
     async fn nonzero_exit_includes_code() {
         let tmp = tempfile::tempdir().unwrap();
         let out = tool(tmp.path())
-            .execute(json!({"command": "exit 7"}))
+            .execute(json!({"command": "exit 7", "pty": false}))
             .await
             .unwrap();
         assert!(out.contains("[exit 7]"));
@@ -629,5 +846,97 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("quick"));
+    }
+
+    #[tokio::test]
+    async fn pty_echo_basic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bash = tool(tmp.path());
+        let out = bash
+            .execute(json!({"command": "echo hello-from-pty", "pty": true}))
+            .await
+            .unwrap();
+        // PTY 输出可能包含 ANSI 转义码（bash 的 PS1 等），只检查核心内容
+        assert!(out.contains("hello-from-pty"), "output: {out}");
+    }
+
+    #[tokio::test]
+    async fn pty_multiline_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bash = tool(tmp.path());
+        let out = bash
+            .execute(json!({
+                "command": "echo line1; echo line2; echo line3",
+                "pty": true
+            }))
+            .await
+            .unwrap();
+        assert!(out.contains("line1"), "output: {out}");
+        assert!(out.contains("line2"), "output: {out}");
+        assert!(out.contains("line3"), "output: {out}");
+    }
+
+    #[tokio::test]
+    async fn pty_exit_code_nonzero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bash = tool(tmp.path());
+        let out = bash
+            .execute_rich(
+                ToolCtx::noop(),
+                json!({"command": "exit 42", "pty": true}),
+            )
+            .await
+            .unwrap();
+        assert!(out.is_error, "exit 42 should be error");
+        // PTY 下 exit 不一定产生输出，但 is_error 必须为 true
+    }
+
+    /// 验证 PTY 实时进度：`\r` 回行的进度条在管道模式下被缓冲，
+    /// PTY 下应逐 chunk 到达（因为子进程认为自己是终端，每 flush 就推送）。
+    #[tokio::test]
+    async fn pty_realtime_progress_chunks() {
+        use crate::tools::ToolProgress;
+        use std::sync::Mutex;
+
+        struct CaptureProgress(pub Mutex<Vec<String>>);
+        #[async_trait]
+        impl ToolProgress for CaptureProgress {
+            fn emit(&self, chunk: String) {
+                self.0.lock().unwrap().push(chunk);
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        // 写一个带 \r 回行的进度脚本
+        let script = tmp.path().join("progress.py");
+        std::fs::write(
+            &script,
+            "import sys, time\nfor i in range(10):\n sys.stdout.write(f'\\r[{i}/10]')\n sys.stdout.flush()\n time.sleep(0.05)\nsys.stdout.write('\\nDONE\\n')\n",
+        )
+        .unwrap();
+
+        let bash = tool(tmp.path());
+        let progress = Arc::new(CaptureProgress(Mutex::new(Vec::new())));
+        let ctx = crate::tools::ToolCtx {
+            call_id: "test_pty_progress".into(),
+            progress: Some(progress.clone()),
+            session_id: None,
+            run_id: None,
+            cancel: None,
+        };
+
+        let out = bash
+            .execute_streaming(ctx, json!({"command": format!("python3 {}", script.display()), "pty": true, "timeout_secs": 10}))
+            .await
+            .unwrap();
+
+        let chunks: Vec<String> = progress.0.lock().unwrap().clone();
+        eprintln!("=== PTY progress chunks ({}) ===", chunks.len());
+        for (i, c) in chunks.iter().enumerate() {
+            eprintln!("  chunk[{i}]: {:?}", c);
+        }
+        // PTY 下应收到多个 chunk（不是等到结束才一次性吐）
+        assert!(chunks.len() >= 2, "expected >=2 chunks, got {} chunks. Output: {out}", chunks.len());
+        assert!(out.contains("DONE"), "output should contain DONE: {out}");
     }
 }

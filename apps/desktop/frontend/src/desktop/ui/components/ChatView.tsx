@@ -7,6 +7,7 @@ import { ChatInput } from "./chatInput";
 import { InputQueuePanel } from "./InputQueuePanel";
 import { ToastRegion } from "./ToastRegion";
 import { ContinueBar } from "./ContinueBar";
+import { SuspendedBanner } from "./SuspendedBanner";
 import {
   filterMessagesDuplicatedInLiveTimeline,
   liveTimelineWakeupProjector,
@@ -16,6 +17,7 @@ import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
 import { UserQuestionPopup } from "./UserQuestionPopup";
 import { FindBar, findMatches, useFindController } from "./FindBar";
 import { useStore } from "@/desktop/ui/store/useStore";
+import { usePerfRender } from "@/desktop/ui/store/perfMonitor";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { cn, hasSessionStarted, ipcConfirm } from "@/desktop/ui/lib/utils";
 import { isLocalFindShortcut, isTerminalFocusTarget } from "@/desktop/ui/lib/keyboardShortcuts";
@@ -58,6 +60,7 @@ interface ChatViewProps {
 }
 
 export function ChatView({ emptyState }: ChatViewProps = {}) {
+  usePerfRender("ChatView");
   const {
     currentSession,
     promptsFile,
@@ -87,6 +90,7 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     modelRetry,
     undoCompaction,
     deleteTrailingMessage,
+    suspended,
   } = useStore();
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1037,6 +1041,10 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
               );
             })}
 
+          {/* Run 挂起（ScheduleWakeup 定时 / 等后台任务）：主时间线显示暂停 + 倒计时，
+              让「已停下、X 秒后自动继续」一目了然，不必只靠侧栏。唤醒后 run_resumed
+              清 suspended，卡片消失、新一轮 streaming 接上。 */}
+          {suspended && <SuspendedBanner suspended={suspended} variant="timeline" />}
         </div>
       </div>
 

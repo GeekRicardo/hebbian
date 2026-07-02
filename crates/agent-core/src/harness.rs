@@ -341,7 +341,33 @@ impl Harness {
                 .register(sid.clone(), force_automode_shared.clone());
         }
 
+        // panic 安全：run_loop task panic 时 Drop guard 保证 runs 表清理（架构 §4.9.3）。
+        // 即使 task  panic，unwind 时 guard 的 Drop 仍然执行——不会残留僵尸 run。
+        // partial 文件由 daemon 启动时的 recover_all_dead_partials 兜底恢复。
+        struct RunCleanup {
+            runs: Arc<Mutex<HashMap<RunId, Arc<RunRegistration>>>>,
+            run_id: RunId,
+            session_id: Option<String>,
+        }
+        impl Drop for RunCleanup {
+            fn drop(&mut self) {
+                self.runs.lock().unwrap().remove(&self.run_id);
+                if let Some(sid) = &self.session_id {
+                    crate::run_mode::LiveRunModeRegistry::global().unregister(sid);
+                }
+            }
+        }
+
+        let cleanup_runs = runs.clone();
+        let cleanup_run_id = run_id_for_task.clone();
+        let cleanup_session_id = session_id_for_cleanup.clone();
+
         tokio::spawn(async move {
+            let _cleanup = RunCleanup {
+                runs: cleanup_runs,
+                run_id: cleanup_run_id,
+                session_id: cleanup_session_id,
+            };
             let params = LoopParams {
                 client: client.as_ref(),
                 registry,
@@ -378,10 +404,6 @@ impl Harness {
             };
             if let Err(e) = agent_loop::run_loop(params, sink).await {
                 warn!(error = %e, "run failed");
-            }
-            runs.lock().unwrap().remove(&run_id_for_task);
-            if let Some(sid) = &session_id_for_cleanup {
-                crate::run_mode::LiveRunModeRegistry::global().unregister(sid);
             }
         });
 
@@ -792,6 +814,7 @@ fn is_critical_event(payload: &EventPayload) -> bool {
             | EventPayload::UserQuestionAnswered { .. }
             | EventPayload::ToolCallStarted { .. }
             | EventPayload::ToolCallFinished { .. }
+            | EventPayload::ContextCompactionStarted { .. }
             | EventPayload::ContextCompacted { .. }
             | EventPayload::TextDone { .. }
             | EventPayload::SessionTitleChanged { .. }

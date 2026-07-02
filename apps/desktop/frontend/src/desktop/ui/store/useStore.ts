@@ -42,6 +42,7 @@ import { applyEventToSlot } from "@/desktop/ui/store/slotReducer";
 import { createEventBatcher, type EventBatcher } from "@/desktop/ui/store/eventBatcher";
 import { type LiveTimelineItem } from "@/desktop/ui/components/liveTimelineOrder";
 import { shouldApplyCompactionResult } from "@/desktop/ui/components/compactingState";
+import { perfRecordEvent, perfRecordSetState, isPerfMonitorEnabled } from "@/desktop/ui/store/perfMonitor";
 
 const LAST_PROMPT_ID_KEY = "lastPromptId";
 const LAST_PROVIDER_ID_KEY = "lastProviderId";
@@ -313,7 +314,11 @@ const sessionEventBatchers = new Map<string, EventBatcher>();
 function ensureSessionEventSubscription(
   sessionId: string,
   handleEvent: (sessionId: string, event: EngineEvent) => void,
+  options: { force?: boolean } = {},
 ) {
+  if (options.force) {
+    dropSessionEventSubscription(sessionId);
+  }
   if (sessionSubscriptions.has(sessionId)) return;
   const promise = api
     .subscribeSessionEvents(sessionId, (event) => {
@@ -614,7 +619,7 @@ interface AppState {
 
   // 上下文用量（输入框旁环形进度条数据）
   contextUsage: ContextUsage | null;
-  /** 正在执行 /compact 的会话 id（按会话隔离；null = 没有会话在压缩）。
+  /** 正在执行自动/手动压缩的会话 id（按会话隔离；null = 没有会话在压缩）。
    *  压缩要调一次 LLM、耗时数秒到数十秒，期间不该阻塞其它会话的发送。 */
   compactingSessionId: string | null;
   refreshContextUsage: () => Promise<void>;
@@ -754,6 +759,7 @@ interface AppState {
    *  返回即废弃，活不过 detached task。全局 listener 收到后统一调本方法。 */
   handleDerivedEvent: (e: EngineEvent) => void;
   handleSessionEngineEvent: (sessionId: string, e: EngineEvent) => void;
+  handleSessionSubscriptionResynced: (sessionId: string) => void;
 
   /**
    * 发送 user message 并触发 run。`meta` 可选——为 wakeup notification 等系统注入
@@ -1061,6 +1067,10 @@ export const useStore = create<AppState>((set, get) => ({
     if (!cur || get().compactingSessionId === cur.id) return;
     const sessionId = cur.id;
     set({ compactingSessionId: sessionId });
+    get().handleSessionEngineEvent(sessionId, {
+      type: "context_compaction_started",
+      before_tokens: get().contextUsage?.used_tokens ?? 0,
+    });
     try {
       const usage = await api.compactSession(sessionId, customInstructions);
       const fresh = await api.getSession(
@@ -1870,6 +1880,16 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  handleSessionSubscriptionResynced(sessionId) {
+    if (get().currentSession?.id !== sessionId) return;
+    void api
+      .getSession(sessionId, activeRequestForSession(get(), sessionId))
+      .then((fresh) => {
+        if (get().currentSession?.id === sessionId) set({ currentSession: fresh });
+      })
+      .catch(() => {});
+  },
+
   handleSessionEngineEvent(sessionId, e) {
     if (
       e.type === "session_title_changed" ||
@@ -1878,6 +1898,10 @@ export const useStore = create<AppState>((set, get) => ({
       e.type === "memory_extraction_failed"
     ) {
       get().handleDerivedEvent(e);
+      return;
+    }
+    if (e.type === "context_compaction_started") {
+      set({ compactingSessionId: sessionId });
       return;
     }
     if (
@@ -1898,10 +1922,20 @@ export const useStore = create<AppState>((set, get) => ({
           })
           .catch(() => {});
       }
-      if (e.type === "context_compacted") void get().refreshContextUsage();
+      if (e.type === "context_compacted") {
+        set((state) =>
+          state.compactingSessionId === sessionId ? { compactingSessionId: null } : state,
+        );
+        void get().refreshContextUsage();
+      }
       return;
     }
     if (e.type === "notice") {
+      if (e.dedup_key === "auto_compaction_failed") {
+        set((state) =>
+          state.compactingSessionId === sessionId ? { compactingSessionId: null } : state,
+        );
+      }
       if (e.dedup_key?.startsWith("pending-continue-")) {
         useToastStore.getState().push({
           level: e.level,
@@ -1974,6 +2008,8 @@ export const useStore = create<AppState>((set, get) => ({
     if (e.type === "run_finished" || e.type === "run_suspended" || e.type === "error") {
       sessionEventBatchers.get(sessionId)?.flushNow();
     }
+    // ── 性能监控：事件处理主路径（text_delta / tool_* / reasoning 等流式事件）──
+    const tPerf = isPerfMonitorEnabled() ? performance.now() : 0;
     set((state) => {
       const slot = state.sessionStreams[sessionId];
       if (!slot) return state;
@@ -1990,6 +2026,7 @@ export const useStore = create<AppState>((set, get) => ({
       const updated = applyEventToSlot(slot, e);
       if (updated === slot) return state;
       const isForeground = state.currentSession?.id === sessionId;
+      if (tPerf) perfRecordSetState();
       return {
         ...state,
         sessionStreams: {
@@ -1999,6 +2036,37 @@ export const useStore = create<AppState>((set, get) => ({
         ...(isForeground ? mirrorFromSlot(updated) : {}),
       };
     });
+    if (tPerf) perfRecordEvent(e.type, performance.now() - tPerf);
+    if (e.type === "run_suspended") {
+      const activeRequestId = get().sessionStreams[sessionId]?.requestId ?? null;
+      set((state) => {
+        const slot = state.sessionStreams[sessionId];
+        if (!slot) return state;
+        const suspendedSlot: SessionStream = {
+          ...slot,
+          requestId: "",
+          streamingMessageId: null,
+        };
+        const isForeground = state.currentSession?.id === sessionId;
+        return {
+          ...state,
+          sessionStreams: { ...state.sessionStreams, [sessionId]: suspendedSlot },
+          runningSessions: removeFromSet(state.runningSessions, sessionId),
+          ...(isForeground ? mirrorFromSlot(suspendedSlot) : {}),
+        };
+      });
+      if (get().currentSession?.id === sessionId) {
+        void api
+          .getSession(sessionId, activeRequestId)
+          .then((fresh) => {
+            if (get().currentSession?.id === sessionId) set({ currentSession: fresh });
+          })
+          .catch(() => {});
+        get().refreshContextUsage();
+      }
+      void get().refreshSessions();
+      return;
+    }
     if (e.type === "run_finished" || e.type === "error") {
       void (async () => {
         const live = get().sessionStreams[sessionId];
@@ -2042,6 +2110,37 @@ export const useStore = create<AppState>((set, get) => ({
             };
           });
           await get().sendUserMessage(head.content, head.attachments, null, {}, sessionId);
+        }
+        // Stop 后插队兜底（§4.2.3）：前端队列无待发、但 cancel 前有 Shift+Enter 注入的消息
+        // 已被 agent_loop drain 进 transcript 而成为 orphan user（无 assistant 回复）。
+        // truncate + regenerate：复跑已有 orphan user，不重复插入。
+        if (e.type === "error" && !head) {
+          const msgs = fresh?.messages ?? loaded?.messages;
+          if (msgs && msgs.length > 0) {
+            let idx = msgs.length - 1;
+            while (idx >= 0 && msgs[idx].role === "marker") idx--;
+            if (idx >= 0 && msgs[idx].role === "user") {
+              const lastUser = msgs[idx];
+              const hasAssistantAfter = msgs.slice(idx + 1).some((m) => m.role === "assistant");
+              if (!hasAssistantAfter && lastUser.content && lastUser.id) {
+                await api.truncateInclusive(sessionId, lastUser.id);
+                const reloaded = await api.getSession(
+                  sessionId,
+                  activeRequestForSession(get(), sessionId),
+                );
+                if (get().currentSession?.id === sessionId) {
+                  set({ currentSession: reloaded });
+                }
+                await get().sendUserMessage(
+                  lastUser.content,
+                  lastUser.attachments ?? [],
+                  null,
+                  {},
+                  sessionId,
+                );
+              }
+            }
+          }
         }
       })().catch(() => {});
     }
@@ -2090,6 +2189,17 @@ export const useStore = create<AppState>((set, get) => ({
       const priorSlot = get().sessionStreams[sessionId];
       const priorSession =
         get().currentSession?.id === sessionId ? get().currentSession : null;
+      const optimisticSystemNotification: Message | null =
+        options.skipOptimisticUser && meta?.type === "system_notification"
+          ? {
+              id: `pending-user-${requestId}`,
+              role: "user",
+              content: runContent,
+              attachments: runAttachments,
+              created_at: Date.now(),
+              meta,
+            }
+          : null;
       const initialSlot: SessionStream = {
         requestId,
         streamingMessageId: tempId,
@@ -2139,7 +2249,11 @@ export const useStore = create<AppState>((set, get) => ({
         };
       });
       try {
-        ensureSessionEventSubscription(sessionId, (sid, event) => get().handleSessionEngineEvent(sid, event));
+        ensureSessionEventSubscription(
+          sessionId,
+          (sid, event) => get().handleSessionEngineEvent(sid, event),
+          { force: true },
+        );
         // 传空数组：后端会优先用 session.enabled_tools，再 fallback 到全局 settings。
         // 工具的开关现在统一在「设置 → 对话设置」配置。
         await api.sendMessage(

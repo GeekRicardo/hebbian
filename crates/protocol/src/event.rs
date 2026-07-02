@@ -257,6 +257,9 @@ pub enum EventPayload {
     },
 
     // —— 上下文 ——
+    ContextCompactionStarted {
+        before_tokens: usize,
+    },
     ContextCompacted {
         before_tokens: usize,
         after_tokens: usize,

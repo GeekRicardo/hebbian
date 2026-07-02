@@ -688,6 +688,12 @@ function ChatInputInner({
   return (
     <div className={cn("pl-2 pr-4 pt-0 pb-3 text-sm", isStreaming && "chat-input-streaming")}>
       <div className="pt-0 relative">
+        {compacting && (
+          <div className="mb-2 flex items-center gap-2 rounded-2xl border border-blue-500/20 bg-blue-500/8 px-3 py-2 text-xs text-blue-700 shadow-sm dark:text-blue-300">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <span>正在压缩上下文…</span>
+          </div>
+        )}
         {/* 白色输入卡片 */}
         <div
           ref={dropCardRef}

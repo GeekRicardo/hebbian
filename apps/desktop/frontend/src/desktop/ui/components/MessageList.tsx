@@ -17,6 +17,7 @@ import { memo, useMemo } from "react";
 import { MessageBubble } from "./MessageBubble";
 import { reorderForWakeupView } from "./liveTimelineOrder";
 import type { Message, Prompt, MemoryWriteItem, HookOutcome, GoalOutcome } from "@/desktop/ui/types";
+import { usePerfRender } from "@/desktop/ui/store/perfMonitor";
 
 interface FindCtx {
   query: string;
@@ -83,6 +84,7 @@ export const MessageList = memo(function MessageList({
   undoableCompactionIds,
   onDelete,
 }: MessageListProps) {
+  usePerfRender("MessageList");
   /**
    * 把 messages 转成 (m, i, baseMatchIdx) 元组：每条消息在「全局命中数组」里
    * 的起始下标（matchBaseIdx）—— FindBar 高亮跳转时用全局 index 定位。

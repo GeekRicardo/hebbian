@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use agent_core::{
+    agent_loop::RunResumeState,
     context::transcript::Transcript,
     definition::AgentDefinition,
     edits::EditsWorktree,
@@ -21,10 +22,11 @@ use agent_core::{
     read_state::ReadStateTracker,
     session_hub::SessionRuntimeState,
     storage::{
-        sessions::{self as sessions, Message, Role},
+        run_checkpoint, sessions::{self as sessions, Message, Role},
         sessions_dir, settings as settings_store,
     },
     tools::{background, skill::default_skill_dirs},
+    wakeup::WakeupScheduler,
     workspace::Workspace,
     Harness, Session as CoreSession, SessionConfig, TurnObserver, TurnOutcome,
 };
@@ -39,7 +41,7 @@ use model_gateway::{
 };
 use protocol::{
     ApprovalDecision, Event as AgentEvent, PermissionKind, PermissionRequestId, QuestionOption,
-    UserAnswer,
+    ResumeCause, UserAnswer,
 };
 use std::collections::HashMap;
 use tokio::sync::mpsc;
@@ -235,7 +237,9 @@ impl RuntimeRegistry {
 ///
 /// hebcore 二进制与 hebweb 升格为 hebcore 时各自在启动处调一次（一个进程一个 global handler）。
 pub fn register_wakeup_resume_handler(ctx: Arc<crate::transport::TransportCtx>) {
-    agent_core::wakeup::WakeupScheduler::global().set_resume_handler(Arc::new(move |event| {
+    let data_dir = ctx.data_dir.clone();
+    let scheduler = agent_core::wakeup::WakeupScheduler::global();
+    scheduler.set_resume_handler(Arc::new(move |event| {
         let ctx = ctx.clone();
         // ResumeHandler 是同步闭包，而按 session 取运行时是 async（RwLock）——spawn 一条
         // 短 task 完成注入。handler 在 WakeupDispatcher 的 tokio task 里被调，spawn 安全。
@@ -270,6 +274,8 @@ pub fn register_wakeup_resume_handler(ctx: Arc<crate::transport::TransportCtx>) 
             }
         });
     }));
+    // 进程重启后恢复挂起的 cron（必须在 set_resume_handler 之后，否则到点无 handler）
+    scheduler.recover_pending_crons(&data_dir);
 }
 
 // ─── Observer ──────────────────────────────────────────────────────────────
@@ -547,7 +553,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, input: TurnInput) -> Result<
             // surface 主对话：tag=Main（前端不额外标记，§4.11）。
             call_tag: model_gateway::types::ModelCallTag::Main,
             data_dir: Some(data_dir.to_path_buf()),
-            phase: Some(phase),
+            phase: Some(phase.clone()),
             global_rules,
             rules_files,
             edits_worktree: Some(edits_worktree),
@@ -563,12 +569,48 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, input: TurnInput) -> Result<
     let pending_inputs_accepting = Arc::new(AtomicBool::new(true));
     let consumed_inputs = Arc::new(Mutex::new(Vec::new()));
 
-    let mut handle = core_session.run_with_runtime_inputs(
-        cancel_flag.clone(),
-        Some(pending_inputs.clone()),
-        Some(consumed_inputs.clone()),
-        Some(pending_inputs_accepting.clone()),
-    );
+    // 架构 §4.12.6：本 session 若有挂起 checkpoint，走 resume 路径（进程重启后亦生效）。
+    // 与 desktop chat.rs:418-451 行为对称。
+    let resume_state = run_checkpoint::load(data_dir, session_id)
+        .ok()
+        .flatten()
+        .map(|ckpt| {
+            // checkpoint 已被本 turn 接管，删文件 + 摘除调度器对该 run 的登记，
+            // 防止 cron/bg-task 之后又触发一次重复 resume。
+            let _ = run_checkpoint::delete(data_dir, session_id);
+            WakeupScheduler::global().discard_run(session_id, &ckpt.run_id);
+            let cause = match &ckpt.phase {
+                agent_core::storage::run_checkpoint::RunPhase::AwaitingCron {
+                    reason, ..
+                } => ResumeCause::CronFired {
+                    original_reason: reason.clone(),
+                },
+                agent_core::storage::run_checkpoint::RunPhase::AwaitingBackgroundTask {
+                    task_id, ..
+                } => ResumeCause::BgTaskFinished {
+                    task_id: task_id.clone(),
+                    exit_code: None,
+                },
+            };
+            RunResumeState::from_checkpoint(ckpt, cause)
+        });
+
+    let mut handle = match resume_state {
+        Some(rs) => core_session.resume_with_runtime_inputs(
+            cancel_flag.clone(),
+            Some(pending_inputs.clone()),
+            Some(consumed_inputs.clone()),
+            Some(pending_inputs_accepting.clone()),
+            Some(phase.clone()),
+            rs,
+        ),
+        None => core_session.run_with_runtime_inputs(
+            cancel_flag.clone(),
+            Some(pending_inputs.clone()),
+            Some(consumed_inputs.clone()),
+            Some(pending_inputs_accepting.clone()),
+        ),
+    };
 
     // 把活 run 的真 HitlGate 挂进运行时状态：surface 的审批 / 提问回应经 transport
     // 直接戳它（§7.8.5），observer 不再自造 oneshot gate 阻塞 drive loop。

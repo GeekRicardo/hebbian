@@ -204,6 +204,28 @@
   }
 }
 
+.tool-preview-chat-canvas {
+  background:
+    radial-gradient(ellipse at 16% 12%, rgb(167 243 208 / 0.55), transparent 30%),
+    radial-gradient(ellipse at 84% 20%, rgb(125 211 252 / 0.5), transparent 28%),
+    radial-gradient(ellipse at 60% 80%, rgb(178 245 234 / 0.45), transparent 32%),
+    linear-gradient(135deg, rgb(214 255 240 / 0.7), rgb(200 235 255 / 0.6) 50%, rgb(220 252 245 / 0.65));
+}
+
+.tool-render-preview [data-message-role="assistant"] .markdown-segment {
+  background: rgb(255 255 255 / 0.08) !important;
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.48),
+    inset 0 2px 4px rgb(255 255 255 / 0.3),
+    0 6px 18px rgb(15 23 42 / 0.06);
+  backdrop-filter: blur(28px) saturate(1.7);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
+}
+
+.tool-render-preview [style*="--rail-gradient"] {
+  margin-block: -3px;
+}
+
 @keyframes text-shimmer {
   0% {
     background-position: 120% 0;

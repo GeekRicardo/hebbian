@@ -235,7 +235,19 @@ fn is_unrestricted_device(path: &Path) -> bool {
 
 fn is_temporary_path(path: &Path) -> bool {
     let canon = canonicalize_lossy(path);
-    canon.starts_with(canonicalize_lossy(&std::env::temp_dir()))
+    // macOS 上 `std::env::temp_dir()` 返回 `$TMPDIR`（/var/folders/...），
+    // 但用户也可能往 /tmp（→ /private/tmp）写。两个都视为系统临时目录。
+    if canon.starts_with(canonicalize_lossy(&std::env::temp_dir())) {
+        return true;
+    }
+    // /tmp 在 macOS 上是 /private/tmp 的 symlink，canonicalize 后统一判定
+    let system_tmp = PathBuf::from("/tmp");
+    if let Ok(tmp_canon) = std::fs::canonicalize(&system_tmp) {
+        if canon.starts_with(tmp_canon) {
+            return true;
+        }
+    }
+    false
 }
 
 fn canonicalize_lossy(path: &Path) -> PathBuf {
@@ -296,14 +308,29 @@ mod tests {
     }
 
     #[test]
-    fn add_allowed_path_takes_effect_immediately() {
+    fn allows_paths_under_tmp_slash() {
         let tmp = tempfile::tempdir().unwrap();
-        let extra = tempfile::tempdir().unwrap();
         let ws = Workspace::new(tmp.path(), Vec::new());
 
-        assert!(!ws.allows(&extra.path().join("x")));
-        ws.add_allowed_path(extra.path());
-        assert!(ws.allows(&extra.path().join("x")));
+        assert!(ws.allows(Path::new("/tmp/hebbian-tmp-test-file.txt")));
+        assert!(ws.allows(Path::new("/tmp/hebbian-tmp-test-dir/output.log")));
+        assert!(ws.allows(Path::new("/private/tmp/hebbian-tmp-test.txt")));
+    }
+
+    #[test]
+    fn add_allowed_path_takes_effect_immediately() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 用一个不在系统临时目录下的路径做"外部"测试
+        let outside = std::env::current_dir()
+            .unwrap()
+            .join("__hebbian_test_outside_workspace");
+        let _ = std::fs::create_dir_all(&outside);
+        let ws = Workspace::new(tmp.path(), Vec::new());
+
+        assert!(!ws.allows(&outside.join("x")));
+        ws.add_allowed_path(&outside);
+        assert!(ws.allows(&outside.join("y")));
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[test]

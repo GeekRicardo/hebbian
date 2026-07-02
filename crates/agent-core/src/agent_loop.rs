@@ -1,5 +1,5 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
 use std::time::Instant;
@@ -610,6 +610,16 @@ pub async fn run_loop(
 
     let result: Result<AssistantOutput, ModelError> = loop {
         if cancellation::is_cancelled(&cancel) {
+            // Stop 时如果有排队待注入的 user message，先 drain 进 transcript + 落盘再 cancel——
+            // 否则 calling surface 侧的 pending_inputs.clear() 会把它们丢掉。drain 后的消息
+            // 留在 transcript 里（route §7.8.6 的 consumed_pending_inputs 由 surface 读取），
+            // surface 据此判断 cancel 后是否立刻起新 run 处理这些插队输入。
+            drain_pending_inputs(
+                pending_inputs.as_ref(),
+                consumed_pending_inputs.as_ref(),
+                persister.as_ref(),
+                transcript,
+            );
             debug!("run cancelled");
             hitl.cancel_all_pending();
             // 架构 §4.8.1 修订：cancel 走 Notification(level="cancel")，
@@ -705,6 +715,9 @@ pub async fn run_loop(
                 entries = compact_req.entries.len(),
                 "context compaction started"
             );
+            emit(EventPayload::ContextCompactionStarted {
+                before_tokens: compact_before_tokens,
+            });
             let compaction_outcome =
                 compact_request_with_llm(client, compact_req, compact_before_tokens).await;
             let compact_duration_ms = compact_start.elapsed().as_millis() as u64;
@@ -900,6 +913,18 @@ pub async fn run_loop(
         let dump_request = model_io_dump.as_ref().map(|_| req.clone());
 
         let stream_tool_call_offset = tool_call_dispatch_offset;
+        let stream_tool_delta_count = Arc::new(AtomicUsize::new(0));
+        let stream_tool_delta_with_id_count = Arc::new(AtomicUsize::new(0));
+        let stream_tool_delta_with_name_count = Arc::new(AtomicUsize::new(0));
+        let stream_tool_delta_argument_bytes = Arc::new(AtomicUsize::new(0));
+        let stream_tool_delta_count_for_log = stream_tool_delta_count.clone();
+        let stream_tool_delta_with_id_count_for_log = stream_tool_delta_with_id_count.clone();
+        let stream_tool_delta_with_name_count_for_log = stream_tool_delta_with_name_count.clone();
+        let stream_tool_delta_argument_bytes_for_log = stream_tool_delta_argument_bytes.clone();
+        let stream_tool_delta_count_for_cb = stream_tool_delta_count.clone();
+        let stream_tool_delta_with_id_count_for_cb = stream_tool_delta_with_id_count.clone();
+        let stream_tool_delta_with_name_count_for_cb = stream_tool_delta_with_name_count.clone();
+        let stream_tool_delta_argument_bytes_for_cb = stream_tool_delta_argument_bytes.clone();
         let on_event_for_stream = on_event.clone();
         let state_for_stream = state.clone();
         // 走 stream 的条件：调用方要求流式 + (本轮无工具 || provider 支持流式工具调用)。
@@ -925,12 +950,25 @@ pub async fn run_loop(
                 ModelStreamEvent::ReasoningDuration { ms } => {
                     EventPayload::ReasoningDuration { ms }
                 }
-                ModelStreamEvent::ToolCallDelta(delta) => EventPayload::ToolCallDelta {
-                    index: stream_tool_call_offset + delta.index,
-                    id: delta.id,
-                    name: delta.name,
-                    arguments_delta: delta.arguments_delta,
-                },
+                ModelStreamEvent::ToolCallDelta(delta) => {
+                    stream_tool_delta_count_for_cb.fetch_add(1, Ordering::Relaxed);
+                    if delta.id.as_deref().is_some_and(|id| !id.trim().is_empty()) {
+                        stream_tool_delta_with_id_count_for_cb.fetch_add(1, Ordering::Relaxed);
+                    }
+                    if delta.name.as_deref().is_some_and(|name| !name.trim().is_empty()) {
+                        stream_tool_delta_with_name_count_for_cb.fetch_add(1, Ordering::Relaxed);
+                    }
+                    if let Some(arguments) = delta.arguments_delta.as_deref() {
+                        stream_tool_delta_argument_bytes_for_cb
+                            .fetch_add(arguments.len(), Ordering::Relaxed);
+                    }
+                    EventPayload::ToolCallDelta {
+                        index: stream_tool_call_offset + delta.index,
+                        id: delta.id,
+                        name: delta.name,
+                        arguments_delta: delta.arguments_delta,
+                    }
+                }
             };
             on_event_for_stream(state_for_stream.event(payload));
         };
@@ -960,6 +998,16 @@ pub async fn run_loop(
                         delay_ms: delay.as_millis() as u64,
                         reason: e.to_string(),
                     });
+                    info!(
+                        attempt = retry_attempt,
+                        max = MAX_MODEL_RETRIES,
+                        stream_tool_delta_count = stream_tool_delta_count_for_log.load(Ordering::Relaxed),
+                        stream_tool_delta_with_id_count = stream_tool_delta_with_id_count_for_log.load(Ordering::Relaxed),
+                        stream_tool_delta_with_name_count = stream_tool_delta_with_name_count_for_log.load(Ordering::Relaxed),
+                        stream_tool_delta_argument_bytes = stream_tool_delta_argument_bytes_for_log.load(Ordering::Relaxed),
+                        error = %e,
+                        "model call retry after partial stream"
+                    );
                     if !backoff_or_cancel(delay, &cancel).await {
                         break Err(ModelError::Cancelled);
                     }
@@ -1010,14 +1058,19 @@ pub async fn run_loop(
                 finish,
                 reasoning_signature: _,
             } => {
-                last_finish = finish;
                 info!(
                     duration_ms = call_duration_ms,
                     input_tokens = usage.input_tokens,
                     output_tokens = usage.output_tokens,
                     text_len = text.len(),
+                    stream_tool_delta_count = stream_tool_delta_count.load(Ordering::Relaxed),
+                    stream_tool_delta_with_id_count = stream_tool_delta_with_id_count.load(Ordering::Relaxed),
+                    stream_tool_delta_with_name_count = stream_tool_delta_with_name_count.load(Ordering::Relaxed),
+                    stream_tool_delta_argument_bytes = stream_tool_delta_argument_bytes.load(Ordering::Relaxed),
+                    finish = ?finish,
                     "model done"
                 );
+                last_finish = finish;
                 record_request_usage(
                     &usage,
                     request_estimated_tokens,
@@ -1313,6 +1366,10 @@ pub async fn run_loop(
                 info!(
                     duration_ms = call_duration_ms,
                     calls_count = calls.len(),
+                    stream_tool_delta_count = stream_tool_delta_count.load(Ordering::Relaxed),
+                    stream_tool_delta_with_id_count = stream_tool_delta_with_id_count.load(Ordering::Relaxed),
+                    stream_tool_delta_with_name_count = stream_tool_delta_with_name_count.load(Ordering::Relaxed),
+                    stream_tool_delta_argument_bytes = stream_tool_delta_argument_bytes.load(Ordering::Relaxed),
                     "model requested tool calls"
                 );
                 record_request_usage(

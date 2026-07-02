@@ -142,7 +142,7 @@ impl BackgroundShell {
             .clone()
     }
 
-    fn append(&self, prefix: Option<&str>, bytes: &[u8]) {
+    pub(crate) fn append(&self, prefix: Option<&str>, bytes: &[u8]) {
         {
             let mut inner = self.inner.lock().expect("background shell mutex");
             if let Some(p) = prefix {
@@ -156,7 +156,7 @@ impl BackgroundShell {
         self.notify.notify_waiters();
     }
 
-    fn finish(&self, state: ShellState) {
+    pub(crate) fn finish(&self, state: ShellState) {
         {
             let mut inner = self.inner.lock().expect("background shell mutex");
             // 已经是终态就保留首次记录，避免 waiter / kill 互踩
@@ -521,6 +521,69 @@ impl BgTaskRegistry {
             .get(task_id)
             .cloned()
     }
+
+    /// 注册一个 PTY 子进程为后台任务（仅 PID 追踪，无 tokio Child）。
+    /// PTY 输出的灌入和进程退出检测由调用方自己管理，
+    /// 本方法只创建壳并登记，让 BashOutput/KillShell 能找到这个任务。
+    pub fn register_pty_background(
+        &self,
+        command: String,
+        cwd: String,
+        pid: u32,
+        log_dir: Option<&Path>,
+    ) -> Arc<BackgroundShell> {
+        let task_id = self.next_id();
+        let (kill_tx, kill_rx) = oneshot::channel();
+
+        let (log_path, _log_writer) = match log_dir {
+            Some(dir) => {
+                let path = dir.join(format!("{task_id}.log"));
+                if let Err(e) = std::fs::create_dir_all(dir) {
+                    tracing::warn!(?dir, error = %e, "pty bg: mkdir log dir failed");
+                    (None, None::<Arc<AsyncMutex<File>>>)
+                } else {
+                    match std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)
+                    {
+                        Ok(_file) => (Some(path), None::<Arc<AsyncMutex<File>>>),
+                        Err(e) => {
+                            tracing::warn!(?path, error = %e, "pty bg: open log file failed");
+                            (None, None::<Arc<AsyncMutex<File>>>)
+                        }
+                    }
+                }
+            }
+            None => (None, None::<Arc<AsyncMutex<File>>>),
+        };
+
+        let shell = Arc::new(BackgroundShell::new(
+            task_id,
+            command,
+            cwd,
+            true, // is_background
+            kill_tx,
+            log_path,
+        ));
+
+        {
+            let mut inner = self.inner.lock().expect("background shells mutex");
+            if inner.shells.len() >= MAX_BACKGROUND_SHELLS {
+                if let Some(idx) =
+                    inner.shells.iter().position(|s| s.state().is_terminal())
+                {
+                    inner.shells.remove(idx);
+                }
+            }
+            inner.shells.push(shell.clone());
+        }
+
+        // 只等 kill 信号——PTY 退出检测由调用方通过 shell.finish() 通知
+        spawn_pty_kill_waiter(shell.clone(), pid, kill_rx);
+
+        shell
+    }
 }
 
 fn spawn_reader<R>(
@@ -574,7 +637,12 @@ fn spawn_waiter(shell: Arc<BackgroundShell>, mut child: Child, kill_rx: oneshot:
                 shell.finish(state);
             }
             _ = kill_rx => {
-                let _ = child.start_kill();
+                // 杀整个进程组而非仅直接子进程：bash -lc 'find /' 里
+                // start_kill() 只杀 bash，实际命令（find）变成 PPID=1 孤儿。
+                let pid = child.id().unwrap_or_default() as i32;
+                if pid > 0 {
+                    unsafe { libc::kill(-pid, libc::SIGKILL); }
+                }
                 let _ = child.wait().await;
                 shell.finish(ShellState::Killed);
             }
@@ -586,6 +654,22 @@ fn exit_state(status: ExitStatus) -> ShellState {
     ShellState::Exited {
         code: status.code(),
     }
+}
+
+/// PTY 后台任务的 kill 监听：收到 kill 信号后杀进程组。
+/// PTY 的退出检测由调用方通过 shell.finish() 通知，不在此处。
+fn spawn_pty_kill_waiter(
+    shell: Arc<BackgroundShell>,
+    pid: u32,
+    kill_rx: oneshot::Receiver<()>,
+) {
+    tokio::spawn(async move {
+        let _ = kill_rx.await;
+        if pid > 0 {
+            unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+        }
+        shell.finish(ShellState::Killed);
+    });
 }
 
 #[cfg(test)]

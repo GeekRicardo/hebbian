@@ -310,17 +310,22 @@ export function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionSt
     // bubble——与 chat.rs `had_pending_during_run` 落盘语义对齐：
     //   - 无插队：整个 Run 累积成一条 assistant message（多 Turn 共用一个 bubble）
     //   - 有插队：按 Turn 分段落盘，每段对应一个 assistant message
-    // 判定：assistantInsertPos 之后的 liveTimeline 里出现过**用户插队** → 切；
+    // 判定：assistantInsertPos 之后的 liveTimeline 里出现过**分段触发项** → 切；
     // 否则维持当前 streamingText / streamingParts 累积，下个 Turn 接着 stream。
-    // 系统通知（system_notification）不算插队——它是某 tool_call 的异步回应，由
-    // wakeup 排序钉到对应 assistant 段之后，不该触发 assistant 分段。
+    // 分段触发项 = 真正的用户插队消息，或 cron_fired 定时唤醒。
+    //   - bg_task_finished：某 tool_call 的异步回应，由 wakeup 排序钉到对应 assistant
+    //     段之后，不是新对话轮次，不分段——继续累积进当前 bubble。
+    //   - cron_fired：定时唤醒是一次全新的对话轮次（后端也落成独立 assistant message），
+    //     必须冻结分段，否则每轮唤醒的输出全叠进同一个 bubble，无限堆叠、tool 卡片糊成一团。
+    const isSegmentTrigger = (item: LiveTimelineItem): boolean => {
+      if (item.kind !== "user_injected") return false;
+      const meta = item.message.meta;
+      if (meta?.type !== "system_notification") return true; // 真正的用户插队
+      return meta.kind === "cron_fired"; // 系统通知里只有 cron 唤醒算新轮次
+    };
     const hasPendingInjection = slot.liveTimeline
       .slice(slot.assistantInsertPos)
-      .some(
-        (item) =>
-          item.kind === "user_injected" &&
-          item.message.meta?.type !== "system_notification"
-      );
+      .some(isSegmentTrigger);
     if (!hasPendingInjection) return slot;
     if (slot.streamingText.length === 0 && slot.streamingParts.length === 0) {
       // 插队消息已挂在末尾但当前 Turn 没产出（罕见，例如审批拒绝直接终止）——

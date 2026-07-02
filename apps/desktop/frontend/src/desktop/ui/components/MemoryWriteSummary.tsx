@@ -17,7 +17,7 @@ export function MemoryWriteSummary({ items }: { items: MemoryWriteItem[] }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 text-[10px] text-muted-foreground/80 hover:text-muted-foreground"
+        className="flex items-center gap-1.5 text-[11px] text-muted-foreground/80 hover:text-muted-foreground"
       >
         <NotebookPen className="h-3.5 w-3.5" />
         <span>本轮写入 {items.length} 条记忆</span>

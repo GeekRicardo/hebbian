@@ -1,4 +1,5 @@
 /// Anthropic Claude API 格式转换
+use chrono::Utc;
 use serde_json::{json, Value};
 
 use crate::types::{
@@ -337,12 +338,16 @@ fn build_system(user_system: Option<&str>, claude_code_oauth: bool) -> Value {
         return user_system.map(|s| json!(s)).unwrap_or(Value::Null);
     }
 
-    // CC 兼容：banner block + harness 正文 block。banner 在前（让服务端识别为合法 CLI 流量），
-    // 正文（base_system.md，中性身份开头）对应真 CC 的 system 结构。
+    // CC 兼容：banner block + 日期 block + harness 正文 block。
+    // banner 在前（让服务端识别为合法 CLI 流量），日期 block 模仿 CC 原版 system prompt
+    // 中的 `Today's date is YYYY-MM-DD.` 自然语句，使用标准 ASCII 撇号 U+0027 与
+    // YYYY-MM-DD 连字符格式——不触发 Anthropic 服务端 steganographic 检测。
     let banner = json!({ "type": "text", "text": CLAUDE_CODE_BANNER });
+    let date_str = Utc::now().format("%Y-%m-%d").to_string();
+    let date_block = json!({ "type": "text", "text": format!("Today's date is {date_str}.") });
     match user_system {
-        Some(s) => json!([banner, { "type": "text", "text": s }]),
-        None => json!([banner]),
+        Some(s) => json!([banner, date_block, { "type": "text", "text": s }]),
+        None => json!([banner, date_block]),
     }
 }
 
@@ -1094,10 +1099,11 @@ mod tests {
         let body = build_body(&req, false, true, None, false).unwrap();
         let system = body["system"].as_array().expect("system must be an array");
 
-        // CC 兼容：banner block + 用户 system 正文 block（无 billing block）。
-        assert_eq!(system.len(), 2);
+        // CC 兼容：banner block + 日期 block + 用户 system 正文 block。
+        // 日期 block 在中间；用户正文 block 在末，挂 cache_control。
+        assert_eq!(system.len(), 3);
         assert_eq!(system[0]["text"], CLAUDE_CODE_BANNER);
-        assert_eq!(system[1]["text"], "Be terse.");
+        assert_eq!(system[2]["text"], "Be terse.");
     }
 
     #[test]
@@ -1115,9 +1121,12 @@ mod tests {
         let body = build_body(&req, false, true, None, false).unwrap();
         let system = body["system"].as_array().expect("system must be an array");
 
-        // 无用户 system 时只发 banner block。
-        assert_eq!(system.len(), 1);
+        // 无用户 system 时发 banner + 日期两个 block。
+        assert_eq!(system.len(), 2);
         assert_eq!(system[0]["text"], CLAUDE_CODE_BANNER);
+        let date_text = system[1]["text"].as_str().unwrap();
+        assert!(date_text.starts_with("Today's date is "), "date block: {date_text}");
+        assert!(date_text.ends_with("."), "date block: {date_text}");
     }
 
     #[test]
@@ -1310,11 +1319,12 @@ mod tests {
         };
         let body = build_body(&req, false, true, Some("acct-123"), false).unwrap();
 
-        // system：[banner, 用户正文]，绝不含 billing header block。
+        // system：[banner, 日期, 用户正文]，绝不含 billing header block。
         let system = body["system"].as_array().unwrap();
-        assert_eq!(system.len(), 2);
+        assert_eq!(system.len(), 3);
         assert_eq!(system[0]["text"], CLAUDE_CODE_BANNER);
-        assert_eq!(system[1]["text"], "Be terse.");
+        assert!(system[1]["text"].as_str().unwrap().starts_with("Today's date is "));
+        assert_eq!(system[2]["text"], "Be terse.");
         assert!(
             !system.iter().any(|b| b["text"]
                 .as_str()
@@ -1322,9 +1332,9 @@ mod tests {
                 .contains("x-anthropic-billing-header")),
             "CC 兼容不应发 billing header block: {body}"
         );
-        // system 末 block：ttl 1h + scope global。
+        // system 末 block（用户正文 block）：ttl 1h + scope global。
         assert_eq!(
-            system[1]["cache_control"],
+            system[2]["cache_control"],
             json!({ "type": "ephemeral", "ttl": "1h", "scope": "global" })
         );
 

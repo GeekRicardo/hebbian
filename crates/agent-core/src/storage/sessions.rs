@@ -1557,6 +1557,42 @@ pub fn load_with_partial_recovery(data_dir: &Path, id: &str) -> AppResult<Sessio
     Ok(session)
 }
 
+/// 扫描所有 session，把残留的死 partial 折叠进各自的 session.jsonl（架构 §4.9.3 / §7.8.5）。
+///
+/// 在 daemon 启动时调用一次，确保上次进程崩溃/被杀时残留的 partial 都被恢复——
+/// 不需要等用户打开对应 session 才触发。活的 partial（写者还在跑）跳过不处理。
+///
+/// 返回成功恢复的 partial 数量（跳过、失败都不计）。
+pub fn recover_all_dead_partials(data_dir: &Path) -> usize {
+    let sessions_dir = data_dir.join("sessions");
+    if !sessions_dir.exists() {
+        return 0;
+    }
+    let Ok(entries) = std::fs::read_dir(&sessions_dir) else {
+        return 0;
+    };
+    let mut recovered = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(sid) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        match recover_and_append_interrupted_partials(data_dir, sid) {
+            Ok(n) => recovered += n,
+            Err(e) => {
+                tracing::warn!(session = %sid, error = %e, "daemon 启动恢复 partial 失败");
+            }
+        }
+    }
+    if recovered > 0 {
+        tracing::info!(recovered, "daemon 启动扫描：折叠了残留的 dead partial");
+    }
+    recovered
+}
+
 /// 把活 partial 的已累积流式内容拼进 session（内存态、不落盘）。死 partial 已被
 /// `recover_and_append_interrupted_partials` 处理掉，这里只剩活的。
 fn append_live_partials(data_dir: &Path, id: &str, session: &mut Session) {
@@ -3652,5 +3688,90 @@ mod tests {
             .map(|m| m.id.clone())
             .unwrap();
         assert_eq!(live.id, id2, "同一活 partial 多次 load 应返回稳定 id");
+    }
+
+    /// 回归：daemon 启动扫描应把死 partial 折叠进 session.jsonl，活的跳过；
+    /// 与 per-session load_with_partial_recovery 同语义，但批量化全量扫描。
+    #[test]
+    fn recover_all_dead_partials_scans_all_sessions() {
+        use super::super::sessions_dir;
+
+        let dir = temp_data_dir("recover-all");
+        // session A：死 partial——应被折叠
+        let a = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        let a_sid = a.id.clone();
+        let a_msg_id = "a1";
+        sessions_dir::append_partial(
+            &dir,
+            &a_sid,
+            a_msg_id,
+            &sessions_dir::PartialFragment::Text {
+                text: "A 的残留".to_string(),
+            },
+        )
+        .unwrap();
+        // 确保 .partial.jsonl 文件存在（不含 .live，老 partial 或死 partial）
+        assert!(
+            sessions_dir::partial_path(&dir, &a_sid, a_msg_id).exists(),
+            "死 partial 文件应存在"
+        );
+
+        // session B：活 partial（有 .live 锁）——应跳过
+        let b = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        let b_sid = b.id.clone();
+        let b_msg_id = "b1";
+        let _live_guard =
+            sessions_dir::PartialLiveGuard::acquire(&dir, &b_sid, b_msg_id).unwrap();
+        sessions_dir::append_partial(
+            &dir,
+            &b_sid,
+            b_msg_id,
+            &sessions_dir::PartialFragment::Text {
+                text: "B 的活内容".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(
+            sessions_dir::partial_path(&dir, &b_sid, b_msg_id).exists(),
+            "活 partial 文件应存在"
+        );
+
+        // 全量扫描
+        let n = recover_all_dead_partials(&dir);
+        assert_eq!(n, 1, "应只恢复一个死 partial（活的跳过）");
+
+        // session A：partial 已折叠进 jsonl
+        let a_loaded = load(&dir, &a_sid).unwrap();
+        let has_a_recovered = a_loaded
+            .messages
+            .iter()
+            .any(|m| m.role == Role::Assistant && m.content.contains("A 的残留"));
+        assert!(has_a_recovered, "死 partial A 应被折叠成 assistant message");
+        let has_a_interrupted = a_loaded
+            .messages
+            .iter()
+            .any(|m| matches!(m.meta.as_ref(), Some(MessageMeta::Interrupted)));
+        assert!(has_a_interrupted, "死 partial A 后应紧跟 Interrupted marker");
+        assert!(
+            !sessions_dir::partial_path(&dir, &a_sid, a_msg_id).exists(),
+            "恢复后死 partial 文件应被删除"
+        );
+
+        // session B：活 partial 未被改动
+        assert!(
+            sessions_dir::partial_path(&dir, &b_sid, b_msg_id).exists(),
+            "活 partial 文件不应被删除"
+        );
+        let b_loaded = load_with_partial_recovery(&dir, &b_sid).unwrap();
+        let has_b_live = b_loaded
+            .messages
+            .iter()
+            .any(|m| m.role == Role::Assistant && m.content.contains("B 的活内容"));
+        assert!(has_b_live, "活 partial B 应在 load 时被渲染（内存态、不落盘）");
+
+        // 多次扫描幂等：第二次扫描不应再折叠 A
+        let n2 = recover_all_dead_partials(&dir);
+        assert_eq!(n2, 0, "幂等：二次扫描不应再恢复任何东西");
+        drop(_live_guard);
     }
 }
