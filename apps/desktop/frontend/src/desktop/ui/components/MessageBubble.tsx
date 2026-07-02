@@ -1764,7 +1764,7 @@ function runningRailTone(entry?: ToolActivityItem): RailTone | null {
 function runningRailColor(tone: RailTone): string {
   if (tone === "done") return "#34d399";
   if (tone === "running") return "#38bdf8";
-  return "#ec4899";
+  return "#f59e0b";
 }
 
 function runningRailTimelineGradient(items: ToolActivityItem[]): string {

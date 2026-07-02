@@ -10699,7 +10699,13 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: Desktop/hebweb 右侧工作台旁支对话 UI；不改协议、core、持久化，不破坏兼容。
 - **留尾巴**: 无。
 
-### 2026-06-30 — 调整系统临时目录访问免 PathAccess 审批
+### 2026-07-02 — 修复 `is_temporary_path` 未覆盖 `/tmp` 路径的问题
+
+- **Why**: 上一轮改动（2026-06-30）用 `std::env::temp_dir()` 判定系统临时目录，但 macOS 上 `std::env::temp_dir()` 返回 `$TMPDIR`（`/var/folders/...`），而 `/tmp` → `/private/tmp`（symlink），两者不匹配，导致写入 `/tmp` 仍然弹审批。
+- **改动**:
+  - [crates/agent-core/src/workspace.rs](../crates/agent-core/src/workspace.rs): `is_temporary_path` 增加 `/tmp` 的 `canonicalize` 检查，同时覆盖 `$TMPDIR` 和 `/tmp`（及 macOS 上的 `/private/tmp`）两类系统临时目录；新增 `allows_paths_under_tmp_slash` 回归测试并修复 `add_allowed_path_takes_effect_immediately` 中因 tempdir 落在 `$TMPDIR` 下导致的断言失效。
+- **影响范围**: 仅 agent-core workspace.rs，不改协议、不破坏兼容。
+- **留尾巴**: 无。
 
 - **Why**: 用户希望 `/tmp` 路径不再弹审批、默认通过；临时目录是 agent 写复现脚本、中间产物和测试夹的高频安全边界，逐次 PathAccess 弹窗噪音大。
 - **改动**:
@@ -10780,7 +10786,7 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css): 新增运行中 tool 名称的 Text Shimmer 动画。
   - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `RunningActivityBlock` 去掉外层 button / border / radius / 背景 / 裁剪卡片，只保留透明固定高度滚动区域；折叠态高度调到 15rem；默认贴底滚到最新输出，但用户手动上滚后不再强拉，回到底部后恢复贴底；删除底部“展开运行详情”按钮，改为点击每段左轨展开/收起整个 group；tool/thinking 行标题继续只控制自己的详情。
   - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): thinking 行在运行中左轨和完成态详情里都可展开 `ReasoningScrollArea`，折叠态同行显示摘要；Task/TodoWrite 小方块图标补齐 inline-block / shrink-0 / transparent / shadow-none 等显式样式。
-  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 完成态 `已运行 xxx` 摘要与 content 外框左边缘对齐；运行左轨改为整条连续背景轨道，避免行与行之间露出白缝，thinking / running / done 之间自然过渡且不把 thinking 整段染成蓝色；统一 tool 行图标为固定 16px 盒子 + 14px 图标，避免 Edit / Read / Grep 等视觉大小不一致；streaming 中最后一个正在增长的 text 不再触发前一个 tool group 折叠，等后续 content 稳定后再收成 `已运行 xxx`。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 完成态 `已运行 xxx` 摘要与 content 外框左边缘对齐；运行左轨改为整条连续背景轨道，避免行与行之间露出白缝，thinking 改为更贴近蓝 / 绿 / 红状态体系的 amber 主色，和 running / done 自然过渡且不把 thinking 染成蓝色；统一 tool 行图标为固定 16px 盒子 + 14px 图标，避免 Edit / Read / Grep 等视觉大小不一致；streaming 中最后一个正在增长的 text 不再触发前一个 tool group 折叠，等后续 content 稳定后再收成 `已运行 xxx`。
 - **影响范围**: Desktop/hebweb 前端聊天消息渲染层与 dev 预览入口；不改协议、core、持久化，不破坏兼容。
 - **留尾巴**: fixture 是一次性快照；需要换数据时重新从目标 session/run 生成。
 
@@ -10880,3 +10886,77 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: agent-core（wakeup.rs 新 public 方法）/ surface-session（run_turn 逻辑扩展）/ Desktop 与 hebweb 启动点各加一行调用 / 前端两个组件改 format 函数。全部编译通过；6 个 wakeup 单测全 pass；TypeScript 类型检查通过。不破坏 session 兼容——仅读 `run_checkpoint.json`（老字段），不写新字段。
 - **留尾巴**: bg task 不恢复（子进程已死）；`run_turn` 的 checkpoint 恢复路径未覆盖桌面 `chat.rs` 的 `continue_run` / `inject_user_message` 分叉（hebcore 路径不存在这些调用方）；未给 `recover_pending_crons` 补单测（需构造假 sessions 目录，后续 P3）。
 - **关联**: §4.12 / §13 决策变更。
+
+### 2026-07-02 — 增加 OpenAI-compatible 流式工具调用终态观测日志
+
+- **Why**: session `202606291131-bccdf878` 的最新 assistant 输出在 Desktop 重载后有 6 个工具卡片保持蓝色未完成；现有 `model_io.jsonl` 只记录最终 `ModelResponse`，缺少 sub2api / OpenAI-compatible SSE 每帧工具 delta 与最终 Done/ToolCalls 分类之间的统计，无法判断是上游流返回了不完整 tool delta、重试残留，还是本地 finish 分类丢弃了工具槽位。
+- **改动**:
+  - [crates/model-gateway/src/providers/openai.rs](../crates/model-gateway/src/providers/openai.rs): Chat Completions streaming 路径统计 `tool_delta_frames` / 带 id/name 的 delta 数 / arguments 字节数 / tool slot 数 / dropped slot 数，并在 Done-with-delta 或丢弃不完整 slot 时打 `warn!`，正常 Done/ToolCalls 打结构化 `info!`。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): run 级统计 stream `ToolCallDelta` 数量、id/name 覆盖和 arguments 字节数，写入 `model done` / `model requested tool calls` / retry 日志，定位“已向 surface 发出 tool delta，但最终未进入工具执行分支”的断点。
+- **影响范围**: `model-gateway` OpenAI-compatible Chat Completions streaming 路径与 `agent-core` 观测日志；不改协议字段、不改 session 文件格式、不改前端渲染。
+- **留尾巴**: 本次只补观测，不改变 orphan tool_call 的落盘/渲染行为；拿到新日志后再决定是否在 persister 收尾处清理或标记未执行工具调用。
+
+### 2026-07-02 — 调整 Desktop 左侧 sidebar 卡片与窗口控制点位置
+
+- **Why**: 左侧 sidebar 最外层卡片顶部留白明显大于底部留白，macOS 三色窗口控制点悬在卡片外，视觉上不属于同一个容器。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/desktopShell.css](../apps/desktop/frontend/src/desktop/ui/components/desktopShell.css): 恢复浅色主题下 sidebar 外层卡片的边框、圆角、背景与阴影；把 sidebar 上下 padding 统一为 12px；缩短顶部拖拽留白并把三色控制点放进卡片左上角；给 tab 条补内部水平留白。
+- **影响范围**: Desktop frontend 纯样式调整；不改协议、不改 core、不改持久化、不影响 CLI / hebweb 行为。
+- **留尾巴**: 三色点仍是前端视觉占位，不接管系统原生窗口按钮行为；如需真正移动原生 traffic lights，需要另评估 Tauri/macOS 标题栏实现。
+
+### 2026-07-02 — 对齐记忆写入 marker 与 Stop hook 字号
+
+- **Why**: 用户看到同一条 assistant 气泡下方的「Stop 检查通过」与「本轮写入 N 条记忆」字号不一致，两个同级低调状态行视觉层级不统一。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx](../apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx): 将记忆写入摘要按钮字号从 10px 调整为 11px，并把横向间距对齐 Stop hook 摘要行。
+- **影响范围**: Desktop frontend 纯样式调整；不改协议、不改 core、不改记忆落盘格式，不影响 CLI / hebweb 行为。
+- **留尾巴**: 无。
+
+### 2026-07-02 — 修正 sidebar 顶部保留原生窗口按钮
+
+- **Why**: 上一条 sidebar 视觉调整把三色窗口控制点按前端占位点处理，虽然位置进了卡片，但会让用户误以为那三个点仍有关闭/最小化/全屏功能；实际需求是保留 macOS 原生按钮的真实行为。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/desktopShell.css](../apps/desktop/frontend/src/desktop/ui/components/desktopShell.css): 删除 `.dsp-window-space::before` 伪三点，只保留顶部拖拽/让位区域；外层卡片继续上移到 sidebar 上下等距，原生 traffic lights 由 Tauri Overlay 标题栏继续显示在卡片左上角。
+- **影响范围**: Desktop frontend 纯样式修正；不改 Tauri 窗口配置、不改协议、不改 core、不影响 CLI / hebweb 行为。
+- **留尾巴**: 当前是用卡片上移承接原生按钮位置；若未来要精确调整原生按钮坐标，应单独接入 macOS traffic light positioning 能力。
+
+### 2026-07-02 — 修复 ScheduleWakeup 超限截断不告知用户
+
+- **Why**: 用户传入 `delay_secs=14400`（4h），工具内部 `.min(MAX_DELAY_SECS)` 静默截断为 3600s，但输出消息只写了截断后的值 —— 用户看到「已设置 3600s 后唤醒」与自己的 14400 对不上，以为是 bug。
+- **改动**:
+  - [crates/agent-core/src/tools/schedule_wakeup.rs](../crates/agent-core/src/tools/schedule_wakeup.rs): `execute` 方法先取原始 `raw_delay`，截断后若原始值超过 `MAX_DELAY_SECS`（3600），在输出消息中追加截断提示（`您传入的 14400s 超过上限 3600s，已自动截断`）。
+- **影响范围**: agent-core ScheduleWakeup 工具的输出文案，不改协议、不改前端、不改持久化。
+- **留尾巴**: 无。
+
+### 2026-07-02 — 调高 ScheduleWakeup 上限：3600s → 604800s（7 天）
+
+- **Why**: 原上限 1 小时过于保守，模型无法调度跨夜任务（如"明天早上检查 CI 结果"）。串多次 ScheduleWakeup 只是绕过限制而非解决方案，且模型唤醒后还要再调一次才能续期——体验极差。
+- **改动**:
+  - [crates/agent-core/src/tools/schedule_wakeup.rs](../crates/agent-core/src/tools/schedule_wakeup.rs): `MAX_DELAY_SECS` 从 3600 改为 604800（7 天）；更新注释、`description()`、`parameters_schema.description` 中所有上限文案。
+  - [docs/架构.md](../docs/架构.md): §13 决策表 + §4.12.4 工具签名中的上限说明同步更新。
+- **影响范围**: agent-core 单常量调整，不改协议、不改前端、不改持久化。`recover_pending_crons` 已有过期判断（`fire_at_ms <= now`），7 天上限不会造成额外问题。
+
+- **日期**: 2026-07-02
+- **一句话**: Stop 时排队消息不丢失 + 自动起新 run（插队流程）。
+- **Why**:
+  - 路径 1（普通 Enter 排队）：消息进 `inputQueues`，等待 `run_finished`/`error` 事件异步 auto-drain。cancel 后 auto-drain 已经能工作，但数据仅在内存队列里，速度取决于事件到达。
+  - 路径 2（Shift+Enter 注入 backend）：`flushQueuedItem` 在前端移除了队列项、注入到 `RuntimeHandle.pending_inputs`。Stop 时 agent_loop 在 cancel 检查点直接 break，**没有 drain pending_inputs**，随后 `chat.rs:481-483` / `surface-session:635` 清掉队列——消息永久丢失。
+- **改动**:
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): cancel break 前加 `drain_pending_inputs`，确保注入的消息在 cancel 前落 transcript + consumed_pending_inputs，防止被 surface 侧 clear 丢弃。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): `handleSessionEngineEvent` 的 `error` 事件（hebcore cancel 路径）处理完后，新增“孤儿 user message”检测——若最后一条非 marker 真实消息是 user 且其后无 assistant 回复，则 truncate + regenerate 立刻起新 run（插队流程）。
+- **影响范围**: agent-core（agent_loop 内部逻辑）+ Desktop 前端（error handler）。不改协议、不改 hebcore IPC、不改 CLI/hebweb。非破坏性变更：agent_loop drain 在 cancel break 之前发生，该 drain 点的位置不影响正常 completion 路径。
+- **留尾巴**: hebcore 路径的 cancel 返回 `WireEvent::Error { message: "run 已取消" }`，前端据此触发 orphan user 检测。in-process 路径（`send_and_save`）的 cancel 走 Tauri command error 返回，不经过此 handler——但 in-process pending_inputs.clear() 在 drain 后已成 no-op，已注入消息仍安全落 transcript。
+- **留尾巴**: 无。
+
+### 2026-07-01 — PTY 默认开启 + 超时自动续后台（不杀进程）
+
+- **Why**: 用户验证 `python -m rich.progress` 在 PTY 下产生 11 个独立 chunk（`\r[0/10]` → `\r[9/10]`），证明 PTY 确实能做到管道模式做不到的实时进度。用户要求：① PTY 作为默认（不用模型每次传 `pty: true`）；② 超时时不杀进程，同一个子进程续到 BgTaskRegistry 后台，让模型后续用 BashOutput 读、KillShell 终止。
+- **方案**:
+  - PTY 参数默认值 `false` → `true`
+  - `BgTaskRegistry` 新增 `register_pty_background` 方法：不依赖 tokio Child，只收 PID + state 追踪 + kill 监听；PTY 输出由调用方自己灌 tail buffer，进程退出由调用方调 `shell.finish()`
+  - `run_pty` 超时分支：不杀子进程，调 `register_pty_background` 注册 → spawn 续跑 task（继续读 PTY master 灌 shell tail buffer） → 子进程退出时 `shell.finish()`
+- **改动**:
+  - [crates/agent-core/src/tools/background.rs](../crates/agent-core/src/tools/background.rs): `append()` / `finish()` 改为 `pub(crate)`；新增 `register_pty_background()` + `spawn_pty_kill_waiter()`
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs): `pty` schema 描述更新为默认 true；`use_pty` 默认值 `false` → `true`；`run_pty` 正常退出加 `[exit non-zero]` 后缀；`run_pty` 超时分支重写为注册后台 + 续跑（不 kill）；新增 `pty_realtime_progress_chunks` 回归测试
+- **影响范围**: agent-core（Bash 工具 + BackgroundShell）。默认行为变更：所有 Bash 调用默认走 PTY 路径。愿意走旧管道模式的模型可传 `"pty": false`。65 个 Bash 测试全部通过，全 workspace check 通过。
+- **留尾巴**: `portable_pty::ExitStatus` 不暴露实际 exit code，PTY 路径的退出码只能区分 zero/non-zero（pipe 路径能看到具体数字 `[exit 7]`）。
