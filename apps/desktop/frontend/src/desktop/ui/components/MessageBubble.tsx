@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useEffect, useRef, useState, type CSSProperties } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { usePerfRender } from "@/desktop/ui/store/perfMonitor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -756,24 +756,28 @@ function relativizeReadPath(
 }
 
 function ToolIcon({ name }: { name?: string | null }) {
-  const cls = "h-3.5 w-3.5";
-  if (name === "Bash" || name === "PowerShell") return <Terminal className={cls} />;
-  if (name === "BashOutput") return <SquareTerminal className={cls} />;
-  if (name === "KillShell") return <CircleStop className={cls} />;
-  if (name === "Read") return <ScrollText className={cls} />;
-  if (name === "ReadMemory") return <BookOpen className={cls} />;
-  if (name === "WriteMemory") return <NotebookPen className={cls} />;
-  if (name === "Write" || name === "Edit") return <Pencil className={cls} />;
-  if (name === "Grep" || name === "Glob") return <Search className={cls} />;
-  if (name === "Skill") return <Sparkles className={cls} />;
-  if (name === "Ask") return <MessageSquare className={cls} />;
-  if (name === "WebSearch" || name === "Fetch") return <Globe2 className={cls} />;
-  if (name === "image_generation") return <ImageIcon className={cls} />;
-  if (isTaskListTool(name)) {
-    return <span className="inline-block h-3 w-3 shrink-0 rounded-[2px] border border-current bg-transparent text-current shadow-none transform-none" />;
-  }
-  if (name === "ExitPlanMode") return <ClipboardCheck className={cls} />;
-  return <Boxes className={cls} />;
+  const boxCls = "inline-flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground";
+  const iconCls = "h-3.5 w-3.5 shrink-0";
+  const square = <span className="h-3 w-3 rounded-[2px] border border-current bg-transparent shadow-none" />;
+  let icon: ReactNode;
+
+  if (name === "Bash" || name === "PowerShell") icon = <Terminal className={iconCls} />;
+  else if (name === "BashOutput") icon = <SquareTerminal className={iconCls} />;
+  else if (name === "KillShell") icon = <CircleStop className={iconCls} />;
+  else if (name === "Read") icon = <ScrollText className={iconCls} />;
+  else if (name === "ReadMemory") icon = <BookOpen className={iconCls} />;
+  else if (name === "WriteMemory") icon = <NotebookPen className={iconCls} />;
+  else if (name === "Write" || name === "Edit") icon = <Pencil className={iconCls} />;
+  else if (name === "Grep" || name === "Glob") icon = <Search className={iconCls} />;
+  else if (name === "Skill") icon = <Sparkles className={iconCls} />;
+  else if (name === "Ask") icon = <MessageSquare className={iconCls} />;
+  else if (name === "WebSearch" || name === "Fetch") icon = <Globe2 className={iconCls} />;
+  else if (name === "image_generation") icon = <ImageIcon className={iconCls} />;
+  else if (isTaskListTool(name)) icon = square;
+  else if (name === "ExitPlanMode") icon = <ClipboardCheck className={iconCls} />;
+  else icon = <Boxes className={iconCls} />;
+
+  return <span className={boxCls}>{icon}</span>;
 }
 
 export function isTaskListTool(name?: string | null): boolean {
@@ -1757,33 +1761,32 @@ function runningRailTone(entry?: ToolActivityItem): RailTone | null {
   return entry.call.status === "done" ? "done" : "running";
 }
 
-function runningRailColor(tone: RailTone | "transition"): string {
+function runningRailColor(tone: RailTone): string {
   if (tone === "done") return "#34d399";
   if (tone === "running") return "#38bdf8";
-  if (tone === "reasoning") return "#ec4899";
-  return "#f59e0b";
+  return "#ec4899";
 }
 
-function runningRailGradient(
-  item: ToolActivityItem,
-  next?: ToolActivityItem,
-  previous?: ToolActivityItem,
-): string {
-  const current = runningRailTone(item) ?? "reasoning";
-  const previousTone = runningRailTone(previous);
-  const nextTone = runningRailTone(next);
-  const currentColor = runningRailColor(current);
-  const top = previousTone && previousTone !== current ? runningRailColor("transition") : currentColor;
-  const bottom = nextTone && nextTone !== current ? runningRailColor("transition") : currentColor;
-  return `linear-gradient(to bottom, ${top} 0%, ${currentColor} 18%, ${currentColor} 82%, ${bottom} 100%)`;
-}
+function runningRailTimelineGradient(items: ToolActivityItem[]): string {
+  if (items.length === 0) return runningRailColor("reasoning");
+  if (items.length === 1) return runningRailColor(runningRailTone(items[0]) ?? "reasoning");
 
-function runningRailClass(index: number, total: number): string {
-  return cn(
-    "bg-[var(--rail-gradient)]",
-    index === 0 && "rounded-t-full",
-    index === total - 1 && "rounded-b-full"
-  );
+  const step = 100 / items.length;
+  const transition = Math.min(step * 0.3, 4);
+  const stops: string[] = [];
+
+  items.forEach((item, index) => {
+    const color = runningRailColor(runningRailTone(item) ?? "reasoning");
+    const start = index * step;
+    const end = (index + 1) * step;
+    const stableStart = index === 0 ? start : start + transition;
+    const stableEnd = index === items.length - 1 ? end : end - transition;
+
+    stops.push(`${color} ${stableStart.toFixed(2)}%`);
+    stops.push(`${color} ${stableEnd.toFixed(2)}%`);
+  });
+
+  return `linear-gradient(to bottom, ${stops.join(", ")})`;
 }
 
 function InlineReasoningDetail({
@@ -1921,6 +1924,8 @@ function RunningActivityBlock({
     stickRef.current = distFromBottom < 30;
   }, []);
 
+  const railGradient = runningRailTimelineGradient(items);
+
   return (
     <div className="mt-0.5 text-[12px] leading-[1.35] text-left">
       <div
@@ -1931,7 +1936,15 @@ function RunningActivityBlock({
           expanded ? "max-h-none overflow-visible" : "max-h-[15rem] overflow-y-auto overflow-x-visible",
         )}
       >
-        <div className="py-0.5 pr-2 border-0 bg-transparent outline-0 shadow-none">
+        <div className="relative py-0.5 pr-2 border-0 bg-transparent outline-0 shadow-none">
+          <button
+            type="button"
+            onClick={onGroupToggle}
+            className="absolute bottom-0.5 left-2 top-0.5 z-10 w-[3px] cursor-pointer appearance-none rounded-full border-0 p-0"
+            style={{ background: railGradient } as CSSProperties}
+            title={expanded ? "收起运行详情" : "展开运行详情"}
+            aria-label={expanded ? "收起运行详情" : "展开运行详情"}
+          />
           {items.map((item, index) => {
             const next = items[index + 1];
             if (item.type === "reasoning") {
@@ -1939,14 +1952,7 @@ function RunningActivityBlock({
               const text = item.text.trim().replace(/\s+/g, " ");
               return (
                 <div key={item.key} className="grid min-h-6 grid-cols-[3px_minmax(0,1fr)] gap-1.5 pl-2 border-0 bg-transparent outline-0 shadow-none">
-                  <button
-                    type="button"
-                    onClick={onGroupToggle}
-                    className={cn("w-[3px] cursor-pointer appearance-none border-0 bg-transparent p-0", runningRailClass(index, items.length))}
-                    style={{ "--rail-gradient": runningRailGradient(item, next, items[index - 1]) } as CSSProperties}
-                    title={expanded ? "收起运行详情" : "展开运行详情"}
-                    aria-label={expanded ? "收起运行详情" : "展开运行详情"}
-                  />
+                  <span className="w-[3px]" />
                   <div className="min-w-0 py-0.5">
                     <button
                       type="button"
@@ -2022,14 +2028,7 @@ function RunningActivityBlock({
                   canToggleItems && call.isJudging && "judge-breathe",
                 )}
               >
-                <button
-                  type="button"
-                  onClick={onGroupToggle}
-                  className={cn("w-[3px] cursor-pointer appearance-none border-0 bg-transparent p-0", runningRailClass(index, items.length))}
-                  style={{ "--rail-gradient": runningRailGradient(item, next, items[index - 1]) } as CSSProperties}
-                  title={expanded ? "收起运行详情" : "展开运行详情"}
-                  aria-label={expanded ? "收起运行详情" : "展开运行详情"}
-                />
+                <span className="w-[3px]" />
                 <div className="min-w-0 py-0.5">
                   {canToggleItems ? (
                     <>
