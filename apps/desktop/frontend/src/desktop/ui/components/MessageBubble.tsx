@@ -1773,18 +1773,20 @@ function toolPreviewArgs(call: ToolCallItem): Array<{ key: string; value: string
     .slice(0, 3);
 }
 
-type RailTone = "done" | "running" | "reasoning";
+type RailTone = "done" | "running" | "reasoning" | "error";
 
 function runningRailTone(entry?: ToolActivityItem): RailTone | null {
   if (!entry) return null;
   if (entry.type === "reasoning") return "reasoning";
+  if (entry.call.isError) return "error";
   return entry.call.status === "done" ? "done" : "running";
 }
 
 function runningRailColor(tone: RailTone): string {
-  if (tone === "done") return "#34d399";
-  if (tone === "running") return "#38bdf8";
-  return "#8b5cf6";
+  if (tone === "done") return "#34d59a";
+  if (tone === "running") return "#3dbbf5";
+  if (tone === "reasoning") return "#8c93f8";
+  return "#ee5858";
 }
 
 function runningRailTimelineGradient(items: ToolActivityItem[], rowHeights: number[]): string {
