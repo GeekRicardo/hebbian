@@ -2918,7 +2918,7 @@ mod tests {
         std::fs::write(&target, "{}\n").unwrap();
 
         let registry = Arc::new(ToolRegistry::new(vec![
-            Box::new(PanickingTool) as Box<dyn crate::tools::Tool>,
+            Box::new(PanickingTool) as Box<dyn crate::tools::Tool>
         ]));
         let run_state = Arc::new(RunState::new(RunId::new()));
         let (tx, _rx) = tokio::sync::mpsc::channel(1024);

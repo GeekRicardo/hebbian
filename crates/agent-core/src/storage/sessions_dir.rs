@@ -373,7 +373,9 @@ pub fn recover_interrupted_partials(
                     recovered.text.push_str(&text);
                     match recovered.fragments.last_mut() {
                         Some(RecoveredPartialFragment::Text(prev)) => prev.push_str(&text),
-                        _ => recovered.fragments.push(RecoveredPartialFragment::Text(text)),
+                        _ => recovered
+                            .fragments
+                            .push(RecoveredPartialFragment::Text(text)),
                     }
                 }
                 Ok(PartialFragment::Reasoning { text }) => {
@@ -391,10 +393,11 @@ pub fn recover_interrupted_partials(
                     name,
                     arguments_chunk,
                 }) => {
-                    let entry = recovered
-                        .tool_calls
-                        .entry(index)
-                        .or_insert((None, None, String::new()));
+                    let entry =
+                        recovered
+                            .tool_calls
+                            .entry(index)
+                            .or_insert((None, None, String::new()));
                     if entry.0.is_none() {
                         entry.0 = id;
                     }
@@ -418,10 +421,11 @@ pub fn recover_interrupted_partials(
                     duration_ms,
                 }) => {
                     if let Some(call_id) = call_id {
-                        let entry = recovered
-                            .tool_calls
-                            .entry(index)
-                            .or_insert((None, None, String::new()));
+                        let entry = recovered.tool_calls.entry(index).or_insert((
+                            None,
+                            None,
+                            String::new(),
+                        ));
                         if entry.0.is_none() {
                             entry.0 = Some(call_id);
                         }

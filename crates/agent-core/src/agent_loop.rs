@@ -360,6 +360,26 @@ fn set_pending_inputs_accepting(flag: Option<&Arc<AtomicBool>>, accepting: bool)
     }
 }
 
+fn push_system_feedback(
+    transcript: &mut Transcript,
+    persister: Option<&crate::run_persister::RunPersister>,
+    kind: &str,
+    content: String,
+) {
+    if let Some(p) = persister {
+        p.append_user(
+            content.clone(),
+            Vec::new(),
+            Some(crate::storage::sessions::MessageMeta::SystemNotification {
+                kind: kind.to_string(),
+                task_id: None,
+                tool_use_id: None,
+            }),
+        );
+    }
+    transcript.push_user(content, Vec::new());
+}
+
 /// 把一次 `//goal` 裁决结果作为 `Role::Marker` append 到 session.jsonl（架构 §4.8.3）。
 /// 随会话持久化、重启可重建渲染；transcript rebuild 跳过 Marker，模型看不到。
 /// 落盘失败仅 warn，不阻断 goal 续跑 / 出 turn。
@@ -971,7 +991,11 @@ pub async fn run_loop(
                     if delta.id.as_deref().is_some_and(|id| !id.trim().is_empty()) {
                         stream_tool_delta_with_id_count_for_cb.fetch_add(1, Ordering::Relaxed);
                     }
-                    if delta.name.as_deref().is_some_and(|name| !name.trim().is_empty()) {
+                    if delta
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| !name.trim().is_empty())
+                    {
                         stream_tool_delta_with_name_count_for_cb.fetch_add(1, Ordering::Relaxed);
                     }
                     if let Some(arguments) = delta.arguments_delta.as_deref() {
@@ -1118,13 +1142,15 @@ pub async fn run_loop(
                         emit(EventPayload::TextDelta { text: text.clone() });
                     }
                     transcript.push_assistant_with_reasoning(leak.text, reasoning, Vec::new());
-                    transcript.push_user(
+                    push_system_feedback(
+                        transcript,
+                        persister.as_ref(),
+                        "tool_format_error",
                         "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<tool-format-error>\n\
                          上一条回复里出现了未被执行的工具调用文本（`<invoke>` / `<function_calls>` XML）。\
                          工具调用必须走结构化 function-calling 通道，绝不能把这种 XML 写进正文。\
                          请用正确的工具调用方式重新执行刚才想做的操作。\n</tool-format-error>"
                             .to_string(),
-                        Vec::new(),
                     );
                     continue;
                 }
@@ -1219,7 +1245,12 @@ pub async fn run_loop(
                             let wrapped = format!(
                                 "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<hook-feedback source=\"Stop\">\n{trimmed}\n</hook-feedback>",
                             );
-                            transcript.push_user(wrapped, Vec::new());
+                            push_system_feedback(
+                                transcript,
+                                persister.as_ref(),
+                                "hook_feedback",
+                                wrapped,
+                            );
                             set_pending_inputs_accepting(pending_inputs_accepting.as_ref(), true);
                             output_attachments = all_attachments;
                             continue;
@@ -1354,7 +1385,12 @@ pub async fn run_loop(
                                     let wrapped = format!(
                                         "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<goal-feedback>\n目标尚未达成。{reason}\n继续推进，达成后会自动结束。\n</goal-feedback>"
                                     );
-                                    transcript.push_user(wrapped, Vec::new());
+                                    push_system_feedback(
+                                        transcript,
+                                        persister.as_ref(),
+                                        "goal_feedback",
+                                        wrapped,
+                                    );
                                     set_pending_inputs_accepting(
                                         pending_inputs_accepting.as_ref(),
                                         true,
@@ -1383,9 +1419,12 @@ pub async fn run_loop(
                     duration_ms = call_duration_ms,
                     calls_count = calls.len(),
                     stream_tool_delta_count = stream_tool_delta_count.load(Ordering::Relaxed),
-                    stream_tool_delta_with_id_count = stream_tool_delta_with_id_count.load(Ordering::Relaxed),
-                    stream_tool_delta_with_name_count = stream_tool_delta_with_name_count.load(Ordering::Relaxed),
-                    stream_tool_delta_argument_bytes = stream_tool_delta_argument_bytes.load(Ordering::Relaxed),
+                    stream_tool_delta_with_id_count =
+                        stream_tool_delta_with_id_count.load(Ordering::Relaxed),
+                    stream_tool_delta_with_name_count =
+                        stream_tool_delta_with_name_count.load(Ordering::Relaxed),
+                    stream_tool_delta_argument_bytes =
+                        stream_tool_delta_argument_bytes.load(Ordering::Relaxed),
                     "model requested tool calls"
                 );
                 record_request_usage(
@@ -2110,7 +2149,10 @@ mod tests {
         }
     }
 
-    fn assistant_message_has_text(message: &crate::storage::sessions::Message, needle: &str) -> bool {
+    fn assistant_message_has_text(
+        message: &crate::storage::sessions::Message,
+        needle: &str,
+    ) -> bool {
         message.role == crate::storage::sessions::Role::Assistant
             && (message.content.contains(needle)
                 || message.parts.iter().any(|part| {
@@ -2215,7 +2257,12 @@ mod tests {
         let boundary_idx = loaded
             .messages
             .iter()
-            .position(|m| matches!(m.meta, Some(crate::storage::sessions::MessageMeta::CompactBoundary { .. })))
+            .position(|m| {
+                matches!(
+                    m.meta,
+                    Some(crate::storage::sessions::MessageMeta::CompactBoundary { .. })
+                )
+            })
             .expect("应落 compact boundary");
         let after_idx = loaded
             .messages
@@ -2811,6 +2858,11 @@ mod tests {
 
         let mut transcript = Transcript::new(None);
         transcript.push_user("把测试修绿".to_string(), Vec::new());
+        let persister = crate::run_persister::RunPersister::new(
+            data_dir.path().to_path_buf(),
+            session_id.clone(),
+        );
+        persister.append_user("把测试修绿".to_string(), Vec::new(), None);
 
         let client = DoneEachTurnClient {
             calls: AtomicUsize::new(0),
@@ -2858,7 +2910,7 @@ mod tests {
 
                 subagent_ctx: None,
                 subagent_bypass: false,
-                persister: None,
+                persister: Some(persister),
                 call_tag: Default::default(),
             },
             Arc::new(move |event| {
@@ -2941,6 +2993,20 @@ mod tests {
             goal_markers,
             vec!["progress", "achieved"],
             "应按序落 progress 与 achieved 两条 GoalOutcome marker"
+        );
+
+        let persisted_goal_feedback = reloaded.messages.iter().any(|m| {
+            m.role == crate::storage::sessions::Role::User
+                && m.content.contains("<goal-feedback>")
+                && matches!(
+                    &m.meta,
+                    Some(crate::storage::sessions::MessageMeta::SystemNotification { kind, .. })
+                        if kind == "goal_feedback"
+                )
+        });
+        assert!(
+            persisted_goal_feedback,
+            "goal NotYet 续跑提示必须作为 system_notification 落盘，避免 surface 当成用户插队/中断"
         );
     }
 }

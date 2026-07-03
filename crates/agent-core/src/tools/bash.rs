@@ -151,7 +151,9 @@ impl BashTool {
         // PTY 路径：伪终端执行，独立于 BackgroundShell 体系。
         // 不支持转后台——PTY 子进程生命周期完全在函数内管理。
         if use_pty && !background {
-            return self.run_pty(&ctx, command, &cwd.display().to_string(), timeout).await;
+            return self
+                .run_pty(&ctx, command, &cwd.display().to_string(), timeout)
+                .await;
         }
 
         let mut cmd = Command::new("bash");
@@ -291,7 +293,7 @@ impl BashTool {
         cwd: &str,
         timeout_secs: u64,
     ) -> AppResult<(String, bool)> {
-        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
         use std::io::Read;
         use tokio::sync::mpsc;
 
@@ -309,6 +311,12 @@ impl BashTool {
         cmd_builder.arg("-lc");
         cmd_builder.arg(command);
         cmd_builder.cwd(cwd);
+        // PTY 下 stdin 已关闭，git 等工具检测到 isatty() 但是不完整终端会弹
+        // "WARNING: terminal is not fully functional - Press RETURN to continue"
+        // TERM=dumb 让它们知道这不是交互终端，不弹提示、不走 pager。
+        // GIT_TERMINAL_PROMPT=0 额外确保 git 不做任何交互式提示。
+        cmd_builder.env("TERM", "dumb");
+        cmd_builder.env("GIT_TERMINAL_PROMPT", "0");
         if let Some(path) = crate::shell_env::resolve_shell_path(self.shell.as_deref()).await {
             cmd_builder.env("PATH", path);
         }
@@ -349,8 +357,7 @@ impl BashTool {
             }
         });
 
-        let deadline =
-            tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
         let mut buffer = String::new();
 
         // 主循环：读 PTY 输出 → emit chunk → 累积 buffer。
@@ -477,7 +484,9 @@ impl BashTool {
 #[cfg(unix)]
 fn pty_kill_process_group(child: &mut Box<dyn portable_pty::Child + Send + Sync>) {
     if let Some(pid) = child.process_id() {
-        unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
     }
 }
 
@@ -490,12 +499,11 @@ fn pty_kill_process_group(child: &mut Box<dyn portable_pty::Child + Send + Sync>
 /// docker pull / npm install 等进度条用 `\r` 覆盖同行、`ESC[nA` 回跳前 n 行。
 /// 不处理的话文件里会堆积大量重复行和乱码，模型 Read 不到可读内容。
 fn clean_ansi_progress(text: &str) -> String {
-    use std::sync::LazyLock;
     use regex::Regex;
+    use std::sync::LazyLock;
     static RE_CURSOR: LazyLock<Regex> =
         LazyLock::new(|| Regex::new("\x1b\\[\\d*[ABCDEFGHJKSTfhl]").unwrap());
-    static RE_DEC: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new("\x1b\\[\\?\\d+[hl]").unwrap());
+    static RE_DEC: LazyLock<Regex> = LazyLock::new(|| Regex::new("\x1b\\[\\?\\d+[hl]").unwrap());
 
     let cleaned = RE_CURSOR.replace_all(text, "");
     let cleaned = RE_DEC.replace_all(&cleaned, "");
@@ -919,10 +927,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let bash = tool(tmp.path());
         let out = bash
-            .execute_rich(
-                ToolCtx::noop(),
-                json!({"command": "exit 42", "pty": true}),
-            )
+            .execute_rich(ToolCtx::noop(), json!({"command": "exit 42", "pty": true}))
             .await
             .unwrap();
         assert!(out.is_error, "exit 42 should be error");
@@ -974,7 +979,11 @@ mod tests {
             eprintln!("  chunk[{i}]: {:?}", c);
         }
         // PTY 下应收到多个 chunk（不是等到结束才一次性吐）
-        assert!(chunks.len() >= 2, "expected >=2 chunks, got {} chunks. Output: {out}", chunks.len());
+        assert!(
+            chunks.len() >= 2,
+            "expected >=2 chunks, got {} chunks. Output: {out}",
+            chunks.len()
+        );
         assert!(out.contains("DONE"), "output should contain DONE: {out}");
     }
 

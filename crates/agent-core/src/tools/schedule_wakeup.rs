@@ -76,9 +76,7 @@ impl Tool for ScheduleWakeupTool {
             reason: reason.clone(),
         });
         let truncate_note = if raw_delay > MAX_DELAY_SECS {
-            format!(
-                "（您传入的 {raw_delay}s 超过上限 {MAX_DELAY_SECS}s，已自动截断）"
-            )
+            format!("（您传入的 {raw_delay}s 超过上限 {MAX_DELAY_SECS}s，已自动截断）")
         } else {
             String::new()
         };

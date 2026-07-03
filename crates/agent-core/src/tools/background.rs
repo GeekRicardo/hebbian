@@ -559,20 +559,14 @@ impl BgTaskRegistry {
         };
 
         let shell = Arc::new(BackgroundShell::new(
-            task_id,
-            command,
-            cwd,
-            true, // is_background
-            kill_tx,
-            log_path,
+            task_id, command, cwd, true, // is_background
+            kill_tx, log_path,
         ));
 
         {
             let mut inner = self.inner.lock().expect("background shells mutex");
             if inner.shells.len() >= MAX_BACKGROUND_SHELLS {
-                if let Some(idx) =
-                    inner.shells.iter().position(|s| s.state().is_terminal())
-                {
+                if let Some(idx) = inner.shells.iter().position(|s| s.state().is_terminal()) {
                     inner.shells.remove(idx);
                 }
             }
@@ -658,15 +652,13 @@ fn exit_state(status: ExitStatus) -> ShellState {
 
 /// PTY 后台任务的 kill 监听：收到 kill 信号后杀进程组。
 /// PTY 的退出检测由调用方通过 shell.finish() 通知，不在此处。
-fn spawn_pty_kill_waiter(
-    shell: Arc<BackgroundShell>,
-    pid: u32,
-    kill_rx: oneshot::Receiver<()>,
-) {
+fn spawn_pty_kill_waiter(shell: Arc<BackgroundShell>, pid: u32, kill_rx: oneshot::Receiver<()>) {
     tokio::spawn(async move {
         let _ = kill_rx.await;
         if pid > 0 {
-            unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
         }
         shell.finish(ShellState::Killed);
     });

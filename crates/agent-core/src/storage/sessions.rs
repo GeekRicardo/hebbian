@@ -3673,7 +3673,14 @@ mod tests {
             .collect();
         assert_eq!(
             part_kinds,
-            vec!["text", "tool_call", "reasoning", "text", "tool_call", "text"],
+            vec![
+                "text",
+                "tool_call",
+                "reasoning",
+                "text",
+                "tool_call",
+                "text"
+            ],
             "partial 恢复必须按原始流式顺序交错渲染，最后一段 text 是中断话术"
         );
 
@@ -3921,8 +3928,7 @@ mod tests {
         let b = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
         let b_sid = b.id.clone();
         let b_msg_id = "b1";
-        let _live_guard =
-            sessions_dir::PartialLiveGuard::acquire(&dir, &b_sid, b_msg_id).unwrap();
+        let _live_guard = sessions_dir::PartialLiveGuard::acquire(&dir, &b_sid, b_msg_id).unwrap();
         sessions_dir::append_partial(
             &dir,
             &b_sid,
@@ -3952,7 +3958,10 @@ mod tests {
             .messages
             .iter()
             .any(|m| matches!(m.meta.as_ref(), Some(MessageMeta::Interrupted)));
-        assert!(has_a_interrupted, "死 partial A 后应紧跟 Interrupted marker");
+        assert!(
+            has_a_interrupted,
+            "死 partial A 后应紧跟 Interrupted marker"
+        );
         assert!(
             !sessions_dir::partial_path(&dir, &a_sid, a_msg_id).exists(),
             "恢复后死 partial 文件应被删除"
@@ -3968,7 +3977,10 @@ mod tests {
             .messages
             .iter()
             .any(|m| m.role == Role::Assistant && m.content.contains("B 的活内容"));
-        assert!(has_b_live, "活 partial B 应在 load 时被渲染（内存态、不落盘）");
+        assert!(
+            has_b_live,
+            "活 partial B 应在 load 时被渲染（内存态、不落盘）"
+        );
 
         // 多次扫描幂等：第二次扫描不应再折叠 A
         let n2 = recover_all_dead_partials(&dir);

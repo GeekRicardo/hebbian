@@ -392,8 +392,8 @@ mod tests {
         );
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
-        let result = compact_request_with_llm_progress(&CancelAwareClient, req, 1, cancel, |_| {})
-            .await;
+        let result =
+            compact_request_with_llm_progress(&CancelAwareClient, req, 1, cancel, |_| {}).await;
 
         assert!(matches!(result, Err(ModelError::Cancelled)));
     }
