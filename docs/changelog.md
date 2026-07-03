@@ -10786,7 +10786,7 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css): 新增运行中 tool 名称的 Text Shimmer 动画。
   - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `RunningActivityBlock` 去掉外层 button / border / radius / 背景 / 裁剪卡片，只保留透明固定高度滚动区域；折叠态高度调到 15rem；默认贴底滚到最新输出，但用户手动上滚后不再强拉，回到底部后恢复贴底；删除底部“展开运行详情”按钮，改为点击每段左轨展开/收起整个 group；tool/thinking 行标题继续只控制自己的详情。
   - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): thinking 行在运行中左轨和完成态详情里都可展开 `ReasoningScrollArea`，折叠态同行显示摘要；Task/TodoWrite 小方块图标补齐 inline-block / shrink-0 / transparent / shadow-none 等显式样式。
-  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 完成态 `已运行 xxx` 摘要与 content 外框左边缘对齐；运行左轨改为整条连续背景轨道，避免行与行之间露出白缝，thinking 改为更贴近蓝 / 绿 / 红状态体系的 amber 主色，和 running / done 自然过渡且不把 thinking 染成蓝色；统一 tool 行图标为固定 16px 盒子 + 14px 图标，避免 Edit / Read / Grep 等视觉大小不一致；streaming 中最后一个正在增长的 text 不再触发前一个 tool group 折叠，等后续 content 稳定后再收成 `已运行 xxx`。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 完成态 `已运行 xxx` 摘要与 content 外框左边缘对齐；运行左轨改为整条连续背景轨道，按每行真实高度生成渐变色标，避免 Bash / 其他 tool 展开后颜色位置错位；thinking 改为更亮的蓝紫色，和 running / done 自然过渡且不把 thinking 整段染成蓝色；统一 tool 行图标为固定 16px 盒子 + 14px 图标，避免 Edit / Read / Grep 等视觉大小不一致；streaming 中最后一个正在增长的 text 不再触发前一个 tool group 折叠，等后续 content 稳定后再收成 `已运行 xxx`。
 - **影响范围**: Desktop/hebweb 前端聊天消息渲染层与 dev 预览入口；不改协议、core、持久化，不破坏兼容。
 - **留尾巴**: fixture 是一次性快照；需要换数据时重新从目标 session/run 生成。
 
@@ -11029,3 +11029,13 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **验证**: `cargo test -p agent-core context::compaction::tests::compact_request_uses_provided_cancel_flag --lib` 通过；`cargo check -p agent-core --tests` 通过；`pnpm exec tsc --noEmit`（apps/desktop）通过。
 - **留尾巴**: 无。
 - **留尾巴**: 若要手动 `/compact` 也显示实时 token，需要把 `compact_session` 从普通 command 改成带 Channel 的流式命令，单独评估改动面。
+
+### 2026-07-03 — 修复 Stop hook / goal 续跑提示未按系统通知落盘
+
+- **Why**: `/goal` 场景里 Stop hook 检查失败会把 `<hook-feedback>` 通过 user 通道回投给模型继续修复，但此前这类内部系统续跑只写入内存 transcript，不写入 `session.jsonl`。结果 surface / 恢复 / 调试只能看到连续 assistant 与 hook marker，看不到真正触发续跑的系统输入，容易被误判成用户插队或中断。
+- **改动**:
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 新增内部 `push_system_feedback`，让 Stop hook 的 `<hook-feedback>`、goal 的 `<goal-feedback>`、工具 XML 自愈的 `<tool-format-error>` 同时进入 transcript，并以 `MessageMeta::SystemNotification` 落盘。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 扩展 `goal_notyet_then_achieved_drives_resume_and_clear` 回归测试，断言 goal NotYet 续跑提示会持久化为 `kind="goal_feedback"` 的系统通知。
+- **影响范围**: agent-core run loop / session.jsonl 落盘语义。未新增协议字段；`system_notification.kind` 新增内部取值 `hook_feedback` / `goal_feedback` / `tool_format_error`，前端已有 kind string 兼容逻辑。Stop hook 与 goal 的模型上下文语义不变，只补齐持久化事实。
+- **验证**: `cargo test -p agent-core goal_notyet_then_achieved_drives_resume_and_clear --lib` 通过；用商汤 `deepseek-v4-flash` 复现“只回复完成 + Cargo.toml 中 cargo check 失败”，修后 `session.jsonl` 出现 3 条 `kind="hook_feedback"` system_notification，且普通 user `<hook-feedback>` 为 0。
+- **留尾巴**: active run 的跨进程 `Inject` 仍只传文本与附件，若未来要让 wakeup 类外部注入在 hebcore 活 run 路径保留 meta，需要单独设计不破坏 crate DAG 的 pending input 元数据通道。

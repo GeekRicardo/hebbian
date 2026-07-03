@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { usePerfRender } from "@/desktop/ui/store/perfMonitor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -1784,21 +1784,28 @@ function runningRailTone(entry?: ToolActivityItem): RailTone | null {
 function runningRailColor(tone: RailTone): string {
   if (tone === "done") return "#34d399";
   if (tone === "running") return "#38bdf8";
-  return "#f59e0b";
+  return "#8b5cf6";
 }
 
-function runningRailTimelineGradient(items: ToolActivityItem[]): string {
+function runningRailTimelineGradient(items: ToolActivityItem[], rowHeights: number[]): string {
   if (items.length === 0) return runningRailColor("reasoning");
   if (items.length === 1) return runningRailColor(runningRailTone(items[0]) ?? "reasoning");
 
-  const step = 100 / items.length;
-  const transition = Math.min(step * 0.3, 4);
+  const measured = rowHeights.length === items.length && rowHeights.every((height) => height > 0);
+  const heights = measured ? rowHeights : items.map(() => 1);
+  const totalHeight = heights.reduce((sum, height) => sum + height, 0);
+  if (totalHeight <= 0) return runningRailColor("reasoning");
+
+  let cursor = 0;
   const stops: string[] = [];
 
   items.forEach((item, index) => {
     const color = runningRailColor(runningRailTone(item) ?? "reasoning");
-    const start = index * step;
-    const end = (index + 1) * step;
+    const start = (cursor / totalHeight) * 100;
+    cursor += heights[index] ?? 0;
+    const end = (cursor / totalHeight) * 100;
+    const span = end - start;
+    const transition = Math.min(span * 0.3, 4);
     const stableStart = index === 0 ? start : start + transition;
     const stableEnd = index === items.length - 1 ? end : end - transition;
 
@@ -1924,7 +1931,9 @@ function RunningActivityBlock({
 }) {
   const canToggleItems = !!expandedKeys && !!onToolToggle;
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const rowRefs = useRef<Array<HTMLDivElement | null>>([]);
   const stickRef = useRef(true);
+  const [rowHeights, setRowHeights] = useState<number[]>([]);
   const setContainerRef = useCallback((node: HTMLDivElement | null) => {
     containerRef.current = node;
   }, []);
@@ -1944,7 +1953,28 @@ function RunningActivityBlock({
     stickRef.current = distFromBottom < 30;
   }, []);
 
-  const railGradient = runningRailTimelineGradient(items);
+  useLayoutEffect(() => {
+    rowRefs.current.length = items.length;
+
+    const measure = () => {
+      const heights = rowRefs.current.map((node) => node?.getBoundingClientRect().height ?? 0);
+      setRowHeights((prev) => {
+        const same = prev.length === heights.length && prev.every((height, index) => Math.abs(height - heights[index]) < 0.5);
+        return same ? prev : heights;
+      });
+    };
+
+    measure();
+
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    rowRefs.current.forEach((node) => {
+      if (node) observer.observe(node);
+    });
+    return () => observer.disconnect();
+  }, [items, expandedKeys]);
+
+  const railGradient = runningRailTimelineGradient(items, rowHeights);
 
   return (
     <div className="mt-0.5 text-[12px] leading-[1.35] text-left">
@@ -1971,7 +2001,13 @@ function RunningActivityBlock({
               const active = !!expandedKeys?.has(item.key);
               const text = item.text.trim().replace(/\s+/g, " ");
               return (
-                <div key={item.key} className="grid min-h-6 grid-cols-[3px_minmax(0,1fr)] gap-1.5 pl-2 border-0 bg-transparent outline-0 shadow-none">
+                <div
+                  key={item.key}
+                  ref={(node) => {
+                    rowRefs.current[index] = node;
+                  }}
+                  className="grid min-h-6 grid-cols-[3px_minmax(0,1fr)] gap-1.5 pl-2 border-0 bg-transparent outline-0 shadow-none"
+                >
                   <span className="w-[3px]" />
                   <div className="min-w-0 py-0.5">
                     <button
@@ -2042,6 +2078,9 @@ function RunningActivityBlock({
             return (
               <div
                 key={item.key}
+                ref={(node) => {
+                  rowRefs.current[index] = node;
+                }}
                 data-tool-call-id={call.id}
                 className={cn(
                   "grid min-h-7 grid-cols-[3px_minmax(0,1fr)] gap-1.5 pl-2 border-0 bg-transparent outline-0 shadow-none",
