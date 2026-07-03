@@ -260,6 +260,11 @@ pub enum EventPayload {
     ContextCompactionStarted {
         before_tokens: usize,
     },
+    /// 上下文压缩摘要模型的流式输出进度。`output_tokens` 是压缩摘要已产出的估算 token，
+    /// 用于 surface 展示等待进度；最终账单 token 仍以 model response usage / model_io 为准。
+    ContextCompactionProgress {
+        output_tokens: usize,
+    },
     ContextCompacted {
         before_tokens: usize,
         after_tokens: usize,

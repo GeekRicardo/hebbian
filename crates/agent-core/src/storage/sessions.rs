@@ -1710,47 +1710,92 @@ fn partial_to_message(
     partial: &super::sessions_dir::RecoveredPartial,
     live: bool,
 ) -> Option<Message> {
-    let named_tool_calls: Vec<(u32, String, String)> = partial
+    use super::sessions_dir::RecoveredPartialFragment;
+
+    let named_tool_calls: Vec<(u32, String, String, String)> = partial
         .tool_calls
         .iter()
-        .filter_map(|(idx, (name, args))| name.as_ref().map(|n| (*idx, n.clone(), args.clone())))
+        .filter_map(|(idx, (id, name, args))| {
+            name.as_ref().map(|n| {
+                (
+                    *idx,
+                    id.clone().unwrap_or_else(|| format!("recovered-{idx}")),
+                    n.clone(),
+                    args.clone(),
+                )
+            })
+        })
         .collect();
 
     if partial.text.is_empty() && partial.reasoning.is_empty() && named_tool_calls.is_empty() {
         return None;
     }
 
-    let mut parts: Vec<MessagePart> = Vec::new();
-    if !partial.reasoning.is_empty() {
-        parts.push(MessagePart::Reasoning {
-            text: partial.reasoning.clone(),
-            duration_ms: None,
-        });
-    }
-    if !partial.text.is_empty() {
-        parts.push(MessagePart::Text {
-            text: partial.text.clone(),
-        });
-    }
-    for (idx, name, args) in &named_tool_calls {
+    let build_tool_part = |idx: u32, id: &str, name: &str, args: &str| {
         // 中断时 args 可能是不完整 JSON；fallback 用空 object 而非 null，
         // 避免恢复续聊时向 API 发出 null input 被 400 拒绝。
         let input: Value = serde_json::from_str(args).unwrap_or_else(|_| json!({}));
         let (result, duration_ms) = partial
             .tool_results
-            .get(idx)
+            .get(&idx)
             .map(|(r, d)| (Some(r.clone()), Some(*d)))
             .unwrap_or((None, None));
-        parts.push(MessagePart::ToolCall {
-            id: format!("recovered-{idx}"),
-            name: name.clone(),
+        MessagePart::ToolCall {
+            id: id.to_string(),
+            name: name.to_string(),
             input,
-            arguments: args.clone(),
-            result: result.clone(),
+            arguments: args.to_string(),
+            result,
             duration_ms,
             // 中断恢复的调用结果未知，不标失败。
             is_error: false,
-        });
+        }
+    };
+
+    let mut parts: Vec<MessagePart> = Vec::new();
+    if partial.fragments.is_empty() {
+        if !partial.reasoning.is_empty() {
+            parts.push(MessagePart::Reasoning {
+                text: partial.reasoning.clone(),
+                duration_ms: None,
+            });
+        }
+        if !partial.text.is_empty() {
+            parts.push(MessagePart::Text {
+                text: partial.text.clone(),
+            });
+        }
+        for (idx, id, name, args) in &named_tool_calls {
+            parts.push(build_tool_part(*idx, id, name, args));
+        }
+    } else {
+        for fragment in &partial.fragments {
+            match fragment {
+                RecoveredPartialFragment::Text(text) => {
+                    if !text.is_empty() {
+                        parts.push(MessagePart::Text { text: text.clone() });
+                    }
+                }
+                RecoveredPartialFragment::Reasoning(text) => {
+                    if !text.is_empty() {
+                        parts.push(MessagePart::Reasoning {
+                            text: text.clone(),
+                            duration_ms: None,
+                        });
+                    }
+                }
+                RecoveredPartialFragment::ToolCall { index } => {
+                    let Some((id, Some(name), args)) = partial.tool_calls.get(index) else {
+                        continue;
+                    };
+                    let id = id
+                        .as_deref()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("recovered-{index}"));
+                    parts.push(build_tool_part(*index, &id, name, args));
+                }
+            }
+        }
     }
     // 中断恢复才追加「输出中断」话术；活流式不加（它还在跑）。
     if !live {
@@ -1769,14 +1814,14 @@ fn partial_to_message(
 
     let tool_calls: Vec<MessageToolCall> = named_tool_calls
         .iter()
-        .map(|(idx, name, args)| {
+        .map(|(idx, id, name, args)| {
             let (result, duration_ms) = partial
                 .tool_results
                 .get(idx)
                 .map(|(r, d)| (Some(r.clone()), Some(*d)))
                 .unwrap_or((None, None));
             MessageToolCall {
-                id: format!("recovered-{idx}"),
+                id: id.clone(),
                 name: name.clone(),
                 input: serde_json::from_str(args).unwrap_or_else(|_| json!({})),
                 result,
@@ -3460,6 +3505,7 @@ mod tests {
             &s.id,
             msg_id,
             &super::super::sessions_dir::PartialFragment::ToolCall {
+                id: None,
                 index: 0,
                 name: Some("Bash".into()),
                 arguments_chunk: r#"{"command":"l"#.into(),
@@ -3471,6 +3517,7 @@ mod tests {
             &s.id,
             msg_id,
             &super::super::sessions_dir::PartialFragment::ToolCall {
+                id: None,
                 index: 1,
                 name: None,
                 arguments_chunk: r#"{"path":""#.into(),
@@ -3548,6 +3595,160 @@ mod tests {
         // 二次 load 不再追加（恢复是幂等的，否则每次刷新都会插一对 assistant+marker）。
         let loaded_again = load_with_partial_recovery(&dir, &s.id).unwrap();
         assert_eq!(loaded_again.messages.len(), 2, "幂等：重复加载不应再次追加");
+    }
+
+    #[test]
+    fn partial_recovery_preserves_text_tool_interleaving() {
+        let dir = temp_data_dir("partial-recovery-order");
+        let s = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        let msg_id = "msg-interleaved";
+
+        super::super::sessions_dir::append_partial(
+            &dir,
+            &s.id,
+            msg_id,
+            &super::super::sessions_dir::PartialFragment::Text {
+                text: "先检查状态。".into(),
+            },
+        )
+        .unwrap();
+        super::super::sessions_dir::append_partial(
+            &dir,
+            &s.id,
+            msg_id,
+            &super::super::sessions_dir::PartialFragment::ToolCall {
+                id: None,
+                index: 0,
+                name: Some("Bash".into()),
+                arguments_chunk: r#"{"command":"kubectl get pods"}"#.into(),
+            },
+        )
+        .unwrap();
+        super::super::sessions_dir::append_partial(
+            &dir,
+            &s.id,
+            msg_id,
+            &super::super::sessions_dir::PartialFragment::Reasoning {
+                text: "工具返回后继续判断。".into(),
+            },
+        )
+        .unwrap();
+        super::super::sessions_dir::append_partial(
+            &dir,
+            &s.id,
+            msg_id,
+            &super::super::sessions_dir::PartialFragment::Text {
+                text: "再看日志。".into(),
+            },
+        )
+        .unwrap();
+        super::super::sessions_dir::append_partial(
+            &dir,
+            &s.id,
+            msg_id,
+            &super::super::sessions_dir::PartialFragment::ToolCall {
+                id: None,
+                index: 1,
+                name: Some("BashOutput".into()),
+                arguments_chunk: r#"{"task_id":"bash_001"}"#.into(),
+            },
+        )
+        .unwrap();
+
+        let loaded = load_with_partial_recovery(&dir, &s.id).unwrap();
+        let assistant = loaded
+            .messages
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .expect("partial 应恢复成 assistant message");
+
+        let part_kinds: Vec<&str> = assistant
+            .parts
+            .iter()
+            .map(|p| match p {
+                MessagePart::Reasoning { .. } => "reasoning",
+                MessagePart::Text { .. } => "text",
+                MessagePart::ToolCall { .. } => "tool_call",
+            })
+            .collect();
+        assert_eq!(
+            part_kinds,
+            vec!["text", "tool_call", "reasoning", "text", "tool_call", "text"],
+            "partial 恢复必须按原始流式顺序交错渲染，最后一段 text 是中断话术"
+        );
+
+        match &assistant.parts[0] {
+            MessagePart::Text { text } => assert_eq!(text, "先检查状态。"),
+            other => panic!("第一段应是 text，实际 {other:?}"),
+        }
+        match &assistant.parts[2] {
+            MessagePart::Reasoning { text, .. } => assert_eq!(text, "工具返回后继续判断。"),
+            other => panic!("第三段应是 reasoning，实际 {other:?}"),
+        }
+        match &assistant.parts[3] {
+            MessagePart::Text { text } => assert_eq!(text, "再看日志。"),
+            other => panic!("第四段应是 text，实际 {other:?}"),
+        }
+
+        let assistant_pos = loaded
+            .messages
+            .iter()
+            .position(|m| m.id == assistant.id)
+            .expect("assistant 应在消息列表里");
+        let marker = loaded
+            .messages
+            .get(assistant_pos + 1)
+            .expect("恢复 assistant 后必须紧跟 Interrupted marker");
+        assert_eq!(marker.role, Role::Marker);
+        assert!(matches!(marker.meta, Some(MessageMeta::Interrupted)));
+    }
+
+    #[test]
+    fn partial_recovery_preserves_original_tool_call_ids() {
+        let dir = temp_data_dir("partial-recovery-tool-id");
+        let s = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        let msg_id = "msg-tool-id";
+
+        super::super::sessions_dir::append_partial(
+            &dir,
+            &s.id,
+            msg_id,
+            &super::super::sessions_dir::PartialFragment::ToolCall {
+                index: 0,
+                id: Some("call_real_bash".into()),
+                name: Some("Bash".into()),
+                arguments_chunk: r#"{"command":"echo hi"}"#.into(),
+            },
+        )
+        .unwrap();
+        super::super::sessions_dir::append_partial(
+            &dir,
+            &s.id,
+            msg_id,
+            &super::super::sessions_dir::PartialFragment::ToolResult {
+                index: 0,
+                call_id: Some("call_real_bash".into()),
+                result: "hi".into(),
+                duration_ms: 7,
+            },
+        )
+        .unwrap();
+
+        let loaded = load_with_partial_recovery(&dir, &s.id).unwrap();
+        let assistant = loaded
+            .messages
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .expect("partial 应恢复成 assistant message");
+
+        assert_eq!(assistant.tool_calls.len(), 1);
+        assert_eq!(assistant.tool_calls[0].id, "call_real_bash");
+        assert_eq!(assistant.tool_calls[0].result.as_deref(), Some("hi"));
+        let recovered_part_id = assistant.parts.iter().find_map(|part| match part {
+            MessagePart::ToolCall { id, .. } => Some(id.as_str()),
+            _ => None,
+        });
+        assert_eq!(recovered_part_id, Some("call_real_bash"));
     }
 
     #[test]

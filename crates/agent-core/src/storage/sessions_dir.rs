@@ -146,6 +146,8 @@ pub enum PartialFragment {
     ToolCall {
         index: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         #[serde(default)]
         arguments_chunk: String,
@@ -154,6 +156,8 @@ pub enum PartialFragment {
     /// `ToolCallFinished` 到达时立刻落盘，保证强退后恢复时 tool call 有 result。
     ToolResult {
         index: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
         result: String,
         #[serde(default)]
         duration_ms: u64,
@@ -293,14 +297,24 @@ pub fn delete_partial(data_dir: &Path, session_id: &str, msg_id: &str) -> AppRes
     Ok(())
 }
 
+/// partial 恢复后的有序内容片段。保留原始流式顺序，避免恢复时把所有文本挤到工具前面。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecoveredPartialFragment {
+    Text(String),
+    Reasoning(String),
+    ToolCall { index: u32 },
+}
+
 /// 中断恢复结果：每个 msg_id 累出文本 + reasoning + tool_call 串 + tool_result。
 #[derive(Debug, Default, Clone)]
 pub struct RecoveredPartial {
     pub msg_id: String,
     pub text: String,
     pub reasoning: String,
-    /// 按 index 聚合的 tool_call arguments 累积字符串（name, arguments）。
-    pub tool_calls: std::collections::BTreeMap<u32, (Option<String>, String)>,
+    /// 按原始 partial 行顺序合并后的内容片段。
+    pub fragments: Vec<RecoveredPartialFragment>,
+    /// 按 index 聚合的 tool_call id / name / arguments 累积字符串。
+    pub tool_calls: std::collections::BTreeMap<u32, (Option<String>, Option<String>, String)>,
     /// 按 index 聚合的 tool 执行结果（result, duration_ms）。
     pub tool_results: std::collections::BTreeMap<u32, (String, u64)>,
     /// 写入方是否仍存活（`.live` 锁仍被持有 = run 还在跑）。`true` = 活流式内容，
@@ -355,27 +369,63 @@ pub fn recover_interrupted_partials(
                 continue;
             }
             match serde_json::from_str::<PartialFragment>(line) {
-                Ok(PartialFragment::Text { text }) => recovered.text.push_str(&text),
-                Ok(PartialFragment::Reasoning { text }) => recovered.reasoning.push_str(&text),
+                Ok(PartialFragment::Text { text }) => {
+                    recovered.text.push_str(&text);
+                    match recovered.fragments.last_mut() {
+                        Some(RecoveredPartialFragment::Text(prev)) => prev.push_str(&text),
+                        _ => recovered.fragments.push(RecoveredPartialFragment::Text(text)),
+                    }
+                }
+                Ok(PartialFragment::Reasoning { text }) => {
+                    recovered.reasoning.push_str(&text);
+                    match recovered.fragments.last_mut() {
+                        Some(RecoveredPartialFragment::Reasoning(prev)) => prev.push_str(&text),
+                        _ => recovered
+                            .fragments
+                            .push(RecoveredPartialFragment::Reasoning(text)),
+                    }
+                }
                 Ok(PartialFragment::ToolCall {
                     index,
+                    id,
                     name,
                     arguments_chunk,
                 }) => {
                     let entry = recovered
                         .tool_calls
                         .entry(index)
-                        .or_insert((None, String::new()));
+                        .or_insert((None, None, String::new()));
                     if entry.0.is_none() {
-                        entry.0 = name;
+                        entry.0 = id;
                     }
-                    entry.1.push_str(&arguments_chunk);
+                    if entry.1.is_none() {
+                        entry.1 = name;
+                    }
+                    entry.2.push_str(&arguments_chunk);
+                    if !matches!(
+                        recovered.fragments.last(),
+                        Some(RecoveredPartialFragment::ToolCall { index: last }) if *last == index
+                    ) {
+                        recovered
+                            .fragments
+                            .push(RecoveredPartialFragment::ToolCall { index });
+                    }
                 }
                 Ok(PartialFragment::ToolResult {
                     index,
+                    call_id,
                     result,
                     duration_ms,
                 }) => {
+                    if let Some(call_id) = call_id {
+                        let entry = recovered
+                            .tool_calls
+                            .entry(index)
+                            .or_insert((None, None, String::new()));
+                        if entry.0.is_none() {
+                            entry.0 = Some(call_id);
+                        }
+                    }
                     recovered
                         .tool_results
                         .entry(index)
@@ -471,6 +521,7 @@ mod tests {
             sid,
             "msg1",
             &PartialFragment::ToolCall {
+                id: None,
                 index: 0,
                 name: Some("Bash".into()),
                 arguments_chunk: r#"{"command""#.into(),
@@ -482,6 +533,7 @@ mod tests {
             sid,
             "msg1",
             &PartialFragment::ToolCall {
+                id: None,
                 index: 0,
                 name: None,
                 arguments_chunk: r#":"ls"}"#.into(),
@@ -495,8 +547,8 @@ mod tests {
         assert_eq!(r.msg_id, "msg1");
         assert_eq!(r.text, "hello world");
         let tc = r.tool_calls.get(&0).unwrap();
-        assert_eq!(tc.0.as_deref(), Some("Bash"));
-        assert_eq!(tc.1, r#"{"command":"ls"}"#);
+        assert_eq!(tc.1.as_deref(), Some("Bash"));
+        assert_eq!(tc.2, r#"{"command":"ls"}"#);
     }
 
     /// 回归（架构 §7.8.5 步骤⑥）：活 run 的 partial 现在**返回但标 `alive=true`**——

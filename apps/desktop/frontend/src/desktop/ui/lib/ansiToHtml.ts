@@ -19,6 +19,34 @@ const BG_COLORS: Record<number, string> = {
   104: "#9cdcfe", 105: "#c586c0", 106: "#4ec9b0", 107: "#ffffff",
 };
 
+// 光标移动 / 清屏 / 清行 / 模式切换等非 SGR 的 CSI 序列
+// eslint-disable-next-line no-control-regex
+const CURSOR_ANSI_RE = /\x1b\[\d*[ABCDEFGHJKSTfhl]/g;
+// eslint-disable-next-line no-control-regex
+const DEC_PRIVATE_RE = /\x1b\[\?\d+[hl]/g;
+
+/**
+ * 清理 PTY 输出中的光标移动 ANSI 转义码并合并 \r 回行。
+ * docker pull / npm install 等进度条用 \r 覆盖同行、ESC[nA 回跳前 n 行。
+ */
+export function cleanAnsiProgress(text: string): string {
+  // 1. 去掉光标移动 / 清屏 / 清行 / 模式切换 ANSI 序列
+  let cleaned = text.replace(CURSOR_ANSI_RE, "");
+  cleaned = cleaned.replace(DEC_PRIVATE_RE, "");
+
+  // 2. CRLF → LF：PTY 输出常用 \r\n 换行，不能误当进度条覆盖
+  cleaned = cleaned.replace(/\r\n/g, "\n");
+
+  // 3. 合并 \r 回行：每行只保留最后一个 \r 之后的内容（模拟终端覆盖效果）
+  const lines = cleaned.split("\n");
+  const merged = lines.map((line) => {
+    const segments = line.split("\r");
+    return segments[segments.length - 1];
+  });
+
+  return merged.join("\n");
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -28,10 +56,13 @@ function escapeHtml(s: string): string {
 }
 
 export function ansiToHtml(input: string): string {
+  // 先清理光标移动 ANSI + 合并 \r 回行（docker pull 等进度条）
+  const cleaned = cleanAnsiProgress(input);
+
   // Split on ANSI CSI sequences: ESC [ ... m
   // eslint-disable-next-line no-control-regex
-  const parts = input.split(/\x1b\[([0-9;]*)m/);
-  if (parts.length === 1) return escapeHtml(input);
+  const parts = cleaned.split(/\x1b\[([0-9;]*)m/);
+  if (parts.length === 1) return escapeHtml(cleaned);
 
   let result = "";
   let fg = "";

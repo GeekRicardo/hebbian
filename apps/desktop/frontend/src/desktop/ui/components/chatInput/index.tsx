@@ -110,6 +110,7 @@ function ChatInputInner({
   const editorRef = useRef<EditorController | null>(null);
 
   const compactingSessionId = useStore((s) => s.compactingSessionId);
+  const compactionOutputTokens = useStore((s) => s.compactionOutputTokens);
   const currentSessionId = useStore((s) => s.currentSession?.id ?? null);
   const compacting = isSessionCompacting(compactingSessionId, currentSessionId);
   const compactCurrentSession = useStore((s) => s.compactCurrentSession);
@@ -689,9 +690,30 @@ function ChatInputInner({
     <div className={cn("pl-2 pr-4 pt-0 pb-3 text-sm", isStreaming && "chat-input-streaming")}>
       <div className="pt-0 relative">
         {compacting && (
-          <div className="mb-2 flex items-center gap-2 rounded-2xl border border-blue-500/20 bg-blue-500/8 px-3 py-2 text-xs text-blue-700 shadow-sm dark:text-blue-300">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span>正在压缩上下文…</span>
+          <div className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-blue-500/20 bg-blue-500/8 px-3 py-2 text-xs text-blue-700 shadow-sm dark:text-blue-300">
+            <div className="flex min-w-0 items-center gap-2">
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              <span>正在压缩上下文…</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <div className="flex items-baseline gap-1 font-mono tabular-nums">
+                <span className="text-sm font-semibold leading-none transition-all duration-150">
+                  {compactionOutputTokens.toLocaleString()}
+                </span>
+                <span className="text-[10px] uppercase tracking-wide opacity-70">tokens</span>
+              </div>
+              {isStreaming && (
+                <button
+                  type="button"
+                  onClick={() => void cancel()}
+                  disabled={canceling}
+                  className="rounded-md border border-blue-500/25 px-2 py-1 text-[11px] font-medium transition hover:bg-blue-500/10 disabled:opacity-50 disabled:pointer-events-none"
+                  title="取消压缩"
+                >
+                  取消压缩
+                </button>
+              )}
+            </div>
           </div>
         )}
         {/* 白色输入卡片 */}

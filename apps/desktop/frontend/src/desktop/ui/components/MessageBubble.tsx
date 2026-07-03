@@ -1398,6 +1398,21 @@ function ToolCallDetail({
   const [bgOutput, setBgOutput] = useState<string>("");
   const [killedLocally, setKilledLocally] = useState(false);
 
+  // elapsed / timeout 倒计时（默认 60s，与 Rust DEFAULT_TIMEOUT_SECS 一致）
+  const timeoutSecs =
+    parseInt(argString(callArgs(call), "timeout_secs")) || 60;
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (call.status !== "running") return;
+    const start = Date.now();
+    setElapsed(0);
+    const timer = setInterval(
+      () => setElapsed(Math.floor((Date.now() - start) / 1000)),
+      1000,
+    );
+    return () => clearInterval(timer);
+  }, [call.status]);
+
   // 前台 Bash 运行中时，轮询 listBackgroundTasks 按 command 匹配 task_id
   useEffect(() => {
     // 仅对运行中的前台 Bash 生效（真后台从 result 已能提取 task_id）
@@ -1536,16 +1551,21 @@ function ToolCallDetail({
           <ToolPre dark>{body}</ToolPre>
         </ExpandButton>
         <ToolPre dark>{body}</ToolPre>
-        {/* Kill 按钮：仅当有 taskId 且任务正在运行时显示 */}
+        {/* 终止按钮 + 倒计时 */}
         {canKill && (
-          <button
-            onClick={handleKill}
-            className="absolute top-2 right-10 flex items-center gap-1 rounded-md bg-red-500/10 px-2 py-1 text-xs text-red-500 hover:bg-red-500/20 transition-colors"
-            title="终止任务"
-          >
-            <Square className="w-3 h-3 fill-current" />
-            终止
-          </button>
+          <div className="absolute top-2 right-10 flex items-center gap-2">
+            <span className="tabular-nums text-[11px] text-muted-foreground/70 font-mono whitespace-nowrap select-none">
+              {elapsed}s / {timeoutSecs}s
+            </span>
+            <button
+              onClick={handleKill}
+              className="flex items-center gap-1 rounded-md bg-red-500/10 px-2 py-1 text-xs text-red-500 hover:bg-red-500/20 transition-colors"
+              title="终止任务"
+            >
+              <Square className="w-3 h-3 fill-current" />
+              终止
+            </button>
+          </div>
         )}
       </div>
     );

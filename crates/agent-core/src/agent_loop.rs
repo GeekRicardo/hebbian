@@ -11,7 +11,7 @@ use tracing::{debug, field::Empty, info, Instrument};
 use crate::{
     context::{
         budget,
-        compaction::{build_compaction_request, compact_request_with_llm, needs_compaction},
+        compaction::{build_compaction_request, needs_compaction},
         microcompact::{microcompact, MicrocompactPolicy},
         tool_xml_leak::sanitize_tool_xml_leak,
         transcript::Transcript,
@@ -718,8 +718,16 @@ pub async fn run_loop(
             emit(EventPayload::ContextCompactionStarted {
                 before_tokens: compact_before_tokens,
             });
-            let compaction_outcome =
-                compact_request_with_llm(client, compact_req, compact_before_tokens).await;
+            let compaction_outcome = crate::context::compaction::compact_request_with_llm_progress(
+                client,
+                compact_req,
+                compact_before_tokens,
+                cancel.clone(),
+                |output_tokens| {
+                    emit(EventPayload::ContextCompactionProgress { output_tokens });
+                },
+            )
+            .await;
             let compact_duration_ms = compact_start.elapsed().as_millis() as u64;
 
             if let (Some(dump), Some(req)) = (model_io_dump.as_ref(), compact_req_snapshot) {
@@ -761,6 +769,10 @@ pub async fn run_loop(
                     transcript.entries = compaction_result.entries;
                     drop(_enter);
 
+                    if let Some(p) = persister.as_ref() {
+                        p.flush_segment().await;
+                    }
+
                     // 写 compact_boundary marker 到 session.jsonl，前端渲染压缩分隔线 +
                     // 可展开的摘要（与手动 /compact 落的 marker 同形态）。
                     if let (Some(dd), Some(sid)) = (data_dir.as_ref(), session_id.as_deref()) {
@@ -798,6 +810,10 @@ pub async fn run_loop(
                             after_tokens,
                         })
                         .await;
+                }
+                Err(ModelError::Cancelled) => {
+                    drop(_enter);
+                    return Err(ModelError::Cancelled);
                 }
                 Err(e) => {
                     // LLM 压缩失败（供应商不可用 / 网络断 / 返回空摘要等）：
@@ -1678,9 +1694,11 @@ pub async fn run_loop(
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use common::AppResult;
     use model_gateway::types::{
-        ModelRequest, ModelResponse, ModelStreamEvent, TranscriptEntry, Usage,
+        ModelRequest, ModelResponse, ModelStreamEvent, ToolCall, TranscriptEntry, Usage,
     };
+    use serde_json::{json, Value};
     use std::sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Mutex,
@@ -1701,6 +1719,27 @@ mod tests {
         let failed: Result<AssistantOutput, ModelError> = Err(ModelError::Other("boom".into()));
         let (kind, _) = continue_for_outcome(&failed, &FinishReason::Stop).unwrap();
         assert_eq!(kind, ContinueKind::NetworkError);
+    }
+
+    struct StubTool;
+
+    #[async_trait]
+    impl crate::tools::Tool for StubTool {
+        fn name(&self) -> &str {
+            "Stub"
+        }
+
+        fn description(&self) -> &str {
+            "stub tool"
+        }
+
+        fn parameters_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+
+        async fn execute(&self, _input: Value) -> AppResult<String> {
+            Ok("工具结果".repeat(12_000))
+        }
     }
 
     struct FailingModelClient;
@@ -1912,6 +1951,91 @@ mod tests {
         }
     }
 
+    struct AutoCompactOrderingClient {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ModelClient for AutoCompactOrderingClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        fn supports_streaming_tools(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            assert_eq!(req.meta.tag, model_gateway::types::ModelCallTag::Compaction);
+            Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
+                text: "压缩摘要".to_string(),
+                reasoning: String::new(),
+                attachments: Vec::new(),
+                usage: Usage::default(),
+                reasoning_signature: String::new(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            _cancel: CancelFlag,
+            on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            if req.meta.tag == model_gateway::types::ModelCallTag::Compaction {
+                on_event(ModelStreamEvent::TextDelta {
+                    text: "压缩摘要".to_string(),
+                });
+                return Ok(ModelResponse::Done {
+                    finish: model_gateway::types::FinishReason::Stop,
+                    text: "压缩摘要".to_string(),
+                    reasoning: String::new(),
+                    attachments: Vec::new(),
+                    usage: Usage::default(),
+                    reasoning_signature: String::new(),
+                });
+            }
+            match self.calls.fetch_add(1, Ordering::SeqCst) {
+                0 => {
+                    on_event(ModelStreamEvent::TextDelta {
+                        text: "压缩前输出".to_string(),
+                    });
+                    Ok(ModelResponse::ToolCalls {
+                        text: "压缩前输出".to_string(),
+                        reasoning: String::new(),
+                        calls: vec![ToolCall {
+                            id: "call_stub".to_string(),
+                            name: "Stub".to_string(),
+                            input: json!({}),
+                        }],
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                        reasoning_signature: String::new(),
+                    })
+                }
+                1 => {
+                    on_event(ModelStreamEvent::TextDelta {
+                        text: "压缩后输出".to_string(),
+                    });
+                    Ok(ModelResponse::Done {
+                        finish: model_gateway::types::FinishReason::Stop,
+                        text: "压缩后输出".to_string(),
+                        reasoning: String::new(),
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                        reasoning_signature: String::new(),
+                    })
+                }
+                _ => unreachable!("unexpected extra model call"),
+            }
+        }
+    }
+
     struct PendingInputAfterTurnFinishedClient {
         calls: AtomicUsize,
     }
@@ -1984,6 +2108,125 @@ mod tests {
                 _ => unreachable!("unexpected extra model call"),
             }
         }
+    }
+
+    fn assistant_message_has_text(message: &crate::storage::sessions::Message, needle: &str) -> bool {
+        message.role == crate::storage::sessions::Role::Assistant
+            && (message.content.contains(needle)
+                || message.parts.iter().any(|part| {
+                    matches!(part, crate::storage::sessions::MessagePart::Text { text } if text.contains(needle))
+                }))
+    }
+
+    #[tokio::test]
+    async fn automatic_compaction_marker_splits_persisted_run_segments() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let session = crate::storage::sessions::create(
+            data_dir.path(),
+            "test".into(),
+            "test-model".into(),
+            None,
+            None,
+        )
+        .unwrap();
+        let session_id = session.id.clone();
+        let mut transcript = Transcript::new(None);
+        transcript.push_user("请运行工具后继续".to_string(), Vec::new());
+        crate::storage::sessions::append_message(
+            data_dir.path(),
+            &session_id,
+            crate::storage::sessions::Message {
+                id: crate::storage::sessions::new_id(),
+                role: crate::storage::sessions::Role::User,
+                content: "请运行工具后继续".to_string(),
+                attachments: Vec::new(),
+                tool_calls: Vec::new(),
+                parts: Vec::new(),
+                created_at: chrono::Utc::now().timestamp_millis(),
+                meta: None,
+                subagent_call_id: None,
+                run_duration_ms: None,
+            },
+        )
+        .unwrap();
+
+        let client = AutoCompactOrderingClient {
+            calls: AtomicUsize::new(0),
+        };
+        let state = Arc::new(RunState::new(RunId::new()));
+        let workspace = Workspace::new(data_dir.path().to_path_buf(), Vec::new());
+        let persister = crate::run_persister::RunPersister::new(
+            data_dir.path().to_path_buf(),
+            session_id.clone(),
+        );
+        let persister_handle = persister.handle();
+        let mut policy = CompactionPolicy::default();
+        policy.token_budget = 10_500;
+
+        let result = run_loop(
+            LoopParams {
+                client: &client,
+                registry: Arc::new(ToolRegistry::new(vec![Box::new(StubTool)])),
+                hitl: Arc::new(HitlGate::default()),
+                hooks: Arc::new(HookManager::empty()),
+                transcript: &mut transcript,
+                enabled_tools: &["Stub".to_string()],
+                compaction_policy: &policy,
+                workspace,
+                stream: true,
+                cancel: Arc::new(AtomicBool::new(false)),
+                state,
+                agent: AgentRef::new("test"),
+                parent: None,
+                model_io_dump: None,
+                pending_inputs: None,
+                consumed_pending_inputs: None,
+                pending_inputs_accepting: None,
+                run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
+                model_id: None,
+                judge_client: None,
+                force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                data_dir: Some(data_dir.path().to_path_buf()),
+                session_id: Some(session_id.clone()),
+                phase: None,
+                resume_from: None,
+                edits_worktree: None,
+                max_tool_iterations: None,
+                system_rules: None,
+                subagent_ctx: None,
+                subagent_bypass: false,
+                persister: Some(persister),
+                call_tag: Default::default(),
+            },
+            Arc::new(move |event| {
+                persister_handle.observe(&event);
+            }),
+        )
+        .await
+        .expect("run should finish");
+
+        assert_eq!(result.text, "压缩后输出");
+        let loaded = crate::storage::sessions::load(data_dir.path(), &session_id).unwrap();
+        let before_idx = loaded
+            .messages
+            .iter()
+            .position(|m| assistant_message_has_text(m, "压缩前输出"))
+            .expect("压缩前 assistant 段应先落盘");
+        let boundary_idx = loaded
+            .messages
+            .iter()
+            .position(|m| matches!(m.meta, Some(crate::storage::sessions::MessageMeta::CompactBoundary { .. })))
+            .expect("应落 compact boundary");
+        let after_idx = loaded
+            .messages
+            .iter()
+            .position(|m| assistant_message_has_text(m, "压缩后输出"))
+            .expect("压缩后 assistant 段应落盘");
+
+        assert!(
+            before_idx < boundary_idx && boundary_idx < after_idx,
+            "压缩 marker 必须切开同一 run 的前后输出，实际顺序: before={before_idx}, boundary={boundary_idx}, after={after_idx}"
+        );
     }
 
     #[tokio::test]

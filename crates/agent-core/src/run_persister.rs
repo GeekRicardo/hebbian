@@ -405,7 +405,11 @@ fn partial_fragment_of(payload: &EventPayload) -> Option<PartialFragment> {
         EventPayload::TextDelta { text } => Some(PartialFragment::Text { text: text.clone() }),
         EventPayload::Reasoning { text } => Some(PartialFragment::Reasoning { text: text.clone() }),
         EventPayload::ToolCallStarted {
-            index, name, input, ..
+            index,
+            call_id,
+            name,
+            input,
+            ..
         } => {
             let args = serde_json::to_string(input)
                 .ok()
@@ -413,12 +417,14 @@ fn partial_fragment_of(payload: &EventPayload) -> Option<PartialFragment> {
                 .unwrap_or_default();
             Some(PartialFragment::ToolCall {
                 index: *index as u32,
+                id: Some(call_id.clone()),
                 name: Some(name.clone()),
                 arguments_chunk: args,
             })
         }
         EventPayload::ToolCallDelta {
             index,
+            id,
             name,
             arguments_delta,
             ..
@@ -426,16 +432,19 @@ fn partial_fragment_of(payload: &EventPayload) -> Option<PartialFragment> {
             .as_ref()
             .map(|chunk| PartialFragment::ToolCall {
                 index: *index as u32,
+                id: id.clone(),
                 name: name.clone(),
                 arguments_chunk: chunk.clone(),
             }),
         EventPayload::ToolCallFinished {
             index,
+            call_id,
             result,
             duration_ms,
             ..
         } => Some(PartialFragment::ToolResult {
             index: *index as u32,
+            call_id: Some(call_id.clone()),
             result: result.clone(),
             duration_ms: *duration_ms,
         }),

@@ -326,6 +326,10 @@ impl BashTool {
             .try_clone_reader()
             .map_err(|e| AppError::msg(format!("PTY: reader 失败 {e}")))?;
 
+        // 关闭 master 写端：子进程的 stdin 读不到输入 = EOF，
+        // 避免 apt install / rm -i 等交互式 y/N 提示卡住永远等输入。
+        drop(pair.master);
+
         // mpsc: spawn_blocking reader → async context
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(128);
 
@@ -387,7 +391,8 @@ impl BashTool {
                             } else {
                                 if suffix.is_empty() { buffer } else { format!("{buffer}\n{suffix}") }
                             };
-                            return Ok((truncate_bytes(&text, MAX_OUTPUT_BYTES), is_error));
+                            let cleaned = clean_ansi_progress(&text);
+                            return Ok((truncate_bytes(&cleaned, MAX_OUTPUT_BYTES), is_error));
                         }
                     }
                 }
@@ -404,7 +409,8 @@ impl BashTool {
                         buffer.push('\n');
                     }
                     buffer.push_str("[已中断]");
-                    return Ok((truncate_bytes(&buffer, MAX_OUTPUT_BYTES), false));
+                    let cleaned = clean_ansi_progress(&buffer);
+                    return Ok((truncate_bytes(&cleaned, MAX_OUTPUT_BYTES), false));
                 }
                 _ = tokio::time::sleep_until(deadline) => {
                     // 超时不杀——注册为后台任务，PTY 输出继续灌 tail buffer，
@@ -454,8 +460,10 @@ impl BashTool {
                     );
                     if !buffer.is_empty() {
                         text.push_str("\n--- 已产出 ---\n");
-                        text.push_str(&buffer);
+                        text.push_str(&clean_ansi_progress(&buffer));
                     }
+                    // 提示模型用 BashOutput + wait_ms 取增量，避免立刻 poll 到空
+                    text.push_str("\n\n[BashOutput 增量读取，传 wait_ms 等新输出]");
                     return Ok((truncate_bytes(&text, MAX_OUTPUT_BYTES), false));
                 }
             }
@@ -477,9 +485,39 @@ fn pty_kill_process_group(child: &mut Box<dyn portable_pty::Child + Send + Sync>
 fn pty_kill_process_group(child: &mut Box<dyn portable_pty::Child + Send + Sync>) {
     let _ = child.kill();
 }
-/// task 终态时投递 BgTaskFinished 事件，surface 据此把 task-notification 注入下一轮
-/// user message——CC 2.1 同款"completed 自动通知"。携带 `tool_use_id` 让通知能反查
-/// 到触发它的 tool_call。
+
+/// 清理 PTY 输出中的光标移动 ANSI 转义码并合并 `\r` 回行。
+/// docker pull / npm install 等进度条用 `\r` 覆盖同行、`ESC[nA` 回跳前 n 行。
+/// 不处理的话文件里会堆积大量重复行和乱码，模型 Read 不到可读内容。
+fn clean_ansi_progress(text: &str) -> String {
+    use std::sync::LazyLock;
+    use regex::Regex;
+    static RE_CURSOR: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("\x1b\\[\\d*[ABCDEFGHJKSTfhl]").unwrap());
+    static RE_DEC: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("\x1b\\[\\?\\d+[hl]").unwrap());
+
+    let cleaned = RE_CURSOR.replace_all(text, "");
+    let cleaned = RE_DEC.replace_all(&cleaned, "");
+
+    // CRLF → LF：PTY 输出常用 \r\n 换行，不能让 \r 被误当进度条覆盖
+    let cleaned = cleaned.replace("\r\n", "\n");
+
+    // 合并 \r 回行：每行只保留最后一个 \r 之后的内容
+    let cleaned = cleaned.trim_end_matches('\n');
+    let mut out = String::with_capacity(cleaned.len());
+    for line in cleaned.split('\n') {
+        if let Some(last) = line.rsplit('\r').next() {
+            out.push_str(last);
+        }
+        out.push('\n');
+    }
+    // 去掉末尾多余的换行
+    out.truncate(out.trim_end().len());
+    out
+}
+
+/// 启动后台 task 后自动 arm 一个 WakeupScheduler 监听（架构 §4.12.5 修订）。
 ///
 /// 没有 session_id / run_id（CLI 单跑 / 单测路径）时跳过——没有完整 RunState 串接，
 /// arm 也唤不醒任何 ResumeHandler，徒增日志噪音。
@@ -938,5 +976,16 @@ mod tests {
         // PTY 下应收到多个 chunk（不是等到结束才一次性吐）
         assert!(chunks.len() >= 2, "expected >=2 chunks, got {} chunks. Output: {out}", chunks.len());
         assert!(out.contains("DONE"), "output should contain DONE: {out}");
+    }
+
+    #[test]
+    fn clean_ansi_progress_strips_cursor_and_merges_cr() {
+        // 模拟 docker pull 的典型输出：
+        // line1 → ESC[1A(回上行) ESC[2K(清行) \r(回行首) line1-updated → line2 \r merged
+        // 光标移动 ESC[1A 的"回上行覆盖"语义在纯文本处理中无法精确模拟（需要终端仿真器），
+        // 因此旧行和新行会共存——但至少去掉了乱码 ANSI 转义序列、合并了 \r 回行。
+        let raw = "line1\n\x1b[1A\x1b[2K\rline1-updated\nline2\rmerged\n";
+        let cleaned = super::clean_ansi_progress(raw);
+        assert_eq!(cleaned, "line1\nline1-updated\nmerged");
     }
 }

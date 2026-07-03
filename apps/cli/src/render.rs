@@ -231,6 +231,10 @@ impl TurnRenderer {
                 let _guard = self.output_lock.lock().ok();
                 println!("  {}", format!("[正在压缩上下文 · {before_tokens} tokens]").dimmed());
             }
+            EventPayload::ContextCompactionProgress { output_tokens } => {
+                let _guard = self.output_lock.lock().ok();
+                eprint!("\r  {}", format!("[正在压缩上下文 · 已生成 {output_tokens} tokens]").dimmed());
+            }
             EventPayload::ContextCompacted {
                 before_tokens,
                 after_tokens,

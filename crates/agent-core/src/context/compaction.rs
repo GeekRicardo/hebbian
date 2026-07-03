@@ -1,11 +1,12 @@
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::context::budget;
 use crate::definition::CompactionPolicy;
+use common::CancelFlag;
 use model_gateway::client::ModelClient;
 use model_gateway::types::{
-    AssistantEntry, ModelError, ModelRequest, ModelResponse, TranscriptEntry, UserEntry,
+    AssistantEntry, ModelError, ModelRequest, ModelResponse, ModelStreamEvent, TranscriptEntry,
+    UserEntry,
 };
 
 /// 默认的中文压缩 prompt。让模型把历史浓缩成接力摘要，下一个 LLM
@@ -135,9 +136,32 @@ pub async fn compact_request_with_llm(
     req: ModelRequest,
     before_tokens: usize,
 ) -> Result<CompactionResult, ModelError> {
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    compact_request_with_llm_progress(client, req, before_tokens, cancel, |_| {}).await
+}
+
+/// 同 [`compact_request_with_llm`]，但会在压缩摘要流式输出期间回调已产出的估算 token。
+pub async fn compact_request_with_llm_progress<F>(
+    client: &dyn ModelClient,
+    req: ModelRequest,
+    before_tokens: usize,
+    cancel: CancelFlag,
+    on_progress: F,
+) -> Result<CompactionResult, ModelError>
+where
+    F: Fn(usize) + Send + Sync,
+{
     let system = req.system.clone();
-    let cancel = Arc::new(AtomicBool::new(false));
-    let summary = match client.complete(req, cancel).await? {
+    let streamed_text = Mutex::new(String::new());
+    let on_stream = |event: ModelStreamEvent| {
+        if let ModelStreamEvent::TextDelta { text } = event {
+            let mut streamed_text = streamed_text.lock().unwrap();
+            streamed_text.push_str(&text);
+            on_progress(budget::estimate_tokens(&streamed_text));
+        }
+    };
+    let response = client.stream(req, cancel, &on_stream).await?;
+    let summary = match response {
         ModelResponse::Done { text, .. } | ModelResponse::ToolCalls { text, .. } => text,
     };
 
@@ -174,7 +198,8 @@ pub async fn compact_with_llm(
     custom_instructions: Option<&str>,
 ) -> Result<CompactionResult, ModelError> {
     let (before_tokens, req) = build_compaction_request(system, entries, custom_instructions);
-    compact_request_with_llm(client, req, before_tokens).await
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    compact_request_with_llm_progress(client, req, before_tokens, cancel, |_| {}).await
 }
 
 #[cfg(test)]
@@ -320,6 +345,57 @@ mod tests {
             TranscriptEntry::User(u) => assert!(u.text.contains("上下文压缩")),
             _ => panic!("last entry should be user"),
         }
+    }
+
+    struct CancelAwareClient;
+
+    #[async_trait]
+    impl ModelClient for CancelAwareClient {
+        fn provider_id(&self) -> &str {
+            "cancel-aware"
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            if common::runtime::is_cancelled(&cancel) {
+                return Err(ModelError::Cancelled);
+            }
+            Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
+                text: "摘要正文".to_string(),
+                reasoning: String::new(),
+                attachments: Vec::new(),
+                usage: Usage::default(),
+                reasoning_signature: String::new(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            cancel: CancelFlag,
+            _on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            self.complete(req, cancel).await
+        }
+    }
+
+    #[tokio::test]
+    async fn compact_request_uses_provided_cancel_flag() {
+        let (_before_tokens, req) = build_compaction_request(
+            None,
+            vec![TranscriptEntry::User(UserEntry::text("hi"))],
+            None,
+        );
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+        let result = compact_request_with_llm_progress(&CancelAwareClient, req, 1, cancel, |_| {})
+            .await;
+
+        assert!(matches!(result, Err(ModelError::Cancelled)));
     }
 
     #[tokio::test]

@@ -138,6 +138,9 @@ pub enum WireEvent {
     ContextCompactionStarted {
         before_tokens: usize,
     },
+    ContextCompactionProgress {
+        output_tokens: usize,
+    },
     ContextCompacted {
         before_tokens: usize,
         after_tokens: usize,
@@ -449,6 +452,11 @@ pub fn to_wire(event: &Event) -> Option<WireEvent> {
         EventPayload::ContextCompactionStarted { before_tokens } => {
             WireEvent::ContextCompactionStarted {
                 before_tokens: *before_tokens,
+            }
+        }
+        EventPayload::ContextCompactionProgress { output_tokens } => {
+            WireEvent::ContextCompactionProgress {
+                output_tokens: *output_tokens,
             }
         }
         EventPayload::ContextCompacted {

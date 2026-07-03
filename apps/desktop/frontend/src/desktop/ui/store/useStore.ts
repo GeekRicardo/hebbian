@@ -622,6 +622,8 @@ interface AppState {
   /** 正在执行自动/手动压缩的会话 id（按会话隔离；null = 没有会话在压缩）。
    *  压缩要调一次 LLM、耗时数秒到数十秒，期间不该阻塞其它会话的发送。 */
   compactingSessionId: string | null;
+  /** 当前压缩摘要已产出的估算 token 数。仅用于等待态展示，不参与账单统计。 */
+  compactionOutputTokens: number;
   refreshContextUsage: () => Promise<void>;
   compactCurrentSession: (customInstructions?: string) => Promise<void>;
 
@@ -1047,6 +1049,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   contextUsage: null,
   compactingSessionId: null,
+  compactionOutputTokens: 0,
   sessionEditSnapshots: {},
   async refreshContextUsage() {
     const cur = get().currentSession;
@@ -1066,7 +1069,7 @@ export const useStore = create<AppState>((set, get) => ({
     // 同一会话已在压缩则忽略重入；别的会话在压缩不阻塞本会话。
     if (!cur || get().compactingSessionId === cur.id) return;
     const sessionId = cur.id;
-    set({ compactingSessionId: sessionId });
+    set({ compactingSessionId: sessionId, compactionOutputTokens: 0 });
     get().handleSessionEngineEvent(sessionId, {
       type: "context_compaction_started",
       before_tokens: get().contextUsage?.used_tokens ?? 0,
@@ -1085,7 +1088,7 @@ export const useStore = create<AppState>((set, get) => ({
     } finally {
       set((state) =>
         state.compactingSessionId === sessionId
-          ? { compactingSessionId: null }
+          ? { compactingSessionId: null, compactionOutputTokens: 0 }
           : state,
       );
     }
@@ -1901,7 +1904,15 @@ export const useStore = create<AppState>((set, get) => ({
       return;
     }
     if (e.type === "context_compaction_started") {
-      set({ compactingSessionId: sessionId });
+      set({ compactingSessionId: sessionId, compactionOutputTokens: 0 });
+      return;
+    }
+    if (e.type === "context_compaction_progress") {
+      set((state) =>
+        state.compactingSessionId === sessionId
+          ? { compactionOutputTokens: e.output_tokens }
+          : state,
+      );
       return;
     }
     if (
@@ -1924,7 +1935,9 @@ export const useStore = create<AppState>((set, get) => ({
       }
       if (e.type === "context_compacted") {
         set((state) =>
-          state.compactingSessionId === sessionId ? { compactingSessionId: null } : state,
+          state.compactingSessionId === sessionId
+            ? { compactingSessionId: null, compactionOutputTokens: 0 }
+            : state,
         );
         void get().refreshContextUsage();
       }
@@ -1933,7 +1946,9 @@ export const useStore = create<AppState>((set, get) => ({
     if (e.type === "notice") {
       if (e.dedup_key === "auto_compaction_failed") {
         set((state) =>
-          state.compactingSessionId === sessionId ? { compactingSessionId: null } : state,
+          state.compactingSessionId === sessionId
+            ? { compactingSessionId: null, compactionOutputTokens: 0 }
+            : state,
         );
       }
       if (e.dedup_key?.startsWith("pending-continue-")) {
@@ -2110,37 +2125,6 @@ export const useStore = create<AppState>((set, get) => ({
             };
           });
           await get().sendUserMessage(head.content, head.attachments, null, {}, sessionId);
-        }
-        // Stop 后插队兜底（§4.2.3）：前端队列无待发、但 cancel 前有 Shift+Enter 注入的消息
-        // 已被 agent_loop drain 进 transcript 而成为 orphan user（无 assistant 回复）。
-        // truncate + regenerate：复跑已有 orphan user，不重复插入。
-        if (e.type === "error" && !head) {
-          const msgs = fresh?.messages ?? loaded?.messages;
-          if (msgs && msgs.length > 0) {
-            let idx = msgs.length - 1;
-            while (idx >= 0 && msgs[idx].role === "marker") idx--;
-            if (idx >= 0 && msgs[idx].role === "user") {
-              const lastUser = msgs[idx];
-              const hasAssistantAfter = msgs.slice(idx + 1).some((m) => m.role === "assistant");
-              if (!hasAssistantAfter && lastUser.content && lastUser.id) {
-                await api.truncateInclusive(sessionId, lastUser.id);
-                const reloaded = await api.getSession(
-                  sessionId,
-                  activeRequestForSession(get(), sessionId),
-                );
-                if (get().currentSession?.id === sessionId) {
-                  set({ currentSession: reloaded });
-                }
-                await get().sendUserMessage(
-                  lastUser.content,
-                  lastUser.attachments ?? [],
-                  null,
-                  {},
-                  sessionId,
-                );
-              }
-            }
-          }
         }
       })().catch(() => {});
     }

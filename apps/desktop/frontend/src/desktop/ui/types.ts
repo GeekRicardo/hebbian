@@ -791,6 +791,11 @@ export type EngineEvent =
       before_tokens: number;
     }
   | {
+      // 压缩摘要模型的流式输出进度。output_tokens 是已产出的估算 token，用于等待态展示。
+      type: "context_compaction_progress";
+      output_tokens: number;
+    }
+  | {
       // 自动压缩完成。后端已在 session 消息流里落 compact_boundary marker；前端收到后刷新消息流。
       type: "context_compacted";
       before_tokens: number;

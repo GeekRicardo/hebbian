@@ -10904,11 +10904,11 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: Desktop frontend 纯样式调整；不改协议、不改 core、不改持久化、不影响 CLI / hebweb 行为。
 - **留尾巴**: 三色点仍是前端视觉占位，不接管系统原生窗口按钮行为；如需真正移动原生 traffic lights，需要另评估 Tauri/macOS 标题栏实现。
 
-### 2026-07-02 — 对齐记忆写入 marker 与 Stop hook 字号
+### 2026-07-02 — 调整记忆写入提示为 12px/16px
 
-- **Why**: 用户看到同一条 assistant 气泡下方的「Stop 检查通过」与「本轮写入 N 条记忆」字号不一致，两个同级低调状态行视觉层级不统一。
+- **Why**: 用户在内置浏览器预览中确认「本轮写入 N 条记忆」提示的最终规格应为 12px 字号、16px 行高；14px/20px 偏大，原 10px 又过小。
 - **改动**:
-  - [apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx](../apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx): 将记忆写入摘要按钮字号从 10px 调整为 11px，并把横向间距对齐 Stop hook 摘要行。
+  - [apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx](../apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx): 将 memoryWrites 摘要按钮的字号 class 从 `text-[10px]` 改为 `text-xs leading-4`，作用于共享组件而非单个实例。
 - **影响范围**: Desktop frontend 纯样式调整；不改协议、不改 core、不改记忆落盘格式，不影响 CLI / hebweb 行为。
 - **留尾巴**: 无。
 
@@ -10945,8 +10945,16 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): cancel break 前加 `drain_pending_inputs`，确保注入的消息在 cancel 前落 transcript + consumed_pending_inputs，防止被 surface 侧 clear 丢弃。
   - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): `handleSessionEngineEvent` 的 `error` 事件（hebcore cancel 路径）处理完后，新增“孤儿 user message”检测——若最后一条非 marker 真实消息是 user 且其后无 assistant 回复，则 truncate + regenerate 立刻起新 run（插队流程）。
 - **影响范围**: agent-core（agent_loop 内部逻辑）+ Desktop 前端（error handler）。不改协议、不改 hebcore IPC、不改 CLI/hebweb。非破坏性变更：agent_loop drain 在 cancel break 之前发生，该 drain 点的位置不影响正常 completion 路径。
-- **留尾巴**: hebcore 路径的 cancel 返回 `WireEvent::Error { message: "run 已取消" }`，前端据此触发 orphan user 检测。in-process 路径（`send_and_save`）的 cancel 走 Tauri command error 返回，不经过此 handler——但 in-process pending_inputs.clear() 在 drain 后已成 no-op，已注入消息仍安全落 transcript。
+- **留尾巴**: hebcore 路径的 cancel 返回 `WireEvent::Error { message: "run 已取消" }`；前端只按 `inputQueues[sessionId]` 是否有队首决定是否继续插队。in-process 路径（`send_and_save`）的 cancel 走 Tauri command error 返回，不经过此 handler——但 in-process pending_inputs.clear() 在 drain 后已成 no-op，已注入消息仍安全落 transcript。
 - **留尾巴**: 无。
+
+- **日期**: 2026-07-02
+- **一句话**: 撤掉 Stop 后基于 orphan user message 的自动续跑判断，避免普通消息 Stop 被误判成插队。
+- **Why**: “最后一条 user 且无 assistant 回复”不是插队消息的可靠判据。任意已有历史的对话里，普通发送一条消息后立刻 Stop，也会满足“前面有 assistant + 最后一条是 user”的形态，导致反复自动重跑。插队是否还要继续，只应该由前端 `inputQueues[sessionId]` 这个队列真源决定；`flushQueuedItem` 成功后已经从队列移除，再 Stop 就不应继续跑。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 删除 `orphanRegenerationGuard` / orphan user 检测 / truncate + regenerate 逻辑；`run_finished` / `error` 后只在 `inputQueues[sessionId]` 有队首时自动发送下一条。
+- **影响范围**: Desktop 前端 queue drain 行为。不改协议、不改 agent-core。保留 agent_loop cancel 前 drain pending_inputs 的后端防丢消息逻辑。
+- **留尾巴**: Shift/Cmd+Enter 已注入 backend 的消息在 Stop 时会落入 transcript 防丢，但由于队列已清空，不会再自动重跑；这符合“发出去就清队列，再 Stop 只是 Stop”的语义。
 
 ### 2026-07-01 — PTY 默认开启 + 超时自动续后台（不杀进程）
 
@@ -10960,3 +10968,64 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs): `pty` schema 描述更新为默认 true；`use_pty` 默认值 `false` → `true`；`run_pty` 正常退出加 `[exit non-zero]` 后缀；`run_pty` 超时分支重写为注册后台 + 续跑（不 kill）；新增 `pty_realtime_progress_chunks` 回归测试
 - **影响范围**: agent-core（Bash 工具 + BackgroundShell）。默认行为变更：所有 Bash 调用默认走 PTY 路径。愿意走旧管道模式的模型可传 `"pty": false`。65 个 Bash 测试全部通过，全 workspace check 通过。
 - **留尾巴**: `portable_pty::ExitStatus` 不暴露实际 exit code，PTY 路径的退出码只能区分 zero/non-zero（pipe 路径能看到具体数字 `[exit 7]`）。
+
+### 2026-07-02 — 修复 partial 中断恢复后 content/tool/reasoning 顺序错乱
+
+- **Why**: session `202607020727-eac37f33` 在最后一次 run 未结束时 kill hebcore，恢复后 UI 里所有 content 挤在前面、tool call 挤在后面；正确行为应保持流式时的 `content → tool → reasoning → content → tool` 交错顺序。根因是 partial sidecar 恢复只按类型聚合 text/reasoning/tool_call，重建 `Message.parts` 时先吐完整文本再吐所有工具，丢掉了原始 fragment 顺序。
+- **改动**:
+  - [crates/agent-core/src/storage/sessions_dir.rs](../crates/agent-core/src/storage/sessions_dir.rs): `RecoveredPartial` 增加有序 `fragments`，读取 partial jsonl 时按原始行序合并相邻 text/reasoning/tool_call 片段，同时保留原有聚合字段供 content 与 tool_calls 使用。
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): `partial_to_message` 优先按 `fragments` 重建 `Message.parts`，保留无名 tool_call 丢弃规则和中断尾巴；新增 `partial_recovery_preserves_text_tool_interleaving` 回归测试，先确认旧行为失败，再修到通过，并覆盖 reasoning 插在工具后、Interrupted marker 紧跟恢复 assistant。
+- **影响范围**: agent-core storage / Desktop、CLI、hebweb 读取同一 session 历史时都会受益；不改协议、不改 session 主格式，旧 partial 没有 `fragments` 字段时仍走兼容聚合路径。
+- **留尾巴**: 恢复时仍使用 `recovered-{idx}` 作为工具 id，真实 tool_call id 需要后续把 id 写入 `PartialFragment::ToolCall` 后再修。
+
+### 2026-07-02 — 补强 partial 恢复顺序测试覆盖 reasoning 与 marker
+
+- **Why**: 在修复 session `202607020727-eac37f33` 的 partial 恢复错序后，用户继续确认 reasoning 与 marker 是否也会乱；需要把这两个边界纳入同一条回归测试，避免后续只保证 text/tool 交错却漏掉 reasoning 或 Interrupted marker 位置。
+- **改动**:
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): 扩展 `partial_recovery_preserves_text_tool_interleaving`，构造 `text → tool_call → reasoning → text → tool_call` 的 partial 序列，断言恢复后的 `Message.parts` 保持同序，并断言恢复 assistant 后紧跟 `Interrupted` marker。
+- **影响范围**: 仅 agent-core storage 回归测试与文档时间线；不改协议、不改运行时行为。
+- **留尾巴**: 无。真实 tool_call id 持久化仍沿用上一条 changelog 的后续事项。
+
+### 2026-07-02 — 修复 partial 恢复时丢失真实 tool_call id
+
+- **Why**: kill hebcore 后的 partial 恢复虽然已保住 content / reasoning / tool_call 交错顺序，但工具调用 id 仍回退成 `recovered-{idx}`，导致后台通知、工具结果和前端锚点无法稳定关联原始 `call_xxx`。需要把真实 tool_call id 写入 partial sidecar，恢复时原样还原。
+- **改动**:
+  - [crates/agent-core/src/storage/sessions_dir.rs](../crates/agent-core/src/storage/sessions_dir.rs): `PartialFragment::ToolCall` 增加可选 `id`，`ToolResult` 增加可选 `call_id`；`RecoveredPartial.tool_calls` 同时聚合 id / name / arguments，旧 partial 没有 id 时仍兼容。
+  - [crates/agent-core/src/run_persister.rs](../crates/agent-core/src/run_persister.rs): 从 `ToolCallStarted` / `ToolCallDelta` / `ToolCallFinished` 事件把真实 call id 写入 partial sidecar。
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): `partial_to_message` 恢复 `Message.parts` 和 `Message.tool_calls` 时优先使用真实 call id，无 id 的旧数据才回退 `recovered-{idx}`；新增 `partial_recovery_preserves_original_tool_call_ids` 回归测试。
+- **影响范围**: agent-core partial sidecar 内部格式向前兼容扩展；Desktop / CLI / hebweb 读取恢复历史时可保留真实工具锚点。不改对外 WireEvent / session 主消息 schema。
+- **留尾巴**: 旧版本已产生、已经折叠进 `session.jsonl` 的 `recovered-{idx}` 历史消息不会自动重写；只有未来 partial 恢复能保留真实 id。
+
+### 2026-07-01 — 修复自动压缩 boundary 把同一 Run 后续输出折进历史的问题
+
+- **Why**: 自动压缩发生在 Run 中途时，后端先写 `CompactBoundary` marker，但此前已经流出的 assistant 段可能还留在 `RunPersister` 内存累积器里，直到 Run 结束才落盘。前端按 session 物理顺序把 marker 前的消息视为压缩历史，于是同一 Run 压缩前/后输出在刷新后可能被归到错误边界，看起来像压缩后继续生成的内容也被折叠了。
+- **改动**:
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 自动 L2 压缩成功后、写 compact boundary 前，先调用 `RunPersister::flush_segment()` 落盘压缩点之前已累积的 assistant 段，保证物理顺序为「压缩前输出 → boundary → 压缩后输出」。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 新增 `automatic_compaction_marker_splits_persisted_run_segments` 回归测试，走真实 run_loop + stub 工具 + 自动压缩路径，钉住同一 Run 内 boundary 的落盘顺序。
+- **影响范围**: agent-core 自动压缩与 session.jsonl 落盘顺序；不改协议字段、不改前端折叠算法、不改 session 文件格式。已有顺序错误的历史会话不会自动重写，只影响新产生的自动压缩。
+- **留尾巴**: 还未用真实 provider 跑 heb CLI 现象级 A/B；当前以回归测试验证根因路径，后续若有具体 session 可再写一次迁移/修复脚本评估是否需要整理历史顺序。
+
+### 2026-07-03 — 新增自动压缩输出 token 进度，让等待态不再是静态块
+
+- **Why**: 用户反馈自动压缩耗时较久时，输入框上方只有一个静态“正在压缩上下文”块，无法知道模型是否还在输出。需要像 Claude Code / Codex 那样显示本次压缩摘要模型已产出的 token 数，并随流式输出滚动更新。
+- **改动**:
+  - [crates/protocol/src/event.rs](../crates/protocol/src/event.rs) / [wire.rs](../crates/protocol/src/wire.rs): 新增 additive 事件 `ContextCompactionProgress { output_tokens }`，并纳入唯一 `to_wire` 转换。
+  - [crates/agent-core/src/context/compaction.rs](../crates/agent-core/src/context/compaction.rs): 压缩摘要调用改走 `ModelClient::stream`，内部继续聚合最终摘要；流式 `TextDelta` 到达时按现有 token 估算函数回调已生成 token。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 自动压缩期间 emit `ContextCompactionProgress`；现有 boundary 前 `flush_segment()` 顺序不变。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts) / [chatInput/index.tsx](../apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx): store 记录当前压缩输出 token，输入框上方压缩块右侧展示 tabular 数字并随事件更新。
+  - [apps/cli/src/render.rs](../apps/cli/src/render.rs): CLI 收到进度事件时在压缩行显示“已生成 N tokens”。
+  - [docs/架构.md](架构.md): §3.1 事件表补充 `ContextCompactionProgress`。
+- **影响范围**: protocol additive 事件 + agent-core 自动压缩 + desktop/hebweb 共用前端 + CLI 渲染。不改 session.jsonl 格式、不进 transcript、不影响账单统计；`output_tokens` 是流式过程中按文本估算的展示值，最终真实用量仍以 provider usage / model_io 为准。手动 `/compact` 当前仍是 Tauri command，显示起始态但不走实时进度事件。
+- **验证**: `cargo check -p agent-core --tests` 通过；`cargo test -p agent-core --lib automatic_compaction_marker_splits_persisted_run_segments` 通过；`cargo check -p protocol -p hebbian-cli` 通过；`pnpm exec tsc --noEmit`（apps/desktop）通过。
+
+### 2026-07-03 — 修复自动压缩无法取消
+
+- **Why**: 自动压缩发生在 run 的模型请求前，但压缩摘要请求内部新建了独立 `CancelFlag`；用户点击 Stop/Interrupt 只能标记 run 取消，无法真正打断压缩 provider 请求，且取消后仍可能按“压缩失败后继续”路径保留原上下文往下跑。
+- **改动**:
+  - [crates/agent-core/src/context/compaction.rs](../crates/agent-core/src/context/compaction.rs): `compact_request_with_llm_progress` 改为接收调用方传入的 `CancelFlag`；保留手动 `/compact` 的独立 flag，不把它伪装成 run 内可取消操作；新增回归测试钉住“已取消 flag 必须传到 provider”。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 自动压缩调用透传当前 run 的 cancel flag；压缩返回 `ModelError::Cancelled` 时直接结束本轮为取消态，不写 `CompactBoundary`，不触发 OnCompaction hook。
+  - [apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx](../apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx): 自动压缩提示条增加“取消压缩”按钮，复用现有 Stop/Interrupt 回调；手动 `/compact` 不展示该按钮。
+- **影响范围**: agent-core 自动压缩路径 + Desktop 输入框 UI；不新增/修改协议字段，不改变手动 `/compact` 语义。CLI/hebweb 继续复用现有 Stop/Interrupt 通道即可取消 run 内自动压缩。
+- **验证**: `cargo test -p agent-core context::compaction::tests::compact_request_uses_provided_cancel_flag --lib` 通过；`cargo check -p agent-core --tests` 通过；`pnpm exec tsc --noEmit`（apps/desktop）通过。
+- **留尾巴**: 无。
+- **留尾巴**: 若要手动 `/compact` 也显示实时 token，需要把 `compact_session` 从普通 command 改成带 Channel 的流式命令，单独评估改动面。
