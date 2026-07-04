@@ -11192,3 +11192,25 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: agent-core harness；不改变协议、不改变 session 文件格式。Desktop / CLI / hebweb 的 stop 响应延迟从「最多 5s」降为「cancel 检出 + 事件投递」即停。
 - **验证**: `cargo check --workspace --tests` 通过；`cargo test -p agent-core harness::tests --lib` 9/9 通过。
 - **留尾巴**: 无。
+
+### 2026-07-04 — 修复 stop→立即发消息竞态：stop_flag 在 Cancelled 后未复位致下一条消息被跳过
+
+- **Why**: `SessionRuntime.stop_flag` 被 `stop()` 设为 `true` 后，若 agent_loop 检测到 cancel 并返回 Cancelled，`run_turn` 返回时 flag 仍为 `true`。输入循环下轮 `recv()` 醒来检查到 `true` → `continue` 跳过——用户 Stop 后立即发的消息被静默丢弃。
+- **改动**:
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): `run_turn` 在 `clear_active()` 之后立即 `stop_flag.store(false)`，确保所有终态（Done/Cancelled/Failed/Suspended）都复位 flag。
+- **影响范围**: surface-session 输入循环；不改协议、不改 session 文件格式。三端统一受益。
+- **验证**: `cargo check -p surface-session -p hebbian-cli --tests` 通过；代码逻辑分析确认 `stop_flag` 在 `clear_active` 之后、`on_status` 之前复位。
+- **留尾巴**: 无。
+
+### 2026-07-04 — 新增 ListConnectors / SendChannelMessage 工具
+
+- **Why**: agent 能通过渠道连接器（微信）收用户消息，但不能主动推消息给用户。需要两个工具让 agent 发现当前活跃连接器并推送消息。
+- **改动**:
+  - [crates/agent-core/src/tools/connector.rs](../crates/agent-core/src/tools/connector.rs): **新建**。定义 `ConnectorRegistry` trait、`ConnectorInfo` 结构体、`ListConnectorsTool` 和 `SendChannelMessageTool` 两个 Tool 实现。进程级全局单例（`OnceLock`），surface 启动时注入实现。
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs): 注册 `pub mod connector;`；在 `default_tools()` 中注册两个工具；加到 `BUILTIN_TOOL_NAMES`（始终注入模型，非条件）。
+  - [crates/channel-core/src/bridge.rs](../crates/channel-core/src/bridge.rs): `ChannelBridge` 新增 `send_to_user(&self, to, text) -> bool` 方法，支持向任意用户主动发消息（不依赖 `last_owner_target`）。
+  - [apps/desktop/src/wechat.rs](../apps/desktop/src/wechat.rs): 新增 `DesktopConnectorRegistry` 包装 `WeChatState`，实现 `ConnectorRegistry`；暴露 `init_registry()` 入口。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): setup 阶段调用 `wechat::init_registry()` 注册全局连接器注册表。
+- **影响范围**: agent-core 新增工具（所有 surface 自动可见）；channel-core 扩展 bridge API；Desktop 启动时注入注册表。不改协议、不改 session 文件格式。
+- **验证**: `cargo check -p agent-core --tests -p channel-core -p hebbian` 通过；`cargo test -p agent-core --lib -- tools` 210/210 通过。
+- **留尾巴**: 当前仅支持微信连接器（`connector_id="wechat"`）；未来接 QQ/飞书等需在 `DesktopConnectorRegistry.list()` 追加条目。发送方需对方曾发过消息给 bot（iLink 协议需 context_token），新用户发消息会报错并返回给 agent。

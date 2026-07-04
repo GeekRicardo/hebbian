@@ -777,6 +777,9 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, input: TurnInput) -> Result<
     let summary = handle.drive(&mut observer).await;
 
     runtime.clear_active();
+    // 清除本轮可能被 stop() 设上的 flag，让输入循环的下一轮 recv 不会把它当
+    // 成「新 run 启动前的 stop 请求」而跳过用户刚发的新消息。
+    runtime.stop_flag.store(false, Ordering::SeqCst);
 
     // token_stats 由 agent_loop per-turn 落盘（sessions::bump_token_stats），不再 run-end 累加。
     // assistant 段 + 插队 user 的落盘已收归 agent_core（架构 §4.9.5）：agent_loop 在段边界 /

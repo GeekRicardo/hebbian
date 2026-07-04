@@ -76,7 +76,7 @@ cargo build -p hebbian-web-server          # 产出 ./target/debug/hebweb
 
 参数：`--port <n>`（默认 3030）、`--static-dir <dir>`（默认自动探测 `apps/desktop/frontend/dist`）、`--data-dir <path>`。
 
-> **hebcore（常驻核心进程）**：run 现在跑在独立的 `hebcore` 进程里（持唯一 dispatch + 全部活 session，架构 §7.8），三 surface 都作为客户端连入 `~/.hebbian/hebcore.sock` 看同一份活对话状态。**无需手动启动**——Desktop / hebweb 启动时会自动拉起，首个拿到 `~/.hebbian/hebcore.lock` 单例锁的进程即充当 hebcore。
+> **Shared Core Facade（进程内）**：三 surface 各自进程内直接引用共享 core crate（`surface-session` 统一对话入口，`core-rpc` 统一同步 API 入口），不再依赖独立 `hebcore` 常驻进程。共享 `~/.hebbian/` + 文件锁保证并发安全。`apps/hebcore` 与 `surface-session::transport` 保留为实验性远程 core transport，不作为默认路径。
 
 ### 单项检查
 
@@ -109,34 +109,35 @@ pnpm --dir apps/desktop build
 ## 架构
 
 ```
-                    ┌─────────────────────────────────────┐
-                    │  Surfaces                            │
-                    │  Desktop (Tauri+React) │ CLI │ ...   │
-                    └─────────┬─────────────────┬──────────┘
-                  Submission/Op │             ▲ Event (NDJSON / IPC / SSE)
-                                ▼             │
-                    ┌─────────────────────────────────────┐
-                    │  agent-core / Harness               │
-                    │                                      │
-                    │  submit / subscribe (actor)          │
-                    │  run() (旧 API，兼容 desktop)        │
-                    │                                      │
-                    │  agent_loop                          │
-                    │  ToolRegistry + PermissionGate(三态) │
-                    │  Context + Compaction                │
-                    │  Hooks (10 个 lifecycle points)      │
-                    │  RunState (per-run seq + turn)       │
-                    └─────────┬───────────────────────────┘
-                              │ ModelRequest / ModelStreamEvent
-                    ┌─────────▼───────────────────────────┐
-                    │  model-gateway                       │
-                    │  ModelClient trait                   │
-                    │  protocols: openai/anthropic/gemini  │
-                    │  auth: api_key / oauth + refresh     │
-                    └─────────────────────────────────────┘
+                    ┌───────────────────────────────────────────┐
+                    │  Surfaces（apps/）                         │
+                    │  Desktop (Tauri+React) │ CLI │ hebweb     │
+                    └─────────┬───────────────┬─────────────────┘
+                              │               │
+              对话事件流       │               │  同步 API
+          (surface-session)    │               │  (core-rpc)
+                              ▼               ▼
+                    ┌───────────────────────────────────────────┐
+                    │  Shared Core Facade                       │
+                    │  surface-session: RuntimeRegistry         │
+                    │    → SessionRuntime → run_turn            │
+                    │  core-rpc: dispatch(CoreRequest,          │
+                    │    LocalCoreClient)                        │
+                    └─────────────────┬─────────────────────────┘
+                                      │
+                    ┌─────────────────▼─────────────────────────┐
+                    │  agent-core（唯一业务大脑）                │
+                    │  agent_loop · ToolRegistry · HITL          │
+                    │  Context · Compaction · Hooks              │
+                    │  Storage（~/.hebbian 统一持久化）          │
+                    └─────────┬─────────────────────────────────┘
+                              │
+                    ┌─────────▼─────────────────────────────────┐
+                    │  model-gateway · observability · common   │
+                    └───────────────────────────────────────────┘
 
-  protocol crate ── 所有人共享：Submission / Op / Event / EventPayload /
-                    ApprovalDecision / PermissionKind / ContextPolicy / 各类 ID
+  protocol crate ── 所有人共享：WireEvent / PendingMessageMeta /
+                    ApprovalDecision / CoreRequest / 各类 ID
 ```
 
 ---
@@ -158,11 +159,10 @@ hebbian/
 │   │   │           ├── bridge/   Tauri invoke + Channel 封装
 │   │   │           └── ui/       React 组件、store、lib、types
 │   │   ├── src/                  Tauri Rust 端
-│   │   │   ├── lib.rs            Tauri 命令注册（IPC 入口）
-│   │   │   ├── chat.rs           Harness 桥接，DesktopObserver 经 protocol::to_wire 推 WireEvent
-│   │   │   ├── hitl.rs           Desktop HITL request/response 桥接
+│   │   │   ├── lib.rs            Tauri 命令注册（表面层，委托 core facade）
+│   │   │   ├── chat.rs           runtime 事件订阅 + 辅助加载
+│   │   │   ├── hitl.rs           HITL 桥接（→ SessionRuntimeState）
 │   │   │   ├── title_gen.rs      会话标题自动生成
-│   │   │   ├── engine/mod.rs     Tauri command 返回 Dto（TodoItemDto / PlanCommentDto）
 │   │   │   └── window_control.rs 窗口管理、全局快捷键
 │   │   ├── tauri.conf.json       Desktop 构建配置
 │   │   ├── package.json          Desktop 前端脚本与依赖
@@ -174,62 +174,65 @@ hebbian/
 │   │   ├── capabilities/         Tauri 权限 capability
 │   │   └── icons/                App / tray 图标资源
 │   │
-│   └── cli/                      ★ 终端 surface（loop / 单次 / JSON 多轮）
-│       └── src/
-│           ├── main.rs           入口、模式分派、ModelClient 构建
-│           ├── session.rs        Session：transcript、单 turn 跑通、loop 交互
-│           ├── render.rs         Event → 终端彩色输出
-│           └── mock_provider.rs  无网络环境下的固定假回复
+│   ├── cli/                      NDJSON 终端 surface（daemon 模式）
+│   │   └── src/
+│   │       ├── main.rs           入口、clap 子命令分派
+│   │       ├── daemon.rs         Daemon 主体：socket IPC → surface-session runtime
+│   │       ├── ipc.rs            IPC 协议（IpcCommand / DaemonEvent）
+│   │       └── client.rs         Unix socket 客户端（send_command）
+│   │
+│   ├── web-server/               hebweb HTTP+WS surface（浏览器）
+│   └── channel-gateway/          渠道网关（微信 / 未来 QQ、飞书）
 │
 ├── crates/
-│   ├── protocol/                 ★ 协议层（所有人都依赖它）
+│   ├── protocol/                 ★ 共享数据类型（zero-dep）
 │   │   └── src/
-│   │       ├── ids.rs            RunId / TurnId / SubmissionId / PermissionRequestId
-│   │       ├── submission.rs     Submission, Op, UserInput, TurnOverrides
-│   │       ├── event.rs          Event, EventPayload, StopReason, RiskLevel
-│   │       ├── permission.rs     ApprovalDecision, PermissionKind, PermissionScope
-│   │       ├── context.rs        ContextPolicy, TokenBudget
-│   │       └── error.rs          ErrorReport, ErrorKind
+│   │       ├── wire.rs           WireEvent（对外线协议 DTO）+ to_wire 转换
+│   │       ├── event.rs          EventPayload（内部领域模型）
+│   │       ├── message.rs        PendingMessageMeta（注入路径元数据）
+│   │       ├── permission.rs     ApprovalDecision, PermissionKind, UserAnswer
+│   │       ├── ids.rs            PermissionRequestId, RunId, SessionId
+│   │       ├── todo.rs           TodoItem, PlanComment
+│   │       └── memory.rs         MemoryWriteItem
 │   │
-│   ├── agent-core/               ★ 产品核心 / Harness
+│   ├── common/                   ★ 纯工具箱（原 platform）
 │   │   └── src/
-│   │       ├── harness.rs        Harness（spawn_run + subscribe，actor 风格）
-│   │       ├── agent_loop.rs     主循环（HITL waiter / 工具并发 / hook 触发）
-│   │       ├── run_state.rs      RunState（per-run seq + turn 计数）
-│   │       ├── turn_context.rs   TurnContext（model / tools / 预算 / 策略）
-│   │       ├── definition.rs     AgentDefinition, CompactionPolicy, PermissionPolicy
-│   │       ├── tools/
-│   │       │   ├── mod.rs        Tool trait / default_tools / builtin_tool_definitions（ask 等内置）
-│   │       │   ├── registry.rs   ToolRegistry
-│   │       │   ├── permissions.rs PermissionGate（三态 + oneshot waiter）
-│   │       │   └── question.rs   QuestionGate（ask 工具的 oneshot waiter）
-│   │       ├── context/
-│   │       │   ├── transcript.rs Transcript
-│   │       │   ├── budget.rs     token 估算
-│   │       │   └── compaction.rs 结构化裁剪
-│   │       ├── hooks/            Hook trait + 10 个生命周期 HookPoint
-│   │       └── types.rs          protocol facade（向后兼容）
+│   │       ├── runtime.rs        CancelFlag, PendingInputs, RuntimeHandle
+│   │       ├── attachments.rs    MessageAttachment
+│   │       └── error.rs          AppError, AppResult
 │   │
-│   ├── model-gateway/            ★ 统一模型访问
+│   ├── observability/            tracing + 本地 stderr 日志
+│   ├── model-gateway/            ★ 统一模型访问（4 provider）
+│   │
+│   ├── agent-core/               ★ 唯一业务大脑
 │   │   └── src/
-│   │       ├── client.rs         ModelClient trait
-│   │       ├── types.rs          ModelRequest / ModelResponse / Usage
-│   │       ├── config.rs         Provider CRUD + 预设
-│   │       ├── auth/             api_key / oauth / refresh
-│   │       ├── discovery/        模型列表拉取
-│   │       ├── protocols/        openai / anthropic / gemini wire format
-│   │       └── providers/        HTTP client 实现
+│   │       ├── agent_loop.rs     主循环（step dispatch / HITL / cancel）
+│   │       ├── harness.rs        Harness（spawn_run + drive）
+│   │       ├── session.rs        CoreSession（transcript + config）
+│   │       ├── session_hub.rs    SessionRuntimeState（事件广播 + 控制点）
+│   │       ├── dispatch.rs       Step 分派器（ModelStep / ToolStep）
+│   │       ├── tools/            工具实现（Bash / Read / Write / WebSearch 等）
+│   │       ├── storage/          持久化（sessions / providers / settings / permissions）
+│   │       ├── context/          上下文管理（transcript / compaction）
+│   │       ├── hooks/            Hook 体系（10+ 生命周期点位）
+│   │       └── model_adapters/   模型特性适配（DeepSeek thinking 等）
 │   │
-│   └── platform/                 基础设施层
-│       └── src/
-│           ├── error.rs          AppError, AppResult
-│           ├── runtime.rs        CancelFlag
-│           ├── attachments.rs    MessageAttachment
-│           ├── storage/sessions.rs  ← 计划迁出到 crates/persistence
-│           └── config/prompts.rs    ← 计划迁出到 crates/config
+│   ├── surface-session/          ★ 三 surface 对话统一入口
+│   │   └── src/
+│   │       ├── lib.rs            RuntimeRegistry → SessionRuntime → run_turn
+│   │       └── transport.rs      实验性远程 core unix-socket transport
+│   │
+│   ├── core-rpc/                 ★ 同步 API 统一入口
+│   │   └── src/
+│   │       └── lib.rs            CoreRequest / CoreResponse / dispatch
+│   │
+│   ├── channel-core/             渠道契约 + 斜杠命令路由
+│   └── channels/                 具体渠道实现（wechat / 未来）
 │
 ├── docs/
-│   └── architecture.md           完整架构设计文档（含 4 个里程碑路线图）
+│   ├── 架构.md                   完整架构设计文档（唯一设计准则）
+│   ├── changelog.md              修改时间线（只增不减）
+│   └── heb-cli-debug.md          CLI 调试手册
 │
 ├── Cargo.toml                    Rust workspace 根
 └── README.md                     本文件
