@@ -1,11 +1,11 @@
-//! hebcore unix-socket transport（架构 §7.8.1 / §7.8.6 步骤③）。
+//! 实验性远程 core unix-socket transport。
 //!
-//! 把"连接处理"从 hebcore 进程提取为通用件：hebcore 二进制与 hebweb（升格为 hebcore 时）
-//! 都用同一份 transport handler，避免重复。每连接逐行 JSON：
+//! Hebbian v1 默认由 Desktop / CLI / hebweb 在各自进程内直接调用 shared core facade；本模块
+//! 仅保留给未来远程 core transport 实验使用。每连接逐行 JSON：
 //! - `Rpc` → [`core_rpc::dispatch`]（同步 API）
 //! - `StartRun` / `Inject` → session 输入循环
 //! - `Subscribe` → 本连接转事件流逐 [`protocol::WireEvent`] 推
-//! - `Approve` / `Answer` / `Interrupt` / `SetRunMode` → 运行时控制 Op 路由（§7.8.5）
+//! - `Approve` / `Answer` / `Interrupt` / `SetRunMode` → 运行时控制 Op 路由
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,16 +22,16 @@ use tokio::net::UnixStream;
 use crate::RuntimeRegistry;
 
 /// transport handler 的依赖：同步 API facade + 活 session 表 + 数据目录 + 权限库。
-/// hebcore 进程 / hebweb 升格时各自构造一份，共享同一处理逻辑。
+/// 仅供实验性远程 core transport 构造连接上下文；默认 surface 不应依赖它。
 #[derive(Clone)]
 pub struct TransportCtx {
     pub data_dir: PathBuf,
     pub core: Arc<LocalCoreClient>,
     pub permission_store: Option<Arc<PermissionStore>>,
     pub runtimes: RuntimeRegistry,
-    /// 本进程 binary 的版本号字符串（§7.8.7 版本协商）。**由各 bin 的 main 用
-    /// `env!("HEBBIAN_BUILD_VERSION")` 传入**，不能在本 lib 里 `env!`——lib 编译产物会被
-    /// 缓存（bin 重编了 lib 未必重编），lib 里的 `env!` 会固化成旧值。
+    /// 本进程 binary 的版本号字符串。**由各 bin 的 main 用 `env!("HEBBIAN_BUILD_VERSION")`
+    /// 传入**，不能在本 lib 里 `env!`——lib 编译产物会被缓存（bin 重编了 lib 未必重编），
+    /// lib 里的 `env!` 会固化成旧值。
     pub build_version: String,
     /// 本进程 binary 名（`"hebcore"` / `"hebweb"`）。desktop 据此识别"运行中的核心是不是
     /// hebweb 兼任"，避免把正常的 hebweb 当 stale hebcore 误杀。

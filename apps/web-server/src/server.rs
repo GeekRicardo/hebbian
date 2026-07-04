@@ -49,8 +49,8 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Clone)]
 pub struct ServerState {
     pub data_dir: PathBuf,
-    /// 活对话 session 表（架构 §7.8.5）：与 hebcore 进程共用同一份 `RuntimeRegistry`
-    /// 类型——hebweb 升格为 hebcore 时浏览器（ws）与 desktop/heb（unix-socket）看同一活状态。
+    /// 活对话 session 表（架构 §7）：hebweb 进程内持有的共享 conversation runtime。
+    /// 浏览器 WS 订阅同一份 runtime 的 WireEvent，本进程内同 session 串行跑 turn。
     pub runtimes: surface_session::RuntimeRegistry,
     pub permission_store: Option<Arc<PermissionStore>>,
     /// 复用 desktop 同一个业务 facade。CoreClient trait 暴露的 25+ 方法
@@ -80,7 +80,7 @@ impl ServerState {
     }
 
     /// 取已 attach 的 SessionRuntime；若不存在则按 session.json 自动 attach 一个
-    /// （委托共享的 [`surface_session::RuntimeRegistry`]，与 hebcore 进程同一份逻辑）。
+    /// （委托共享的 [`surface_session::RuntimeRegistry`]）。
     pub async fn ensure_runtime(&self, session_id: &str) -> Result<Arc<SessionRuntime>> {
         self.runtimes
             .ensure(&self.data_dir, self.permission_store.clone(), session_id)
@@ -178,7 +178,7 @@ async fn handle_ws(socket: WebSocket, state: ServerState) {
                         let tx = out_tx.clone();
                         let sid = session_id.clone();
                         event_task = Some(tokio::spawn(async move {
-                            // broadcast 通道走通用 WireEvent（§7.8.5）；WS 层在这里包成
+                            // broadcast 通道走通用 WireEvent（§7）；WS 层在这里包成
                             // 浏览器协议 WsServerMessage::Event（engine-event）。
                             while let Ok(ev) = rx.recv().await {
                                 let payload = match serde_json::to_value(&ev) {
@@ -742,8 +742,8 @@ async fn cmd_approve_permission(
     );
 
     let runtime = state.ensure_runtime(&sid).await?;
-    // 直接戳活 run 的 HitlGate（§7.8.5）：审批结算无第二层 oneshot 中转，与 transport
-    // 的 Approve 同链路。不命中视为未知 request_id。
+    // 直接戳活 run 的 HitlGate：审批结算无第二层 oneshot 中转，与其他 surface 控制入口
+    // 同链路。不命中视为未知 request_id。
     if runtime.state.resolve_approval(&request_id, decision) {
         Ok(())
     } else {
@@ -832,7 +832,7 @@ async fn cmd_answer_question(
     };
 
     let runtime = state.ensure_runtime(&sid).await?;
-    // 直接戳活 run 的 HitlGate（§7.8.5）：提问结算无第二层 oneshot 中转。
+    // 直接戳活 run 的 HitlGate：提问结算无第二层 oneshot 中转。
     if runtime.state.answer_question(&request_id, answer) {
         Ok(())
     } else {
@@ -1219,9 +1219,8 @@ async fn cmd_core_test_provider_model(state: &ServerState, args: Value) -> Resul
 }
 
 async fn cmd_core_list_tools(state: &ServerState) -> Result<Value> {
-    // 走 dispatch 唯一入口（架构 §7.1）：surface 把请求表达成 CoreRequest 交给
-    // 同一个 dispatch，core 业务只走一条路径。其余同步命令在客户端化（步骤④⑤⑥连
-    // hebcore）时统一切换；此处先验证 dispatch + LocalCoreClient facade 端到端通。
+    // 走 dispatch 唯一入口（架构 §7）：surface 把请求表达成 CoreRequest 交给
+    // 同一个 dispatch，core 业务只走一条路径。其余同步命令后续按同一模式收敛。
     core_rpc::dispatch(core_rpc::CoreRequest::ListTools, &*state.core)
         .await
         .into_json()
@@ -2200,7 +2199,7 @@ async fn cmd_approve_path_access(
         "permission.approval: web backend received path approval"
     );
     let runtime = state.ensure_runtime(&sid).await?;
-    // 直接戳活 run 的 HitlGate（§7.8.5），与 cmd_approve_permission 同链路。
+    // 直接戳活 run 的 HitlGate，与 cmd_approve_permission 同链路。
     if runtime.state.resolve_approval(&request_id, decision) {
         Ok(())
     } else {

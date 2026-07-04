@@ -8,6 +8,7 @@ pub mod error;
 pub mod event;
 pub mod ids;
 pub mod memory;
+pub mod message;
 pub mod permission;
 pub mod submission;
 pub mod todo;
@@ -21,6 +22,7 @@ pub use event::{
 };
 pub use ids::{AgentRef, MessageId, PermissionRequestId, RunId, SubmissionId, TurnId};
 pub use memory::MemoryWriteItem;
+pub use message::PendingMessageMeta;
 pub use permission::{
     ApprovalDecision, ApprovalSegment, ApprovalSegmentStatus, AskQuestion, MultiQuestionAnswer,
     PermissionKind, PermissionScope, QuestionOption, SingleAnswer, UserAnswer,

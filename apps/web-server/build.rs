@@ -1,6 +1,6 @@
-//! 生成 `HEBBIAN_BUILD_VERSION`（§7.8.7 版本协商）。与 apps/hebcore/build.rs 同逻辑：
-//! `v{pkg}-{git_short}[-dirty]-{build_id}`，`build_id` 来自 `HEBBIAN_BUILD_ID` 环境变量
-//! （同次 build 的多 binary 共享同一值）。hebweb 兼任 hebcore 时也要报告版本。
+//! 生成 `HEBBIAN_BUILD_VERSION`。
+//! `v{pkg}-{git_short}[-dirty]-{build_id}`，`build_id` 来自 `HEBBIAN_BUILD_ID` 环境变量，
+//! 用于日志和调试区分当前运行的 hebweb binary。
 use std::process::Command;
 
 fn git(args: &[&str]) -> Option<String> {

@@ -1,7 +1,6 @@
-//! 注入 `HEBBIAN_BUILD_VERSION`（§7.8.7 版本协商）+ 标准 tauri build。
-//! 与 apps/hebcore/build.rs、apps/web-server/build.rs 同逻辑：同次 build 的 desktop /
-//! hebcore / hebweb 注入相同 `HEBBIAN_BUILD_ID`（前置脚本喂的环境变量）→ 版本号字符串一致，
-//! desktop 据自身版本号判断运行中 hebcore 是否 stale。
+//! 注入 `HEBBIAN_BUILD_VERSION`（版本标识）+ 标准 tauri build。
+//! 与 apps/hebcore/build.rs、apps/web-server/build.rs 同逻辑：同次 build 注入相同
+//! `HEBBIAN_BUILD_ID`（前置脚本喂的环境变量）→ 版本号字符串一致。
 use std::process::Command;
 
 fn git(args: &[&str]) -> Option<String> {

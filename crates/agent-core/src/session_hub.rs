@@ -270,6 +270,7 @@ mod tests {
             !rt.inject(PendingUserInput {
                 content: "hi".into(),
                 attachments: Vec::new(),
+                meta: None,
             }),
             "无活 run 时 inject 应失败"
         );
@@ -287,6 +288,7 @@ mod tests {
                 media_type: "image/png".into(),
                 data: "iVBORw0KGgo=".into(),
             }],
+            meta: None,
         }));
         let queued = inputs.lock().unwrap();
         assert_eq!(queued.len(), 1);
@@ -311,6 +313,7 @@ mod tests {
             rt.inject(PendingUserInput {
                 content: "a".into(),
                 attachments: Vec::new(),
+                meta: None,
             }),
             "accepting=true 时应接受注入"
         );
@@ -320,6 +323,7 @@ mod tests {
             !rt.inject(PendingUserInput {
                 content: "b".into(),
                 attachments: Vec::new(),
+                meta: None,
             }),
             "accepting=false 时应拒绝注入（防 §4.2.3 消息静默丢失）"
         );

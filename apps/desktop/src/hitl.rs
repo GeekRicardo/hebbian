@@ -19,9 +19,8 @@ use common::runtime::CancelFlag;
 pub struct HitlState {
     pending: Mutex<HashMap<String, Arc<HitlGate>>>,
     runs: Mutex<HashMap<String, (CancelFlag, Arc<HitlGate>)>>,
-    /// 架构 §7.8.6 步骤⑥：run 移到 hebcore 进程后，HITL gate 在 hebcore 进程里，desktop
-    /// 够不到本地 gate——改记 `request_id → session_id`，approve / answer 命令据此经
-    /// hebcore 的 Approve / Answer 协议代理结算（见 [`HitlState::remote_session_of`]）。
+    /// 登记一条运行时 HITL 映射：`request_id → session_id`。Desktop / island 的审批与
+    /// 提问回应据此找到本进程 [`surface_session::RuntimeRegistry`] 里的活 run。
     remote: Mutex<HashMap<String, String>>,
 }
 
@@ -36,14 +35,13 @@ impl HitlState {
         self.pending.lock().unwrap().insert(request_id, gate);
     }
 
-    /// 登记一条远端（hebcore）待结算 HITL：`request_id → session_id`（§7.8.6）。
+    /// 登记一条待结算 HITL：`request_id → session_id`。
     pub fn track_remote(&self, request_id: String, session_id: String) {
         self.remote.lock().unwrap().insert(request_id, session_id);
     }
 
-    /// 查某 request_id 对应的远端 session（approve / answer 经 hebcore 代理时用）。**只读**
-    /// 不消费——代理成功后才由 [`forget_remote`](Self::forget_remote) 移除，否则一次瞬时
-    /// IPC 失败会让映射被消费、用户重试时找不到、请求在 hebcore 侧 gate 永挂（§7.8.6）。
+    /// 查某 request_id 对应的运行中 session。**只读**；结算成功后再由
+    /// [`forget_remote`](Self::forget_remote) 移除，保证失败可重试。
     pub fn remote_session_of(&self, request_id: &str) -> Option<String> {
         self.remote.lock().unwrap().get(request_id).cloned()
     }
@@ -183,20 +181,26 @@ pub fn resolve_hitl_from_island(
             return;
         }
     };
-    // 架构 §7.8.6：run 在 hebcore 进程，HITL gate 也在那——先经 hebcore 的 Approve 协议代理
-    // 结算（与主窗 approve_permission 同路径）；找不到远端映射才回退本地 gate。此前 island
-    // 只走本地 resolve_approval、漏了 remote 分支，导致 run 移 hebcore 后 island 审批必然
-    // 「找不到 request_id」（日志 island_approve: failed to resolve）。
+    // 优先按 request_id → session_id 映射戳共享 runtime 里的活 gate；找不到时回退本地 gate。
     if let Some(session_id) = state.remote_session_of(request_id) {
-        match crate::data_dir(app) {
-            Ok(dd) => {
-                match crate::hebcore_client::approve(&dd, &session_id, request_id, decision) {
-                    Ok(()) => state.forget_remote(request_id),
-                    Err(e) => tracing::warn!(error = %e, "island_approve: hebcore 代理结算失败"),
-                }
+        let app = app.clone();
+        let state = state.inner().clone();
+        let request_id = request_id.to_string();
+        tauri::async_runtime::spawn(async move {
+            use tauri::Manager;
+            let hit = match app.try_state::<surface_session::RuntimeRegistry>() {
+                Some(registry) => registry
+                    .get(&session_id)
+                    .await
+                    .is_some_and(|runtime| runtime.state.resolve_approval(&request_id, decision.clone())),
+                None => false,
+            };
+            if hit {
+                state.forget_remote(&request_id);
+            } else if let Err(e) = state.resolve_approval(&request_id, decision) {
+                tracing::warn!(error = %e, "island_approve: failed to resolve");
             }
-            Err(e) => tracing::warn!(error = %e, "island_approve: data_dir 不可用"),
-        }
+        });
         return;
     }
     if let Err(e) = state.resolve_approval(request_id, decision) {
@@ -228,15 +232,26 @@ pub fn answer_question_from_island(
             return;
         }
     };
-    // 架构 §7.8.6：同 island_approve——先经 hebcore 的 Answer 协议代理，回退本地 gate。
+    // 同 island_approve：优先结算共享 runtime，回退本地 gate。
     if let Some(session_id) = state.remote_session_of(request_id) {
-        match crate::data_dir(app) {
-            Ok(dd) => match crate::hebcore_client::answer(&dd, &session_id, request_id, answer) {
-                Ok(()) => state.forget_remote(request_id),
-                Err(e) => tracing::warn!(error = %e, "island_answer: hebcore 代理结算失败"),
-            },
-            Err(e) => tracing::warn!(error = %e, "island_answer: data_dir 不可用"),
-        }
+        let app = app.clone();
+        let state = state.inner().clone();
+        let request_id = request_id.to_string();
+        tauri::async_runtime::spawn(async move {
+            use tauri::Manager;
+            let hit = match app.try_state::<surface_session::RuntimeRegistry>() {
+                Some(registry) => registry
+                    .get(&session_id)
+                    .await
+                    .is_some_and(|runtime| runtime.state.answer_question(&request_id, answer.clone())),
+                None => false,
+            };
+            if hit {
+                state.forget_remote(&request_id);
+            } else if let Err(e) = state.answer_question(&request_id, answer) {
+                tracing::warn!(error = %e, "island_answer: failed to answer");
+            }
+        });
         return;
     }
     if let Err(e) = state.answer_question(request_id, answer) {

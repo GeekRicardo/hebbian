@@ -15,6 +15,9 @@ pub type CancelFlag = Arc<AtomicBool>;
 pub struct PendingUserInput {
     pub content: String,
     pub attachments: Vec<MessageAttachment>,
+    /// 注入消息的元数据（如 wakeup 通知的 `SystemNotification`）。
+    /// `None` 表示普通用户输入；`Some` 时 agent_loop drain 后以对应 meta 落盘。
+    pub meta: Option<protocol::PendingMessageMeta>,
 }
 
 pub type PendingInputs = Arc<Mutex<Vec<PendingUserInput>>>;

@@ -5,7 +5,6 @@ pub mod chat;
 mod engine;
 mod error;
 mod force_automode;
-mod hebcore_client;
 mod hebisland_client;
 mod hitl;
 mod idle;
@@ -43,6 +42,7 @@ use model_gateway::{
     discovery::FetchedModel,
     health::ProviderModelTestResult,
 };
+use surface_session::{RuntimeRegistry, TurnInput};
 use std::path::PathBuf;
 use tauri::{
     ipc::Channel, AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
@@ -173,6 +173,13 @@ fn core(app: &AppHandle) -> AppResult<Arc<LocalCoreClient>> {
     let st: tauri::State<'_, Arc<LocalCoreClient>> = app
         .try_state::<Arc<LocalCoreClient>>()
         .ok_or_else(|| AppError::msg("LocalCoreClient 未注册"))?;
+    Ok(st.inner().clone())
+}
+
+fn runtimes(app: &AppHandle) -> AppResult<RuntimeRegistry> {
+    let st: tauri::State<'_, RuntimeRegistry> = app
+        .try_state::<RuntimeRegistry>()
+        .ok_or_else(|| AppError::msg("RuntimeRegistry 未注册"))?;
     Ok(st.inner().clone())
 }
 
@@ -354,10 +361,8 @@ fn load_session_for_view(
     id: &str,
     active_request_id: Option<&str>,
 ) -> AppResult<Session> {
-    // 架构 §7.8.5 步骤⑥：统一走带 partial 恢复的加载。run 进行中（活 partial 持 `.live`
-    // 锁）时 load_with_partial_recovery 会把流式内容读出来渲染、不折盘（旧逻辑这里用纯
-    // load 跳过 partial，是为「本地进程内活 run」写的特例——run 移到 hebcore 后该特例
-    // 既看不到流式、判活又用错了进程的 registry，故删除）。
+    // 统一走带 partial 恢复的加载。run 进行中（活 partial 持 `.live`
+    // 锁）时 load_with_partial_recovery 会把流式内容读出来渲染、不折盘。
     let _ = (data_dir, active_request_id);
     core.load_session(id).map_err(map_core_err)
 }
@@ -1105,43 +1110,35 @@ async fn send_message(
     continue_run: Option<bool>,
     on_event: Channel<protocol::WireEvent>,
 ) -> AppResult<Message> {
-    // 架构 §7.8：desktop 只投递输入，事件由 subscribe_session_events 的 session 级长期订阅接收。
-    let _ = (stream, &enabled_tools, &meta, continue_run, force_automode, permission_store);
-    let dd = chat::data_dir(&app)?;
+    // Desktop 只投递输入，事件由 subscribe_session_events 的 session 级长期订阅接收。
+    let _ = (stream, on_event);
+    agent_core::run_mode::LiveForceAutomodeRegistry::global()
+        .set(&session_id, force_automode.is_enabled(&session_id));
 
-    let _runtime = cancellation::register_for_session(request_id.clone(), Some(session_id.clone()));
-    let app_for_blocking = app.clone();
-    let dd_for_blocking = dd.clone();
-    let sid_for_blocking = session_id.clone();
-    let text = content.clone();
-    let run_attachments = attachments.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        hebcore_client::start_run(
-            &app_for_blocking,
-            &dd_for_blocking,
-            &sid_for_blocking,
-            &text,
-            &run_attachments,
-        )
-    })
-    .await
-    .map_err(|e| AppError::msg(format!("hebcore start_run task join 失败: {e}")))?;
-    if let Err(e) = result {
-        cancellation::unregister(&request_id);
-        return Err(AppError::msg(e));
+    let dd = chat::data_dir(&app)?;
+    let runtime = runtimes(&app)?
+        .ensure(&dd, permission_store.inner().clone(), &session_id)
+        .await
+        .map_err(|e| AppError::msg(e.to_string()))?;
+
+    let _runtime = cancellation::register_for_session(request_id, Some(session_id.clone()));
+    let input = TurnInput::new(content, attachments)
+        .with_meta(meta)
+        .with_continue_run(continue_run.unwrap_or(false))
+        .with_enabled_tools(enabled_tools);
+
+    if !runtime.inject(input.clone()) {
+        runtime
+            .input_tx
+            .send(input)
+            .map_err(|_| AppError::msg("对话运行时已关闭"))?;
     }
 
-    let _ = on_event;
     Ok(empty_assistant_message())
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-struct SessionSubscriptionResyncedPayload {
-    session_id: String,
-}
-
-	/// 各 session 当前活跃的前端事件订阅 cancel token。
-/// 新订阅到来时 cancel 旧 token，避免热重载后旧 `spawn_blocking` 继续往已销毁的 Channel 发事件。
+/// 各 session 当前活跃的前端事件订阅 cancel token。
+/// 新订阅到来时 cancel 旧 token，避免热重载后旧任务继续往已销毁的 Channel 发事件。
 #[derive(Default)]
 struct SessionSubscriptions(std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>);
 
@@ -1149,107 +1146,77 @@ struct SessionSubscriptions(std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>);
 async fn subscribe_session_events(
     app: AppHandle,
     hitl: State<'_, Arc<HitlState>>,
+    permission_store: State<'_, Option<Arc<PermissionStore>>>,
     subs: State<'_, SessionSubscriptions>,
     session_id: String,
     on_event: Channel<protocol::WireEvent>,
 ) -> AppResult<()> {
-    // 取消该 session 的上一次订阅（热重载 / 重复订阅场景），等它退出后再起新的。
-    {
+    let cancel = {
         let mut map = subs.0.lock().unwrap();
         if let Some(old) = map.remove(&session_id) {
             old.store(true, Ordering::Relaxed);
         }
         let cancel = Arc::new(AtomicBool::new(false));
         map.insert(session_id.clone(), cancel.clone());
-        drop(map);
+        cancel
+    };
 
-        let dd = chat::data_dir(&app)?;
-        let sink = DesktopHebcoreSink {
-            app: app.clone(),
-            session_id: session_id.clone(),
-            on_event,
-            hitl: hitl.inner().clone(),
-            cancel,
-        };
-        let sid = session_id.clone();
-        tokio::task::spawn_blocking(move || {
-            let emit_app = sink.app.clone();
-            let emit_session_id = sid.clone();
-            if let Err(e) = hebcore_client::subscribe_session_reconnecting(
-                &sink.app,
-                &dd,
-                &sid,
-                &sink,
-                move || {
-                    let _ = emit_app.emit(
-                        "session-subscription-resynced",
-                        SessionSubscriptionResyncedPayload {
-                            session_id: emit_session_id.clone(),
-                        },
-                    );
-            },
-        ) {
-            tracing::warn!(session_id = %sid, error = %e, "desktop session 事件订阅结束");
+    let dd = chat::data_dir(&app)?;
+    let runtime = runtimes(&app)?
+        .ensure(&dd, permission_store.inner().clone(), &session_id)
+        .await
+        .map_err(|e| AppError::msg(e.to_string()))?;
+    let mut rx = runtime.state.subscribe();
+    let hitl = hitl.inner().clone();
+    tokio::spawn(async move {
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            match rx.recv().await {
+                Ok(event) => {
+                    if !handle_desktop_runtime_event(&app, &session_id, &hitl, event, &on_event) {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(session_id = %session_id, skipped, "desktop session 事件订阅落后，已跳过旧事件");
+                }
+            }
         }
     });
-    }
     Ok(())
 }
 
-/// desktop 把 hebcore 推回的 WireEvent 转发到 native 出口 + 前端 Channel（架构 §7.8.6）。
-struct DesktopHebcoreSink {
-    app: AppHandle,
-    session_id: String,
-    on_event: Channel<protocol::WireEvent>,
-    hitl: Arc<HitlState>,
-    /// 新订阅到来时设为 true，旧任务检查到此标记后立即停止往已销毁 Channel 发事件。
-    cancel: Arc<AtomicBool>,
-}
-
-impl hebcore_client::RunEventSink for DesktopHebcoreSink {
-    fn on_event(&self, event: protocol::WireEvent) -> bool {
-        // 热重载后旧订阅被新订阅 cancel——直接告诉调用方 Channel 已关闭，退出读循环。
-        if self.cancel.load(Ordering::Relaxed) {
-            return false;
+fn handle_desktop_runtime_event(
+    app: &AppHandle,
+    session_id: &str,
+    hitl: &Arc<HitlState>,
+    event: protocol::WireEvent,
+    on_event: &Channel<protocol::WireEvent>,
+) -> bool {
+    match &event {
+        protocol::WireEvent::PermissionRequested { request_id, .. } => {
+            hitl.track_remote(request_id.clone(), session_id.to_string());
         }
-        // HITL pending 登记：审批 / 提问到达时记下 request_id → session，让 approve_permission /
-        // answer_question 命令能按 request_id 经 hebcore 代理回结算（§7.8.6 控制 Op）。
-        match &event {
-            // 无条件登记 request_id → session。**此前 auto_handled 时跳过是 bug**：AutoMode
-            // judge 超时 / 失败会转人工（AutoModeDecision::Ask），那时用户**要**点审批，但
-            // 没 track 就代理不到 hebcore，desktop / island 审批都「找不到 request_id」失败
-            // （§4.4.4 + §7.8.6）。登记本身无副作用（用户不点的自动审批不会触发代理）；judge
-            // 自动 Allow/Deny 后由下面 PermissionResolved 分支 forget，不泄漏。
-            protocol::WireEvent::PermissionRequested { request_id, .. } => {
-                self.hitl
-                    .track_remote(request_id.clone(), self.session_id.clone());
-            }
-            protocol::WireEvent::UserQuestionRequested { request_id, .. } => {
-                self.hitl
-                    .track_remote(request_id.clone(), self.session_id.clone());
-            }
-            // 审批已结算（含 judge 自动 Allow/Deny）→ 清映射，防 remote 表只增不减。转人工的
-            // Ask 不 emit PermissionResolved，映射保留到用户点审批结算后由 approve 命令清。
-            protocol::WireEvent::PermissionResolved { request_id, .. } => {
-                self.hitl.forget_remote(request_id);
-            }
-            _ => {}
+        protocol::WireEvent::UserQuestionRequested { request_id, .. } => {
+            hitl.track_remote(request_id.clone(), session_id.to_string());
         }
-        // 灵动岛 + 微信转发（native 出口，§7.2.1 保留进程内）。
-        if let Some(client) = self
-            .app
-            .try_state::<crate::hebisland_client::HebislandClient>()
-        {
-            chat::push_engine_event_to_island(&client, &event);
+        protocol::WireEvent::PermissionResolved { request_id, .. } => {
+            hitl.forget_remote(request_id);
         }
-        crate::channel_forward::maybe_forward(&self.app, &self.session_id, &event);
-        // 前端 streaming Channel。
-        let sent = self.on_event.send(event).is_ok();
-        if !sent {
-            tracing::debug!(session_id = %self.session_id, "前端事件通道已关闭，停止订阅");
-        }
-        sent
+        _ => {}
     }
+    if let Some(client) = app.try_state::<crate::hebisland_client::HebislandClient>() {
+        chat::push_engine_event_to_island(&client, &event);
+    }
+    crate::channel_forward::maybe_forward(app, session_id, &event);
+    let sent = on_event.send(event).is_ok();
+    if !sent {
+        tracing::debug!(session_id, "前端事件通道已关闭，停止订阅");
+    }
+    sent
 }
 
 /// 空 assistant message（send_message 返回值占位；前端 getSession 重载为准）。
@@ -1276,17 +1243,26 @@ struct InjectUserMessageResult {
 }
 
 #[tauri::command]
-fn cancel_message(app: AppHandle, hitl: State<'_, Arc<HitlState>>, request_id: String) -> bool {
-    // 架构 §7.8.6：run 在 hebcore 进程里——经 hebcore Interrupt 中断。找得到 session 就代理；
-    // 同时本地 cancel/hitl 兜底（兼容进程内 branch 旁支 + 清理本地登记）。
+async fn cancel_message(
+    app: AppHandle,
+    _hitl: State<'_, Arc<HitlState>>,
+    request_id: String,
+) -> AppResult<bool> {
+    // 统一走共享 runtime 的 stop（架构 §7）：先在静态 registry 反查 session_id，
+    // 再通过 RuntimeRegistry 找到对应 SessionRuntime，调 stop()。
+    // stop_flag 是常驻标志，不依赖 set_active 时机，消除竞态窗口。
+    let mut stopped = false;
     if let Some(session_id) = common::runtime::session_for_request(&request_id) {
-        if let Ok(dd) = chat::data_dir(&app) {
-            let _ = hebcore_client::interrupt(&dd, &session_id);
+        if let Ok(registry) = runtimes(&app) {
+            if let Some(runtime) = registry.get(&session_id).await {
+                runtime.stop();
+                stopped = true;
+            }
         }
     }
+    // 旧静态 registry 兜底（无 runtime 场景，如 send_message 还未完成 ensure）
     let cancelled = cancellation::cancel(&request_id);
-    let hitl_cancelled = hitl.cancel_run(&request_id);
-    cancelled || hitl_cancelled
+    Ok(stopped || cancelled)
 }
 
 /// 「立即发送」入口：在 streaming 中把 user message 注入到当前 run 的 pending 队列，
@@ -1298,7 +1274,7 @@ fn cancel_message(app: AppHandle, hitl: State<'_, Arc<HitlState>>, request_id: S
 /// 这样 cancel / 崩溃 / run 失败任一路径都不丢插队消息——尤其 wakeup 这种系统注入的
 /// 通知（带 `MessageMeta::SystemNotification`）丢了 surface 无法补救。
 #[tauri::command]
-fn inject_user_message(
+async fn inject_user_message(
     app: AppHandle,
     session_id: String,
     request_id: String,
@@ -1322,14 +1298,15 @@ fn inject_user_message(
     };
 
     // 插队 user message 落盘已收归 agent_core（架构 §4.9.5）：agent_loop 在 drain 边界
-    // 单点 append，desktop 不再即写即落（避免双落）。这里只推 in-memory pending 队列，
+    // 单点 append，desktop 不再即写即落（避免双落）。这里只推共享 runtime 的 pending 队列，
     // 让正在跑的 agent_loop 在下次 ModelStep 之前 drain 出来 + 落盘。返回的 message 仅
     // 供前端乐观渲染，run 结束 reload 时以 agent_core 落盘的为准。
-    // 架构 §7.8.6：插队走 hebcore 的 Inject（run 在 hebcore 进程的 pending 队列里）。
-    // 找得到 session 就经 hebcore；失败回退本地 cancellation 队列（进程内 run 兼容）。
     let injected = if let Some(session_id) = common::runtime::session_for_request(&request_id) {
-        match chat::data_dir(&app) {
-            Ok(dd) => hebcore_client::inject(&dd, &session_id, &content, &attachments).is_ok(),
+        match runtimes(&app) {
+            Ok(registry) => registry
+                .get(&session_id)
+                .await
+                .is_some_and(|runtime| runtime.inject(TurnInput::new(content, attachments))),
             Err(_) => false,
         }
     } else {
@@ -1338,6 +1315,7 @@ fn inject_user_message(
             common::runtime::PendingUserInput {
                 content,
                 attachments,
+                meta: None,
             },
         )
     };
@@ -1373,7 +1351,7 @@ async fn compact_session(
 /// `pattern` 仅在 `allow_and_remember` 时有意义：传命令前缀（如 `"git status"` / `"git"`）
 /// 启用命令级记忆；不传则做工具名级记忆（对 Bash 等会被 hitl 黑名单兜回 AllowOnce）。
 #[tauri::command]
-fn approve_permission(
+async fn approve_permission(
     app: AppHandle,
     hitl: State<'_, Arc<HitlState>>,
     request_id: String,
@@ -1437,18 +1415,19 @@ fn approve_permission(
         extra_patterns = %extra_patterns_label,
         "permission.approval: desktop backend received tool approval"
     );
-    // 架构 §7.8.6：run 在 hebcore 进程里，HITL gate 也在那——经 hebcore 的 Approve 协议
-    // 代理结算。先查 request_id 对应的 session（事件到达时由 sink track_remote 登记）；
-    // 找不到则回退本地 gate（兼容尚未迁移的进程内 run，如 branch 旁支）。
+    // 优先按 session 映射结算共享 runtime 里的活 HITL gate；找不到则回退本地 gate
+    // （兼容尚未迁移的进程内旁支）。
     if let Some(session_id) = hitl.remote_session_of(&request_id) {
-        let dd = data_dir(&app)?;
-        let result =
-            hebcore_client::approve(&dd, &session_id, &request_id, decision).map_err(AppError::msg);
-        // 代理成功才消费映射——失败保留，用户可重试（§7.8.6 不可重试 bug 修复）。
-        if result.is_ok() {
-            hitl.forget_remote(&request_id);
+        if let Ok(registry) = runtimes(&app) {
+            let hit = registry
+                .get(&session_id)
+                .await
+                .is_some_and(|runtime| runtime.state.resolve_approval(&request_id, decision.clone()));
+            if hit {
+                hitl.forget_remote(&request_id);
+                return Ok(());
+            }
         }
-        return result;
     }
     hitl.resolve_approval(&request_id, decision)
         .map_err(AppError::msg)
@@ -1493,7 +1472,7 @@ fn single_answer_from_dto(
 /// - `multi` → `items` 为每道子题的回答
 /// - `cancelled` → 字段忽略
 #[tauri::command]
-fn answer_question(
+async fn answer_question(
     app: AppHandle,
     hitl: State<'_, Arc<HitlState>>,
     request_id: String,
@@ -1527,15 +1506,17 @@ fn answer_question(
         "cancelled" => protocol::UserAnswer::Cancelled,
         other => return Err(AppError::msg(format!("未知 kind: {other}"))),
     };
-    // 架构 §7.8.6：经 hebcore 的 Answer 协议代理结算（run 在 hebcore 进程）。
     if let Some(session_id) = hitl.remote_session_of(&request_id) {
-        let dd = data_dir(&app)?;
-        let result =
-            hebcore_client::answer(&dd, &session_id, &request_id, answer).map_err(AppError::msg);
-        if result.is_ok() {
-            hitl.forget_remote(&request_id);
+        if let Ok(registry) = runtimes(&app) {
+            let hit = registry
+                .get(&session_id)
+                .await
+                .is_some_and(|runtime| runtime.state.answer_question(&request_id, answer.clone()));
+            if hit {
+                hitl.forget_remote(&request_id);
+                return Ok(());
+            }
         }
-        return result;
     }
     hitl.answer_question(&request_id, answer)
         .map_err(AppError::msg)
@@ -1572,15 +1553,15 @@ fn get_run_mode(app: AppHandle, session_id: String) -> AppResult<String> {
 }
 
 #[tauri::command]
-fn set_run_mode(app: AppHandle, session_id: String, mode: String) -> AppResult<String> {
+async fn set_run_mode(app: AppHandle, session_id: String, mode: String) -> AppResult<String> {
     let parsed = agent_core::run_mode::RunMode::parse(&mode)
         .ok_or_else(|| AppError::msg(format!("未知的 RunMode：{mode}")))?;
     let dd = data_dir(&app)?;
     sessions::set_run_mode(&dd, &session_id, parsed)?;
-    // 架构 §7.8.6：活 run 在 hebcore 进程——经 hebcore SetRunMode 即时更新它进程内的
-    // LiveRunModeRegistry + runtime（desktop 自己的 registry 对 hebcore 的 run 无效）。
-    // hebcore 未跑该 session 时静默失败（session.json 已落盘，下次 run 启动会读到）。
-    let _ = hebcore_client::set_run_mode(&dd, &session_id, parsed.as_str());
+    agent_core::run_mode::LiveRunModeRegistry::global().set(&session_id, parsed);
+    if let Some(runtime) = runtimes(&app)?.get(&session_id).await {
+        runtime.state.set_run_mode(parsed);
+    }
     Ok(parsed.as_str().to_string())
 }
 
@@ -2513,7 +2494,7 @@ fn apply_allowed_paths_update(
 /// 在 UI 用户点击 "this-project" / "all-project" 按钮时调用，
 /// 内部会先把路径加进对应存储，再 resolve `request_id`（AllowOnce 语义即可生效本轮）。
 #[tauri::command]
-fn approve_path_access(
+async fn approve_path_access(
     app: AppHandle,
     hitl: State<'_, Arc<HitlState>>,
     request_id: String,
@@ -2593,17 +2574,19 @@ fn approve_path_access(
             .join(","),
         "permission.approval: desktop backend received path approval"
     );
-    // §7.8.6：run + gate 在 hebcore 进程，先经 Approve 协议代理结算；找不到远端映射才回退
-    // 本地 gate（兼容进程内 run）。**此前 path_access 漏了 remote 分支**，run 移 hebcore 后
-    // desktop 点越界路径审批必然「找不到 request_id」失败（用户只能去 island，§4.4.3）。
     // 上面的 session.allowed_paths / settings 持久化保留——那是给下次加载用，与 gate 结算正交。
+    // gate 本身优先按 request_id → session_id 映射戳共享 runtime。
     if let Some(sid) = hitl.remote_session_of(&request_id) {
-        let result =
-            hebcore_client::approve(&dd, &sid, &request_id, decision).map_err(AppError::msg);
-        if result.is_ok() {
-            hitl.forget_remote(&request_id);
+        if let Ok(registry) = runtimes(&app) {
+            let hit = registry
+                .get(&sid)
+                .await
+                .is_some_and(|runtime| runtime.state.resolve_approval(&request_id, decision.clone()));
+            if hit {
+                hitl.forget_remote(&request_id);
+                return Ok(());
+            }
         }
-        return result;
     }
     hitl.resolve_approval(&request_id, decision)
         .map_err(AppError::msg)
@@ -2909,9 +2892,6 @@ pub fn run() {
     // 注入到每个 Session（架构 §4.6.2）。打开失败时打 warn，等同未挂 store——
     // AllowAndRemember(Global) 会兜底为 AllowOnce。
     let data_dir_for_core = agent_core::storage::default_data_dir();
-    // 起 hebcore 日志转发（§4.10）：run 移 hebcore 后 agent_loop 的日志都在 hebcore 进程，
-    // 这条后台流把它们注入本进程 LOG_TX，喂设置里的日志面板（subscribe_log_stream）。
-    hebcore_client::spawn_log_forwarder(data_dir_for_core.clone());
     let permission_store = match PermissionStore::open(&data_dir_for_core) {
         Ok(s) => Some(Arc::new(s)),
         Err(e) => {
@@ -2928,6 +2908,8 @@ pub fn run() {
         permission_store.clone(),
     ));
 
+    let runtimes = RuntimeRegistry::new();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -2938,22 +2920,16 @@ pub fn run() {
         .manage(terminal::TerminalState::default())
         .manage(Arc::new(wechat::WeChatState::default()))
         .manage(Arc::new(channel_forward::ChannelForwardState::default()))
-        .manage(permission_store)
+        .manage(permission_store.clone())
         .manage(core_client)
+        .manage(runtimes.clone())
         .manage(SessionSubscriptions::default())
-        .setup(|app| {
-            // 架构 §7.8.1：任何 surface 启动时确保常驻 hebcore 在跑（谁先启动谁拉 core）。
-            // 后台线程拉起避免阻塞 UI——hebcore 二进制冷启动需若干百 ms，setup 不能等。
-            // hebcore 自带单例锁，已有实例时只 connect 不重复拉。
-            {
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    hebcore_client::ensure_running(
-                        &handle,
-                        &agent_core::storage::default_data_dir(),
-                    );
-                });
-            }
+        .setup(move |app| {
+            surface_session::register_wakeup_resume_handler(
+                data_dir_for_core.clone(),
+                permission_store.clone(),
+                runtimes.clone(),
+            );
             // CEF 泵改在 .run 的 RunEvent 回调里（主线程直接泵，见 pump_on_run_event），
             // 不在 setup 起后台 run_on_main_thread 循环——那条投递队列在主线程没消费时不执行。
             // hebisland socket client 初始化（独立 Tauri 二进制，不持有 agent_core）
@@ -2988,31 +2964,6 @@ pub fn run() {
             window_control::initialize(app.handle()).map_err(|err| {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(err.to_string()))
             })?;
-
-            // 架构 §4.12.6：注册 WakeupScheduler 的 resume 回调。BgFinishHook /
-            // CronTimer 触发时把 `<wakeup>` XML + session_id 通过 Tauri 事件
-            // `wakeup-fired` 推给前端，前端 listener 自动把它当 user message 发出
-            // → 后端 chat 命令检测到 checkpoint 走 resume_with 路径。
-            let resume_handle = app.handle().clone();
-            agent_core::wakeup::WakeupScheduler::global().set_resume_handler(Arc::new(
-                move |event| {
-                    // payload 同时带 wakeup_xml（喂给 model）和结构化 meta
-                    // （架构 §4.12.5 修订）。前端把 meta 透传给 inject/send 命令，
-                    // 后端落盘时挂到 user message 上，view 据此渲染为系统通知条。
-                    let payload = serde_json::json!({
-                        "session_id": event.session_id(),
-                        "run_id": event.run_id(),
-                        "wakeup_xml": agent_core::wakeup::wakeup_xml(&event),
-                        "meta": event.message_meta(),
-                    });
-                    if let Err(e) = resume_handle.emit("wakeup-fired", payload) {
-                        tracing::warn!(error = %e, "failed to emit wakeup-fired tauri event");
-                    }
-                },
-            ));
-            // 进程重启后恢复挂起的 cron（必须在 set_resume_handler 之后，否则到点无 handler）
-            agent_core::wakeup::WakeupScheduler::global()
-                .recover_pending_crons(&agent_core::storage::default_data_dir());
 
             Ok(())
         })

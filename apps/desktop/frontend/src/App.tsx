@@ -105,7 +105,7 @@ export default function App() {
       unlisten?.();
     };
   }, []);
-  // Desktop session 级订阅会在 hebcore 断连后自动重连；每次重连成功后补读一次
+  // Desktop session 级订阅会在进程重启后自动重建；每次重连成功后补读一次
   // session.jsonl，填平断线窗口里已经落盘但没实时推到前端的消息。
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;

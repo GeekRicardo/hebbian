@@ -11039,3 +11039,156 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: agent-core run loop / session.jsonl 落盘语义。未新增协议字段；`system_notification.kind` 新增内部取值 `hook_feedback` / `goal_feedback` / `tool_format_error`，前端已有 kind string 兼容逻辑。Stop hook 与 goal 的模型上下文语义不变，只补齐持久化事实。
 - **验证**: `cargo test -p agent-core goal_notyet_then_achieved_drives_resume_and_clear --lib` 通过；用商汤 `deepseek-v4-flash` 复现“只回复完成 + Cargo.toml 中 cargo check 失败”，修后 `session.jsonl` 出现 3 条 `kind="hook_feedback"` system_notification，且普通 user `<hook-feedback>` 为 0。
 - **留尾巴**: active run 的跨进程 `Inject` 仍只传文本与附件，若未来要让 wakeup 类外部注入在 hebcore 活 run 路径保留 meta，需要单独设计不破坏 crate DAG 的 pending input 元数据通道。
+
+### 2026-07-04 — 修复 Bash PTY 下 Git diff 进入 pager 后等待按键
+
+- **Why**: Bash 默认走 PTY 后，`git diff --stat && git diff --name-status --cached && git diff --stat --cached` 会因为 stdout 是 TTY 而进入 pager，输出 `WARNING: terminal is not fully functional / Press RETURN to continue` 后等待人工按键，最终只能超时转后台；Bash 工具没有交互式 stdin，这类命令应默认非交互执行。
+- **改动**:
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs): 为 pipe / PTY 两条 Bash 路径统一注入非交互环境（`PAGER=cat`、`GIT_PAGER=cat`、`LESS=FRX`、`GIT_TERMINAL_PROMPT=0`、`GCM_INTERACTIVE=never`、`CI=1`、`TERM=dumb`），保留 PTY 实时输出但禁止 pager / prompt 等等待人工输入的行为。
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs): 新增 `pty_git_diff_does_not_enter_pager` 回归测试，钉死 Git diff 在 PTY 下不会进入 `Press RETURN to continue`。
+- **影响范围**: agent-core Bash 工具；不改协议、不改 surface、不破坏兼容。需要真实交互式 pager 的命令不再适合通过默认 Bash 工具运行，但这符合工具无 stdin 的执行边界。
+- **留尾巴**: 当前对话进程里的 Bash 工具仍是热加载前旧代码，需重启 Desktop / core 后真实工具调用才会使用新环境；代码层回归测试和等价 shell 验证已通过。
+
+### 2026-07-03 — 决定去除默认 hebcore，回到全功能进程内 Core Facade
+
+- **Why**: 用户要求“每端接触核心部分必须调用相同函数入口”，且补充说明不止对话入口，所有核心功能入口都要统一。现有 hebcore 跨进程 live broadcast 缺 durable replay、全局 seq、gap detection 与 pending HITL 补偿，默认依赖它会放大事件丢失和三端不对称问题；v1 更适合用共享代码 + 同一函数入口 + 文件锁保证一致性。
+- **改动**:
+  - [docs/架构.md](架构.md): §0 / §2 / §7 改为 Shared Core Facade 设计：对话走 `surface-session::RuntimeRegistry → SessionRuntime → run_turn`，同步 API 走 `core-rpc::dispatch(CoreRequest, LocalCoreClient)`；`apps/hebcore` / `surface-session::transport` 降级为实验远程 transport；§13 追加新决策覆盖 2026-06-25 的 hebcore 默认目标态。
+  - [docs/superpowers/plans/2026-07-03-remove-hebcore.md](superpowers/plans/2026-07-03-remove-hebcore.md): 新增分阶段迁移计划，覆盖 surface-session 泛化、Desktop 回进程内、hebweb 禁默认 hebcore、CLI runner 收敛、hebcore 收尾。
+- **影响范围**: 文档与实施路线；尚未改 Rust 默认路径。后续会影响 desktop / hebweb / CLI / surface-session / core-rpc / hebcore，但不新增协议字段。
+- **留尾巴**: 代码实施仍未完成；下一步按计划去掉 Desktop/hebweb 默认 hebcore 路径，并逐步收敛 CLI 复制 runner。
+
+### 2026-07-03 — 落地 hebweb 不再默认兼任 hebcore，并解耦 wakeup resume handler
+
+- **Why**: 已决定 v1 默认回到进程内 Shared Core Facade。hebweb 启动时继续绑定 hebcore socket 会让浏览器 surface 隐式兼任远程 core，和新 §7 的“surface 各自进程内持有 runtime”相悖；同时 wakeup resume handler 仍强依赖 transport ctx，会阻碍 Desktop/CLI 复用同一 `surface-session` 入口。
+- **改动**:
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): `register_wakeup_resume_handler` 改为基于 `data_dir + permission_store + RuntimeRegistry` 的通用入口，保留 `register_wakeup_resume_handler_for_transport` 兼容实验性远程 transport；注释改为三 surface 共享 runtime 语义。
+  - [apps/web-server/src/main.rs](../apps/web-server/src/main.rs): 删除默认 `spawn_hebcore_transport`，改在 hebweb 进程内注册 wakeup handler 并只启动 web surface。
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs) / [build.rs](../apps/web-server/build.rs): 清理“hebweb 升格 hebcore”的过时说明，改成本进程 runtime / 调试版本语义。
+  - [apps/web-server/Cargo.toml](../apps/web-server/Cargo.toml): 删除不再需要的 `fs2` 依赖，并同步更新 lockfile。
+  - [apps/hebcore/src/main.rs](../apps/hebcore/src/main.rs): 改用实验 transport 的兼容包装，保留 hebcore 二进制可编译但不作为默认 surface 路径。
+  - [docs/superpowers/plans/2026-07-03-remove-hebcore.md](superpowers/plans/2026-07-03-remove-hebcore.md): 补充 Desktop 迁移前 `surface-session` 必须等价承载 `chat::SendArgs` 的约束，避免直接切换造成 meta、continue、force_automode、工具限制、derived/native 事件丢失。
+- **影响范围**: surface-session / hebweb / hebcore / docs；不改协议字段、不改 session 文件格式。hebweb 默认不再创建 `<data_dir>/hebcore.sock`，但 `apps/hebcore` 和 `surface-session::transport` 仍保留为实验路径。
+- **验证**: `cargo check -p surface-session -p hebbian-web-server -p hebcore` 通过。
+- **留尾巴**: Desktop 与 CLI 仍未切到 `surface-session`；直接切 Desktop 会丢 `SendArgs` 现有能力，必须先按 plan 泛化 runtime config / HITL adapter 后再迁移。当前工作区另有 `crates/agent-core/src/tools/bash.rs` 的无关修改，本条不纳入。
+
+### 2026-07-03 — 迁移 Desktop 默认对话路径到进程内 surface-session
+
+- **Why**: 去除默认 `hebcore` 常驻进程后，Desktop 不能再通过 unix-socket 拉起 / 订阅 / 控制远端 run；三端对话入口必须统一到 `surface-session::RuntimeRegistry → SessionRuntime → run_turn`，同步能力继续通过 `LocalCoreClient` / core facade 进入 core。
+- **改动**:
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 移除默认启动时 `hebcore` 拉起与日志转发；注册 `surface_session::register_wakeup_resume_handler`；`send_message` / session 事件订阅 / cancel / inject / approve / answer / path approval / run mode 改为操作本进程 `RuntimeRegistry` 与 `SessionRuntimeState`。
+  - [apps/desktop/src/hitl.rs](../apps/desktop/src/hitl.rs): island 审批 / 回答从 `hebcore_client` 代理改为按 `request_id → session_id` 映射戳共享 runtime 的活 HITL gate。
+  - [apps/desktop/Cargo.toml](../apps/desktop/Cargo.toml): Desktop 增加 `surface-session` 依赖。
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): 扩展 `TurnInput` 支持 Desktop 的 `meta` / `continue_run` / `enabled_tools` / `restrict_tools` / surface hooks，并让 idle wakeup 通过 `MessageMeta::SystemNotification` 落盘。
+- **影响范围**: Desktop 默认对话链路从 hebcore socket 切回进程内 shared core facade；hebcore 二进制与 transport 仍保留为实验路径；协议字段未变。
+- **留尾巴**: active run 的 pending inject 仍受 `common::runtime::PendingUserInput` 不携带 `MessageMeta` 的历史结构限制，系统通知在活 run 插队时 meta 不能完整落盘；CLI runner 仍待收敛到 `surface-session`，且需要先补无人值守 HITL policy。
+
+### 2026-07-03 — 扩展 surface-session TurnInput 承载 Desktop 对话参数
+
+- **Why**: Desktop 默认路径切回进程内 `surface-session` 后，不能只传文本和附件，否则会丢失 Desktop 原有 `SendArgs` 中的 `meta`、`continue_run`、显式工具开关和 surface 私有事件出口；这会造成三端虽然入口统一，但 Desktop 行为退化。
+- **改动**:
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): `TurnInput` 增加 `meta`、`continue_run`、`enabled_tools`、`restrict_tools`、`SurfaceHooks`；`run_turn` 按输入优先级选择 enabled tools，支持 continue_run 不重复追加 user message，并把 derived event / status hook 暴露给 surface 私有副作用。
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): wakeup resume handler 对 idle run 使用 `event.message_meta()` 构造 `TurnInput`，让系统通知类 wakeup 能在新 run 落盘时保留 meta。
+- **影响范围**: surface-session shared conversation runtime；Desktop / hebweb / hebcore transport 编译保持兼容，协议字段未变。
+- **留尾巴**: active run 的 inject 仍走 `common::runtime::PendingUserInput`，该结构当前不携带 `MessageMeta`，活 run 插队的系统通知 meta 保留需后续单独设计，不能把 agent-core storage 类型反向放进 common。
+
+### 2026-07-03 — 补记 Desktop 迁移期间触达的运行时与 legacy runner 文件
+
+- **Why**: 本轮 Desktop 去 `hebcore` 迁移过程中，为评估 active inject 是否能完整保留 `MessageMeta`，短暂检查并触达了 common pending input、agent loop、Desktop legacy runner 和 CLI daemon 等相关路径。最终判断：把 agent-core 的 `MessageMeta` 反向塞进 common 会破坏依赖方向，因此不采用该方案；只保留符合架构的 `surface-session` / Desktop runtime 迁移改动，并把 active inject meta 作为后续设计尾巴。
+- **改动**:
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): 最终保留 `TurnInput` 参数扩展、Desktop 等价输入承载、idle wakeup meta 透传、transport 解耦后的本进程 wakeup handler。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs) / [apps/desktop/src/hitl.rs](../apps/desktop/src/hitl.rs): 最终保留 Desktop 默认对话、订阅、cancel、inject、HITL、run mode 从 `hebcore_client` 迁到本进程 `RuntimeRegistry` / `SessionRuntimeState`。
+  - [crates/common/src/runtime.rs](../crates/common/src/runtime.rs) / [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs) / [crates/agent-core/src/session_hub.rs](../crates/agent-core/src/session_hub.rs): 评估过给 `PendingUserInput` 加 `MessageMeta` 的方案，但因 common 不能依赖 agent-core storage 类型而回退，最终保持原结构与语义。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs) / [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): 随上述方案评估检查 legacy runner / CLI wakeup 构造点；最终未把本轮 Desktop 迁移建立在这些私有 runner 上，CLI 收敛另列后续。
+- **影响范围**: 记录本轮触达面与取舍；最终行为变化仍集中在 `surface-session` 与 Desktop 默认路径。common / agent-core / Desktop legacy runner / CLI daemon 不引入新的持久格式或协议变化。
+- **留尾巴**: active run 插队输入携带 `MessageMeta` 仍需单独设计，方向应是把 pending input 类型移出 common 或由 agent-core 定义边界类型，而不是 common 反向依赖 agent-core；CLI runner 收敛到 `surface-session` 仍待后续阶段完成。
+
+### 2026-07-03 — 文件级补记本轮运行时迁移触达范围
+
+- **Why**: Stop hook 以本轮触达文件为准检查 changelog 覆盖范围；为避免 `surface-session` / Desktop 去 `hebcore` 迁移中的探索性触达被误判为无记录，补充一条逐文件覆盖记录。
+- **改动**:
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): 保留共享 `TurnInput` 能力扩展、wakeup handler 解耦与 idle wakeup meta 透传。
+  - [crates/common/src/runtime.rs](../crates/common/src/runtime.rs): 曾评估 `PendingUserInput` 扩展 meta，因依赖方向不成立而回到原结构；最终不改变 common 运行时边界。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 曾随 pending input meta 方案检查 drain / persister 边界，最终不改变 agent_loop 行为。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): 曾随 legacy Desktop runner 检查 pending input 构造点，最终不把默认 Desktop 路径切回私有 runner。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 保留 Desktop 默认 send / subscribe / cancel / inject / HITL / run mode / wakeup 注册迁移到本进程 `surface-session` runtime。
+  - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): 曾检查 CLI daemon 自有 runner 与 wakeup 注入点；CLI 收敛未在本条完成，保持后续事项。
+  - [crates/agent-core/src/session_hub.rs](../crates/agent-core/src/session_hub.rs): 曾随 pending input meta 方案检查 runtime inject 测试点，最终不改变 `SessionRuntimeState::inject` 语义。
+  - [apps/desktop/src/hitl.rs](../apps/desktop/src/hitl.rs): 保留 island HITL 结算从 `hebcore_client` 代理改为戳本进程 `RuntimeRegistry`。
+- **影响范围**: 这是对本轮触达面的审计记录；最终有效行为变化仍是 Desktop 默认路径与 `surface-session` 入口统一，不新增协议字段，不改变 common / agent-core pending input 结构。
+- **留尾巴**: active run 插队输入携带 `MessageMeta` 与 CLI runner 收敛仍需后续单独设计和实现。
+
+### 2026-07-04 — 收敛 CLI daemon / run_once 到 surface-session 共享 runtime
+
+- **Why**: CLI `apps/cli/src/daemon.rs` 维护了一整套复制 runner（`DaemonState` 含 provider/model/reasoning/HITL/cancel/pending_inputs/run_mode，自建 `run_turn` 装配 model client / workspace / skills / tools / CoreSession / Harness），与 `surface-session::run_turn` 行为漂移且违反架构 §7 "三 surface 对话入口必须统一"。
+- **改动**:
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): `SurfaceHooks` 新增 `on_permission_request` / `on_question` 两个可选回调，`WebObserver` 优先调用 hooks；CLI 通过 hook 注入无人值守自动结算策略，不必再自建 `TurnObserver`。
+  - [apps/cli/Cargo.toml](../apps/cli/Cargo.toml): 增加 `surface-session` 依赖。
+  - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): **完全重写**——删除 `DaemonState` 复制的 provider/model/reasoning/HITL/cancel/pending_inputs/run_mode/input_tx 状态机、自建 `run_turn(start→load→model client→workspace→skills→tools→CoreSession→Harness→SessionConfig→drive)`、自有 `DaemonObserver` 实现、以及 `translate_event(AgentEvent)` 翻译器。新设计：
+    - `DaemonState` 只持 `session_id + data_dir + runtime: Arc<SessionRuntime>`。
+    - `run`：启动时注册 `surface_session::register_wakeup_resume_handler` + 订阅 `runtime.state.subscribe()` 把 `WireEvent → DaemonEvent` 翻译到 stdout NDJSON（`translate_wire_event`）。IPC 命令直接操作 `runtime.state.resolve_approval()` / `answer_question()` / `stop()` / `set_run_mode()` / `LiveRunModeRegistry`。
+    - `run_once`：通过 `SurfaceHooks::on_permission_request`（自动拒）+ `on_question`（自动取消）+ `on_status`（oneshot 收尾）在共享 runtime 里实现无人值守语义，不再自建 run_turn / observer。
+    - 删除 CLI 私有 `NamedModelClient` / `TurnInput` / `RunOnceArgs` 内联 runner 相关和大部分 agent-core `use`（仅保留 `PermissionStore` / `RunMode` / `sessions` / `sessions_dir` 等元数据操作）。
+    - 保留 `resolve_provider_model` / `prepare_session` / `build_run_summary` / `read_run_edits_files` 等 surface 元数据工具函数和 `translate_tests` 回归（测试改用 `WireEvent` 输入，验证映射一致性）。
+  - [apps/cli/src/main.rs](../apps/cli/src/main.rs): 删除 `mod hebcore_client;`、`Connect`/`HebcoreRpc` clap 子命令及对应 match 分支——默认 CLI 命令树不再暴露 hebcore 远程入口。
+  - [apps/cli/src/hebcore_client.rs](../apps/cli/src/hebcore_client.rs): **删除**。旧实验 hebcore connect/rpc 客户端文件不再被引用。
+- **影响范围**: CLI default path 从自己维护 runner 切到 `surface-session` 共享 runtime，三端对话入口实现统一（Desktop / hebweb / CLI 全部进 `RuntimeRegistry → SessionRuntime → run_turn`）。不改协议字段、不改 session 文件格式。hebcore 二进制与 transport 实验路径不受影响。
+- **验证**: `cargo check -p surface-session -p hebbian-cli -p hebbian-web-server -p hebcore && cargo check -p hebbian --tests` 通过。
+- **留尾巴**:
+  - active run inject 的 `meta` 仍无法完整保留（`PendingUserInput` 不带 `MessageMeta`，common 不能反向依赖 agent-core storage）；后续需把 pending input 类型移出 common 或由 agent-core 定义边界类型。
+  - `WireEvent::RunFinished` 不带 token 总数，CLI `translate_wire_event` 在 event pump 中自行累加 `Usage` 事件补入；`derived_sink` 路径的 token 累加暂独立，title/memory 等派生事件不受影响。
+  - `apps/hebcore` 与 `surface-session::transport` 保留为实验性远程 core transport，不作为任何 surface 默认入口。
+
+### 2026-07-04 — Phase 5 清理 Desktop hebcore 客户端与构建残留
+
+- **Why**: 三端对话入口已统一走 `surface-session` 共享 runtime（Phase 1–4），但 Desktop 仍遗留 `hebcore_client.rs` 死文件、`tauri.conf.json` 仍编/打包 hebcore 二进制、多处注释提及 hebcore 版本协商——这些残留让「去 hebcore」不干净，且未来 builder 会误以为 Desktop 仍需 hebcore 配套。
+- **改动**:
+  - [apps/desktop/src/hebcore_client.rs](../apps/desktop/src/hebcore_client.rs): **删除**。旧 `ensure_running` / `start_run` / `subscribe_session_reconnecting` / `approve` / `answer` / `interrupt` / `inject` / `set_run_mode` 等 socket 代理函数已无调用方。
+  - [apps/desktop/tauri.conf.json](../apps/desktop/tauri.conf.json): `beforeBuildCommand` 删 `cargo build --release -p hebcore`；`bundle.resources` 删 `../../target/release/hebcore: hebcore` 打包条目。
+  - [apps/desktop/build.rs](../apps/desktop/build.rs): 注释删"版本协商 hebcore 是否 stale"语义，仅保留 HEBBIAN_BUILD_ID 注入说明。
+  - [apps/desktop/scripts/build-with-id.mjs](../apps/desktop/scripts/build-with-id.mjs): 删 `cargo build --release -p hebcore` / `cargo build -p hebcore` 两步 + 相关注释；`app:build` / `app:dev` 只编 Desktop 自身。
+  - [apps/desktop/scripts/gen-build-id.mjs](../apps/desktop/scripts/gen-build-id.mjs): 注释删 hebcore 版本协商语义，只保留 Desktop build.rs 读 `.hebbian-build-id` 的说明。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 清理 partial recovery 注释中关于"run 移到 hebcore"的过时说明。
+  - [apps/desktop/frontend/src/App.tsx](../apps/desktop/frontend/src/App.tsx) / [useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): "hebcore 断连后自动重连" → "进程重启后自动重建"；"已被 hebcore 接收" → "已被 runtime 接收"。
+- **影响范围**: Desktop 构建流程 + 前端文案；不影响 Rust 运行时路径（hebcore_client 早已无 mod 声明）。`apps/hebcore` 二进制与 `surface-session::transport` 保留为实验路径。
+- **验证**: `cargo check -p surface-session -p hebbian-cli -p hebbian-web-server -p hebcore -p hebbian --tests` 通过；Desktop 源码与前端 `rg hebcore` 零匹配（仅 `build.rs` 保留一句跨 binary 文件名引用）。
+- **留尾巴**: `apps/hebcore` / `crates/surface-session/src/transport.rs` 作为实验性远程 core 保留，当前无 surface 默认依赖；若未来重启远程 core 需先补齐 sequenced event stream、durable replay、gap detection。`pnpm exec tsc --noEmit` 因本环境缺 `tsc` 未执行，需用户在 Desktop 前端目录确认。
+
+### 2026-07-04 — 补全 active run inject 的 MessageMeta 跨边界通道
+
+- **Why**: 之前活 run 插队消息（wakeup resume 等）只能通过 `PendingUserInput { content, attachments }` 注入，`meta` 字段无法携带——因为 `PendingUserInput` 定义在 `common`，而 `MessageMeta` 在 `agent-core::storage::sessions`，common 不能反向依赖 agent-core。这导致 wakeup 触发的系统通知在活 run 注入时 meta 丢失，落盘后 `session.jsonl` 只有普通的 `Role::User` 消息，surface 无法区别渲染为系统通知条。
+- **改动**:
+  - [crates/protocol/src/message.rs](../crates/protocol/src/message.rs): **新建** `PendingMessageMeta` 枚举（`SystemNotification { kind, task_id, tool_use_id }`），定义在 `protocol`（zero-dep），供 `common` 安全引用。
+  - [crates/protocol/src/lib.rs](../crates/protocol/src/lib.rs): 注册 `pub mod message` 并 re-export `PendingMessageMeta`。
+  - [crates/common/Cargo.toml](../crates/common/Cargo.toml): 增加 `protocol` 依赖（符合 DAG `common → protocol`）。
+  - [crates/common/src/runtime.rs](../crates/common/src/runtime.rs): `PendingUserInput` 增加 `meta: Option<protocol::PendingMessageMeta>` 字段。
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): `SessionRuntime::inject()` 将 `TurnInput.meta`（`MessageMeta`）转换为 `PendingMessageMeta` 后随 `PendingUserInput` 传入。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): `drain_pending_inputs()` 将 `PendingMessageMeta` 转换回 `MessageMeta` 后传给 `persister.append_user(..., meta)`。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs) / [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs) / [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs)（测试段）/ [crates/agent-core/src/session_hub.rs](../crates/agent-core/src/session_hub.rs)（测试段）: 更新所有 `PendingUserInput` 构造点，显式填 `meta: None`。
+- **影响范围**: common runtime 类型 + protocol 新类型 + surface-session 注入路径 + agent-core drain 落盘路径。不改变协议线格式（`PendingMessageMeta` 仅用于进程内边界，不入 WireEvent），不改变 session.jsonl 字段语义（meta 最终仍然序列化为 `MessageMeta`）。
+- **验证**: `cargo check -p surface-session -p hebbian-cli -p hebbian-web-server -p hebcore -p hebbian --tests` 通过；`cargo test -p agent-core session_hub::tests --lib` 6/6 通过。
+- **留尾巴**: `PendingMessageMeta` 当前仅含 `SystemNotification` 变体；若未来需要其他 meta 变体（Switch / Interrupted 等）经注入路径传递，在此枚举追加并补齐 agent-core 侧的转换。无需改动 common 或 protocol 的 DAG。
+
+### 2026-07-04 — 修复 Desktop cancel_message 竞态窗口：stop() 在 set_active 之前为空操作
+
+- **Why**: Desktop 切到进程内 `surface-session` 后，用户点 Stop 不生效。根因是 `SessionRuntimeState` 的 `cancel_flag` 为 `Mutex<Option<Arc<AtomicBool>>>`，仅在 `run_turn` 调 `set_active` 后才有值——但 `cancel_message` 可能在 `run_turn` 完成初始化（session 加载、model client 构建、workspace/tools 装配等数百毫秒）之前就到达，此时 `stop()` → `self.state.stop()` 读到的 `cancel_flag` 仍是 `None`，空操作退出；之后 `run_turn` 创建一个全新的 `cancel_flag` 开始跑，前面的 stop 信号已丢失。
+- **改动**:
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): `SessionRuntime` 增加常驻 `stop_flag: Arc<AtomicBool>`，在 `ensure()` 创建 runtime 时初始化，**不依赖 `set_active` 时机**。`stop()` 同时设此标志和 `state.stop()`。
+  - 输入循环在每次 `run_turn` 之前检查 `stop_flag`，若已设则跳过本轮并清除标志。
+  - `run_turn` 复用 `runtime.stop_flag` 作为 agent_loop 的 `cancel_flag`（而非每次新建 `Arc::new(AtomicBool)`），消除新旧 flag 不同步问题。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `cancel_message` 移除旧 `hitl.cancel_run` 兜底（hebcore 时代遗留，走旧 `HitlState` 而非 `SessionRuntimeState`），简化返回值逻辑。
+- **影响范围**: surface-session 运行时 + Desktop cancel 命令；不改协议、不改 session 文件格式。CLI / hebweb 自动受益于同一 stop_flag 机制。
+- **验证**:
+  - `cargo check -p surface-session -p hebbian-cli -p hebbian-web-server -p hebcore -p hebbian --tests` 通过
+  - `cargo test -p agent-core session_hub::tests --lib` 6/6 通过
+  - CLI 端到端：`heb new → heb input（长任务）→ sleep 2s → heb stop` 产生 `run failed error=已取消` 事件 ✓
+- **留尾巴**: 无。
+
+### 2026-07-04 — 加速 Stop：skip drive() trailing window for Cancelled/Failed
+
+- **Why**: 用户点 Stop 后，即使 cancel flag 已被 agent_loop 检出，`harness::drive()` 在收到 `RunCancelled` / `RunFailed` 后仍调 `drain_trailing_events` 等待最多 5 秒——这是给 `SessionTitleChanged` / `MemoryExtracted` 等后台 task 的送达窗口，但对已取消/失败的 run 无意义。用户感受到的延迟就是这 5 秒。
+- **改动**:
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs): `drive()` 在 break 出 `RunCancelled` / `RunFailed` 后跳过 `drain_trailing_events`，立即返回。`RunFinished` / `RunSuspended` 保持原有 trailing window。
+- **影响范围**: agent-core harness；不改变协议、不改变 session 文件格式。Desktop / CLI / hebweb 的 stop 响应延迟从「最多 5s」降为「cancel 检出 + 事件投递」即停。
+- **验证**: `cargo check --workspace --tests` 通过；`cargo test -p agent-core harness::tests --lib` 9/9 通过。
+- **留尾巴**: 无。

@@ -409,6 +409,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             pending.lock().unwrap().push(PendingUserInput {
                 content: args.user_content.clone(),
                 attachments: args.attachments.clone(),
+                meta: None,
             });
         }
     } else if !args.continue_run {
@@ -1595,6 +1596,7 @@ mod tests {
                         .push(common::runtime::PendingUserInput {
                             content: "插队消息".to_string(),
                             attachments: Vec::new(),
+                            meta: None,
                         });
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),
@@ -1678,6 +1680,7 @@ mod tests {
                         .push(common::runtime::PendingUserInput {
                             content: "插队消息".to_string(),
                             attachments: Vec::new(),
+                            meta: None,
                         });
                     Ok(ModelResponse::Done {
                         finish: model_gateway::types::FinishReason::Stop,
@@ -1757,6 +1760,7 @@ mod tests {
                         .push(common::runtime::PendingUserInput {
                             content: "后台通知".to_string(),
                             attachments: Vec::new(),
+                            meta: None,
                         });
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),

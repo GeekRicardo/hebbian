@@ -11,7 +11,6 @@ path = "src/main.rs"
 agent-core = { path = "../../crates/agent-core" }
 core-rpc = { path = "../../crates/core-rpc" }
 surface-session = { path = "../../crates/surface-session" }
-fs2 = "0.4"
 model-gateway = { path = "../../crates/model-gateway" }
 observability = { path = "../../crates/observability" }
 common = { package = "hebbian-common", path = "../../crates/common" }

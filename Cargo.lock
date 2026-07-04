@@ -2126,6 +2126,7 @@ dependencies = [
  "protocol",
  "serde",
  "serde_json",
+ "surface-session",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -2175,6 +2176,7 @@ dependencies = [
  "protocol",
  "serde",
  "serde_json",
+ "surface-session",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2185,6 +2187,7 @@ name = "hebbian-common"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "protocol",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -2214,7 +2217,6 @@ dependencies = [
  "clap",
  "core-rpc",
  "dirs 5.0.1",
- "fs2",
  "futures-util",
  "hebbian-common",
  "hyper",

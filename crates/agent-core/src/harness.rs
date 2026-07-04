@@ -590,8 +590,15 @@ impl RunHandle {
             }
         };
 
-        self.drain_trailing_events(observer, std::time::Duration::from_secs(5))
-            .await;
+        // 取消 / 失败：立即返回，不等 trailing events。
+        // 标题生成、记忆抽取等后台 task 对已取消的 run 无意义——用户点 Stop 期望的就是马上停。
+        match summary.outcome {
+            TurnOutcome::Cancelled | TurnOutcome::Failed(_) => {}
+            _ => {
+                self.drain_trailing_events(observer, std::time::Duration::from_secs(5))
+                    .await;
+            }
+        }
         summary
     }
 

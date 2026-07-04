@@ -347,7 +347,12 @@ fn drain_pending_inputs(
         // 插队 user 落盘收归 agent_core（架构 §4.9.5）：给定 persister 时由这里单点 append，
         // surface 端不再即写即落（双落防护）。
         if let Some(p) = persister {
-            p.append_user(input.content.clone(), input.attachments.clone(), None);
+            let meta = input.meta.map(|pm| match pm {
+                protocol::PendingMessageMeta::SystemNotification { kind, task_id, tool_use_id } => {
+                    crate::storage::sessions::MessageMeta::SystemNotification { kind, task_id, tool_use_id }
+                }
+            });
+            p.append_user(input.content.clone(), input.attachments.clone(), meta);
         }
         transcript.push_user(input.content, input.attachments);
     }
@@ -1887,6 +1892,7 @@ mod tests {
                         .push(common::runtime::PendingUserInput {
                             content: "插队消息".to_string(),
                             attachments: Vec::new(),
+                            meta: None,
                         });
                     Ok(ModelResponse::Done {
                         finish: model_gateway::types::FinishReason::Stop,
@@ -2616,6 +2622,7 @@ mod tests {
                         .push(common::runtime::PendingUserInput {
                             content: "ToolStep 后的引导".to_string(),
                             attachments: Vec::new(),
+                            meta: None,
                         });
                 }
             }),

@@ -2251,7 +2251,7 @@ export const useStore = create<AppState>((set, get) => ({
           meta,
           options.continueRun,
         );
-        // start_run 已被 hebcore 接收；流式事件与终态清理由 session 级长期订阅处理。
+        // start_run 已被 runtime 接收；流式事件与终态清理由 session 级长期订阅处理。
       } catch (err: any) {
         const stillForeground = get().currentSession?.id === sessionId;
         // 不论前后台都先把 slot 清掉、running 摘除；后台失败再标 unread

@@ -6,7 +6,7 @@
   "mainBinaryName": "hebbian",
   "build": {
     "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "node scripts/gen-build-id.mjs && cargo build --release -p hebcore && bash ../island-mac/build-app.sh release && pnpm build",
+    "beforeBuildCommand": "node scripts/gen-build-id.mjs && bash ../island-mac/build-app.sh release && pnpm build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "dist"
   },
@@ -43,8 +43,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../island-mac/dist/HebIsland.app/": "HebIsland.app/",
-      "../../target/release/hebcore": "hebcore"
+      "../island-mac/dist/HebIsland.app/": "HebIsland.app/"
     }
   }
 }

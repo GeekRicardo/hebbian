@@ -27,7 +27,6 @@ use clap::{Parser, Subcommand};
 
 mod client;
 mod daemon;
-mod hebcore_client;
 mod ipc;
 
 use ipc::IpcCommand;
@@ -181,27 +180,6 @@ enum Command {
     /// 拉当前 session 已记录的所有 model 请求/响应（每个 turn 一条）
     /// → 输出 `{ entries: [DumpEntry, ...] }`，给 AI 脚本排查"模型到底收到了什么"
     ModelIo { session_id: String },
-
-    /// 连接常驻 hebcore 进程跑对话（架构 §7.8.4 `--connect` 共享模式）：看到的是与
-    /// desktop / hebweb 同一份活内存状态。session 须已存在（用 desktop/hebweb 创建）。
-    /// 与 `heb new`（daemon 内嵌 agent_core，§7.8.4 `--stdio` 隔离）相对。
-    Connect {
-        /// 要跑对话的 session id（须已存在于 hebcore 的数据目录）
-        session_id: String,
-        /// 首条 user 输入文本
-        text: String,
-        /// 数据目录（默认 ~/.hebbian），决定 hebcore.sock 位置
-        #[arg(long)]
-        data_dir: Option<PathBuf>,
-    },
-
-    /// 给常驻 hebcore 发一个同步 API 请求（调试用），如 `heb hebcore-rpc list_sessions`。
-    HebcoreRpc {
-        /// CoreRequest method 名（无参方法），如 list_sessions / list_tools / list_providers
-        method: String,
-        #[arg(long)]
-        data_dir: Option<PathBuf>,
-    },
 }
 
 #[tokio::main]
@@ -343,16 +321,6 @@ async fn main() -> Result<()> {
 
         Command::ModelIo { session_id } => {
             client::send_command(&session_id, IpcCommand::ListModelIo).await
-        }
-
-        Command::Connect {
-            session_id,
-            text,
-            data_dir,
-        } => hebcore_client::connect_run(data_dir, session_id, text).await,
-
-        Command::HebcoreRpc { method, data_dir } => {
-            hebcore_client::connect_rpc(data_dir, method).await
         }
     }
 }

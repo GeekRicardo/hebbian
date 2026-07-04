@@ -1,8 +1,7 @@
-// 生成一个唯一 build id 写到 workspace 根的 .hebbian-build-id（§7.8.7 版本协商）。
-// 由 `pnpm tauri build` 的 beforeBuildCommand 调用——每次构建写一个新值，desktop 与 hebcore
-// 的 build.rs 都读这个文件（rerun-if-changed 它），从而：① 每次 tauri build 版本号都不同
-// （末尾带随机后缀，同分钟多次构建也不撞）；② desktop 与同次打包的 hebcore 版本号一致
-// （都读同一文件），避免版本协商把它俩判成不同版本、启动时反复弹窗。
+// 生成一个唯一 build id 写到 workspace 根的 .hebbian-build-id。
+// 由 `pnpm tauri build` 的 beforeBuildCommand 调用——每次构建写一个新值，desktop 的
+// build.rs 读这个文件（rerun-if-changed 它），从而每次 tauri build 版本号都不同
+// （末尾带随机后缀，同分钟多次构建也不撞）。
 import { writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'

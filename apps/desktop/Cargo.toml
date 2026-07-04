@@ -29,6 +29,7 @@ model-gateway = { path = "../../crates/model-gateway" }
 observability = { path = "../../crates/observability" }
 common = { package = "hebbian-common", path = "../../crates/common" }
 protocol = { path = "../../crates/protocol" }
+surface-session = { path = "../../crates/surface-session" }
 channel-core = { path = "../../crates/channel-core" }
 channels = { path = "../../crates/channels" }
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "devtools", "unstable", "webview-data-url"] }
