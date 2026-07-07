@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "apps/desktop",
+    "apps/native",
     "apps/cli",
     "apps/web-server",
     "apps/hebcore",

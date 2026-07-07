@@ -1,0 +1,21 @@
+[package]
+name = "hebbian-native"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "hebbian-native"
+path = "src/main.rs"
+
+[dependencies]
+agent-core = { path = "../../crates/agent-core" }
+surface-session = { path = "../../crates/surface-session" }
+protocol = { path = "../../crates/protocol" }
+model-gateway = { path = "../../crates/model-gateway" }
+common = { package = "hebbian-common", path = "../../crates/common" }
+eframe = "0.29"
+egui = "0.29"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+anyhow = "1"
+serde_json = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
