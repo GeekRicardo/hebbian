@@ -24,7 +24,7 @@ const SETTINGS_FILENAME: &str = "settings.json";
 /// 时用这个；调用方按需读 `definition.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS)`。
 pub const DEFAULT_MAX_ITERATIONS: u32 = 50;
 
-/// Subagent 来源层级（架构 §4.4.11.4）。前端据此区分「内置」与「自定义」。
+/// Subagent 来源层级（架构 §4.4.11.4）。前端据此区分「内置」与「自定义」与「临时」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentSource {
@@ -33,6 +33,8 @@ pub enum SubagentSource {
     /// 用户磁盘 `~/.hebbian/subagents/<name>.md`。
     #[default]
     Global,
+    /// 运行时 `CreateSubagent` 工具创建的会话级临时定义，进程内内存，不落盘。
+    Session,
 }
 
 /// Subagent 权限维度（架构 §4.4.11.4），对齐 CC 的 subagent `permissionMode`——
@@ -452,6 +454,50 @@ fn parse_string_list(s: &str) -> Vec<String> {
         .collect()
 }
 
+use std::sync::{Arc, RwLock};
+
+// ── session-scoped 临时 subagent 路由表 ───────────────────────────────
+// 复刻 BgTaskRegistry 的 session 路由模式（架构 §4.12.2 修订）：
+// 同一 session_id 跨 chat() / spawn_run 调用拿到同一份 Arc<RwLock<Vec<...>>>；
+// 不同 session 完全隔离。进程重启即丢失——符合「临时」语义。
+
+/// 进程内 `session_id → session 级临时 subagent 列表` 路由表。
+static SESSION_SUBAGENTS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, Arc<RwLock<Vec<SubagentDefinition>>>>>,
+> = std::sync::OnceLock::new();
+
+fn session_subagents_map(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, Arc<RwLock<Vec<SubagentDefinition>>>>>
+{
+    SESSION_SUBAGENTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// 按 session_id 取（或首次创建）该 session 的临时 subagent 列表句柄。
+/// 同一 session 多次调用返回同一份 Arc；不同 session 互不可见。
+pub fn session_subagents_for(session_id: &str) -> Arc<RwLock<Vec<SubagentDefinition>>> {
+    let mut map = session_subagents_map().lock().expect("session subagents mutex");
+    map.entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(RwLock::new(Vec::new())))
+        .clone()
+}
+
+/// session 关闭 / 删除时从路由表摘除，释放内存。
+pub fn discard_session_subagents(session_id: &str) {
+    if let Ok(mut map) = session_subagents_map().lock() {
+        map.remove(session_id);
+    }
+}
+
+/// 读取并克隆某 session 的全部临时 subagent 定义（供 `build_subagent_ctx_snapshot` 合并用）。
+/// session_id 不存在或列表为空时返回空 Vec。
+pub fn take_session_subagents(session_id: &str) -> Vec<SubagentDefinition> {
+    let map = session_subagents_map().lock().expect("session subagents mutex");
+    match map.get(session_id) {
+        Some(lock) => lock.read().expect("session subagents rwlock").clone(),
+        None => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,5 +680,77 @@ mod tests {
         assert_eq!(explore.len(), 1, "同名只保留磁盘版（覆盖内嵌）");
         assert_eq!(explore[0].description, "my explore");
         assert_eq!(explore[0].system_prompt, "Custom explore.");
+    }
+
+    // ── session-scoped 路由表 ──
+
+    fn make_session_def(name: &str) -> SubagentDefinition {
+        SubagentDefinition {
+            name: name.to_string(),
+            description: format!("{name} desc"),
+            tools: None,
+            model: None,
+            max_iterations: None,
+            system_prompt: format!("You are {name}."),
+            enabled: true,
+            source: SubagentSource::Session,
+            permission: None,
+        }
+    }
+
+    #[test]
+    fn session_subagents_for_same_id_returns_same_arc() {
+        let sid = format!("test-same-arc-{}", uuid::Uuid::new_v4());
+        let a = session_subagents_for(&sid);
+        let b = session_subagents_for(&sid);
+        assert!(Arc::ptr_eq(&a, &b), "同 session_id 必须返回同一 Arc");
+        discard_session_subagents(&sid);
+    }
+
+    #[test]
+    fn session_subagents_for_different_ids_are_isolated() {
+        let sid_a = format!("test-iso-a-{}", uuid::Uuid::new_v4());
+        let sid_b = format!("test-iso-b-{}", uuid::Uuid::new_v4());
+        let a = session_subagents_for(&sid_a);
+        a.write().unwrap().push(make_session_def("alpha"));
+        let b = session_subagents_for(&sid_b);
+        assert!(b.read().unwrap().is_empty(), "不同 session 互不可见");
+        discard_session_subagents(&sid_a);
+        discard_session_subagents(&sid_b);
+    }
+
+    #[test]
+    fn take_session_subagents_returns_clone() {
+        let sid = format!("test-take-{}", uuid::Uuid::new_v4());
+        let lock = session_subagents_for(&sid);
+        lock.write().unwrap().push(make_session_def("beta"));
+        let taken = take_session_subagents(&sid);
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].name, "beta");
+        assert_eq!(taken[0].source, SubagentSource::Session);
+        // 原 Vec 不被清空（take 是 read+clone 语义）
+        assert_eq!(lock.read().unwrap().len(), 1);
+        discard_session_subagents(&sid);
+    }
+
+    #[test]
+    fn take_session_subagents_unknown_id_returns_empty() {
+        let sid = format!("test-unknown-{}", uuid::Uuid::new_v4());
+        assert!(take_session_subagents(&sid).is_empty());
+    }
+
+    #[test]
+    fn discard_clears_session_subagents() {
+        let sid = format!("test-discard-{}", uuid::Uuid::new_v4());
+        let a = session_subagents_for(&sid);
+        a.write().unwrap().push(make_session_def("gamma"));
+        discard_session_subagents(&sid);
+        let b = session_subagents_for(&sid);
+        assert!(
+            !Arc::ptr_eq(&a, &b),
+            "discard 后再取应得新 Arc（旧的已被摘除）"
+        );
+        assert!(b.read().unwrap().is_empty());
+        discard_session_subagents(&sid);
     }
 }

@@ -1,11 +1,15 @@
 pub mod background;
 pub mod bash;
+pub mod bash_input;
 pub mod bash_output;
 pub mod bash_prefix;
+pub mod connector;
+pub mod create_subagent;
 pub mod edit;
 pub mod edit_hashline;
 pub mod grep;
 pub mod hitl;
+pub mod interactive_bash;
 pub mod kill_shell;
 pub mod mcp;
 pub mod plan_mode;
@@ -209,13 +213,24 @@ pub fn default_tools(
         Box::new(bash::BashTool::new(
             workspace.clone(),
             shells.clone(),
-            bg_log_dir,
-            shell,
+            bg_log_dir.clone(),
+            shell.clone(),
+        )),
+        Box::new(interactive_bash::InteractiveBashTool::new(
+            workspace.clone(),
+            shells.clone(),
+            bg_log_dir.clone(),
+            shell.clone(),
         )),
         Box::new(bash_output::BashOutputTool::new(shells.clone())),
+        Box::new(bash_input::BashInputTool::new(shells.clone())),
         Box::new(kill_shell::KillShellTool::new(shells.clone())),
         Box::new(schedule_wakeup::ScheduleWakeupTool::new(phase)),
     ];
+
+    // 记录 session 绑定情况——在 session_id 被 move 到 ReadTool/ReadHashlineTool 前判一次
+    let has_session = session_id.is_some();
+    let sid_for_create = session_id.clone();
 
     // Read 与 Edit 必须配套切换：hashline patch 里的行号/hash 基于 hashline Read 的输出
     use crate::storage::settings::EditBackend;
@@ -264,12 +279,21 @@ pub fn default_tools(
             mem_data_dir,
             project_workdir,
         )),
+        // 连接器工具：ListConnectors / SendChannelMessage
+        // 进程级全局单例，surface 启动时调用 set_global_registry 设置实现。
+        // 未设置时两个工具静默返回空 / 错误。（架构 §7.5.1 扩展）
+        Box::new(connector::ListConnectorsTool),
+        Box::new(connector::SendChannelMessageTool),
     ]);
 
-    // Task 工具仅在加载到至少一个启用的 subagent 定义时注入（架构 §13 决策）：
-    // 没有定义时把工具暴露给模型只会污染上下文（模型调用必返回"找不到 subagent"错误）。
-    if !subagents.is_empty() {
+    // Task 工具：builtin subagent 始终在使 subagents 永不为空；额外地，当有 session
+    // 绑定时无条件注册——让模型能先 CreateSubagent 创建临时定义，再 Task 调用。
+    // CreateSubagent 仅在有 session 上下文时注入（需要 session_id 写路由表）。
+    if !subagents.is_empty() || has_session {
         tools.push(Box::new(task::TaskTool::new(subagents)));
+    }
+    if has_session {
+        tools.push(Box::new(create_subagent::CreateSubagentTool::new(sid_for_create)));
     }
     tools
 }
@@ -308,6 +332,8 @@ pub async fn default_tools_with_mcp(
 /// `Task` 走条件注入（仅当存在启用的 subagent 定义时），不列入这里。
 pub const BUILTIN_TOOL_NAMES: &[&str] = &[
     "Bash",
+    "InteractiveBash",
+    "BashInput",
     "BashOutput",
     "KillShell",
     "ScheduleWakeup",
@@ -319,6 +345,8 @@ pub const BUILTIN_TOOL_NAMES: &[&str] = &[
     "PlanMode",
     "ReadMemory",
     "WriteMemory",
+    "ListConnectors",
+    "SendChannelMessage",
 ];
 
 /// 记忆工具名（架构 §4.14）。subagent 过滤据此剔除——本期 subagent 不给记忆能力。
@@ -343,7 +371,7 @@ pub fn memory_project_workdir(workdir: &std::path::Path) -> Option<PathBuf> {
 /// （例如 Task 仅在存在启用的 subagent 定义时注入）。dispatch 层把它们一律加进
 /// 工具白名单——registry 没有的名字会被 [`registry::ToolRegistry::definitions`]
 /// 自然忽略，所以这里多列不会带来副作用，但少列会让条件注入的工具发不到模型。
-pub const CONDITIONAL_TOOL_NAMES: &[&str] = &["Task"];
+pub const CONDITIONAL_TOOL_NAMES: &[&str] = &["Task", "CreateSubagent"];
 
 pub fn is_builtin_tool(name: &str) -> bool {
     name == ASK_TOOL_NAME

@@ -166,6 +166,7 @@ impl BashTool {
         // 创建独立进程组：kill 时杀整组而非仅 bash，避免子命令（find/docker/…）变孤儿 PPID=1。
         #[cfg(unix)]
         cmd.process_group(0);
+        apply_noninteractive_env_pipe(&mut cmd);
         if let Some(path) = crate::shell_env::resolve_shell_path(self.shell.as_deref()).await {
             cmd.env("PATH", path);
         }
@@ -311,12 +312,9 @@ impl BashTool {
         cmd_builder.arg("-lc");
         cmd_builder.arg(command);
         cmd_builder.cwd(cwd);
-        // PTY 下 stdin 已关闭，git 等工具检测到 isatty() 但是不完整终端会弹
-        // "WARNING: terminal is not fully functional - Press RETURN to continue"
-        // TERM=dumb 让它们知道这不是交互终端，不弹提示、不走 pager。
-        // GIT_TERMINAL_PROMPT=0 额外确保 git 不做任何交互式提示。
-        cmd_builder.env("TERM", "dumb");
-        cmd_builder.env("GIT_TERMINAL_PROMPT", "0");
+        // PTY 会让不少 CLI 认为可以进入交互模式；Bash 工具没有 stdin，
+        // 所以这里统一关闭 pager / prompt，保留 TTY 输出能力但不等待人工按键。
+        apply_noninteractive_env_pty(&mut cmd_builder);
         if let Some(path) = crate::shell_env::resolve_shell_path(self.shell.as_deref()).await {
             cmd_builder.env("PATH", path);
         }
@@ -429,6 +427,7 @@ impl BashTool {
                         cwd.to_string(),
                         pid,
                         self.bg_log_dir.as_deref(),
+                        None, // 现有 BashTool PTY 路径不支持 stdin 写入
                     );
                     arm_auto_notification(ctx, &shell.task_id);
 
@@ -478,6 +477,28 @@ impl BashTool {
     }
 }
 
+/// 给 Bash 子进程设置非交互环境：保留命令输出，但禁止 pager / prompt 等需要人工输入的行为。
+fn apply_noninteractive_env_pipe(cmd: &mut Command) {
+    cmd.env("CI", "1")
+        .env("TERM", "dumb")
+        .env("PAGER", "cat")
+        .env("GIT_PAGER", "cat")
+        .env("LESS", "FRX")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never");
+}
+
+/// PTY 路径使用 portable-pty 的 CommandBuilder，环境变量需单独设置。
+pub(crate) fn apply_noninteractive_env_pty(cmd: &mut portable_pty::CommandBuilder) {
+    cmd.env("CI", "1");
+    cmd.env("TERM", "dumb");
+    cmd.env("PAGER", "cat");
+    cmd.env("GIT_PAGER", "cat");
+    cmd.env("LESS", "FRX");
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.env("GCM_INTERACTIVE", "never");
+}
+
 /// 杀 PTY 子进程所在进程组（而非仅杀 leader）。
 /// PTY 下 forkpty 已创建独立 session，子进程是 session leader，
 /// kill(-pid, SIGKILL) 把整组（含 bash 内部跑的 find/docker 等）一起终止。
@@ -498,7 +519,7 @@ fn pty_kill_process_group(child: &mut Box<dyn portable_pty::Child + Send + Sync>
 /// 清理 PTY 输出中的光标移动 ANSI 转义码并合并 `\r` 回行。
 /// docker pull / npm install 等进度条用 `\r` 覆盖同行、`ESC[nA` 回跳前 n 行。
 /// 不处理的话文件里会堆积大量重复行和乱码，模型 Read 不到可读内容。
-fn clean_ansi_progress(text: &str) -> String {
+pub(crate) fn clean_ansi_progress(text: &str) -> String {
     use regex::Regex;
     use std::sync::LazyLock;
     static RE_CURSOR: LazyLock<Regex> =
@@ -985,6 +1006,34 @@ mod tests {
             chunks.len()
         );
         assert!(out.contains("DONE"), "output should contain DONE: {out}");
+    }
+
+    #[tokio::test]
+    async fn pty_git_diff_does_not_enter_pager() {
+        let tmp = tempfile::tempdir().unwrap();
+        let setup = std::process::Command::new("bash")
+            .arg("-lc")
+            .arg("git init >/dev/null && git config user.email test@example.com && git config user.name test && seq 1 200 > file.txt && git add file.txt && git commit -m init >/dev/null && seq 1 200 | sed 's/$/ changed/' > file.txt")
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+        assert!(setup.success());
+
+        let bash = tool(tmp.path());
+        let started = std::time::Instant::now();
+        let out = bash
+            .execute(json!({
+                "command": "git diff --stat && git diff --name-status --cached && git diff --stat --cached",
+                "pty": true,
+                "timeout_secs": 3
+            }))
+            .await
+            .unwrap();
+
+        assert!(started.elapsed() < Duration::from_secs(3), "output: {out}");
+        assert!(!out.contains("Press RETURN to continue"), "output: {out}");
+        assert!(!out.contains("已转后台"), "output: {out}");
+        assert!(out.contains("file.txt"), "output: {out}");
     }
 
     #[test]

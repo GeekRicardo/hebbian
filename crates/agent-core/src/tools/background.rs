@@ -17,12 +17,14 @@
 //!   不影响命令运行，仅 fallback 到 tail-only。
 
 use std::collections::{HashMap, VecDeque};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use common::AppError;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
@@ -73,6 +75,9 @@ pub struct BackgroundShell {
     notify: Notify,
     /// 磁盘日志路径——`None` 表示未启用落盘（CLI / 单测）。
     log_path: Option<PathBuf>,
+    /// PTY 写端：InteractiveBash 启动的会话才有，BashOutput 体系不持有。
+    /// `None` 时 write_input 直接报错——保护普通 Bash 后台任务不被误写。
+    pty_writer: Option<Mutex<Box<dyn Write + Send>>>,
 }
 
 struct ShellInner {
@@ -95,6 +100,7 @@ impl BackgroundShell {
         is_background: bool,
         kill_tx: oneshot::Sender<()>,
         log_path: Option<PathBuf>,
+        pty_writer: Option<Box<dyn Write + Send>>,
     ) -> Self {
         Self {
             task_id,
@@ -112,6 +118,7 @@ impl BackgroundShell {
             }),
             notify: Notify::new(),
             log_path,
+            pty_writer: pty_writer.map(Mutex::new),
         }
     }
 
@@ -119,6 +126,30 @@ impl BackgroundShell {
     /// 用它告诉模型「完整输出在哪」（架构 §4.12.3）。
     pub fn log_path(&self) -> Option<&Path> {
         self.log_path.as_deref()
+    }
+
+    /// 向 PTY 子进程的 stdin 写入数据。仅 InteractiveBash 启动的会话有 writer；
+    /// 普通 Bash 后台任务（管道模式 / PTY 超时转后台）没有 writer，调用直接报错。
+    pub fn write_input(&self, data: &[u8]) -> common::AppResult<()> {
+        let writer = self
+            .pty_writer
+            .as_ref()
+            .ok_or_else(|| AppError::msg("该后台任务不支持输入（非交互式会话）"))?;
+        let mut guard = writer
+            .lock()
+            .map_err(|e| AppError::msg(format!("PTY writer 锁失败: {e}")))?;
+        guard
+            .write_all(data)
+            .map_err(|e| AppError::msg(format!("PTY 写入失败: {e}")))?;
+        guard
+            .flush()
+            .map_err(|e| AppError::msg(format!("PTY flush 失败: {e}")))?;
+        Ok(())
+    }
+
+    /// 是否支持 stdin 写入（即 InteractiveBash 启动的会话）。
+    pub fn has_pty_writer(&self) -> bool {
+        self.pty_writer.is_some()
     }
 
     pub fn is_background(&self) -> bool {
@@ -140,6 +171,14 @@ impl BackgroundShell {
             .expect("background shell mutex")
             .state
             .clone()
+    }
+
+    pub(crate) fn append_raw(&self, bytes: &[u8]) {
+        {
+            let mut inner = self.inner.lock().expect("background shell mutex");
+            inner.push(bytes);
+        }
+        self.notify.notify_waiters();
     }
 
     pub(crate) fn append(&self, prefix: Option<&str>, bytes: &[u8]) {
@@ -195,6 +234,55 @@ impl BackgroundShell {
             state: inner.state.clone(),
             bytes_dropped,
             total_bytes: total,
+        }
+    }
+
+    /// 把内部增量读取游标移动到当前输出尾部，并返回该绝对 cursor。
+    /// InteractiveBash 发送输入前调用它，可让随后读取只拿到这次输入之后的新输出。
+    pub fn mark_read_to_end(&self) -> u64 {
+        let mut inner = self.inner.lock().expect("background shell mutex");
+        inner.read_cursor = inner.total_bytes;
+        inner.total_bytes
+    }
+
+    /// 等待 cursor 之后出现新输出，并在输出短暂静默或总超时后返回。
+    /// PTY 无法可靠判断子进程是否正在等待 stdin；静默窗口是最接近终端体验的信号：
+    /// 一段输出结束后通常就是下一个 prompt / 输入等待点。
+    pub async fn wait_for_quiet_after(&self, cursor: u64, wait_ms: u64, idle_ms: u64) {
+        if wait_ms == 0 {
+            return;
+        }
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(wait_ms);
+        let idle = std::time::Duration::from_millis(idle_ms);
+        let mut last_total = cursor;
+        let mut idle_deadline = tokio::time::Instant::now() + idle;
+
+        loop {
+            {
+                let inner = self.inner.lock().expect("background shell mutex");
+                if inner.total_bytes > last_total {
+                    last_total = inner.total_bytes;
+                    idle_deadline = tokio::time::Instant::now() + idle;
+                }
+                if inner.state.is_terminal() {
+                    return;
+                }
+            }
+
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return;
+            }
+            if now >= idle_deadline {
+                return;
+            }
+
+            let next_deadline = deadline.min(idle_deadline);
+            let remaining = next_deadline.saturating_duration_since(now);
+            if remaining.is_zero() {
+                return;
+            }
+            let _ = tokio::time::timeout(remaining, self.notify.notified()).await;
         }
     }
 
@@ -421,6 +509,7 @@ impl BgTaskRegistry {
             is_background,
             kill_tx,
             log_path,
+            None, // 管道模式无 PTY writer
         ));
 
         {
@@ -525,12 +614,16 @@ impl BgTaskRegistry {
     /// 注册一个 PTY 子进程为后台任务（仅 PID 追踪，无 tokio Child）。
     /// PTY 输出的灌入和进程退出检测由调用方自己管理，
     /// 本方法只创建壳并登记，让 BashOutput/KillShell 能找到这个任务。
+    ///
+    /// `pty_writer`：InteractiveBash 传 `Some(writer)` 让 BashInput 能写 stdin；
+    /// 普通 PTY 超时转后台路径传 `None`——与现有行为一致，不影响其 stdin。
     pub fn register_pty_background(
         &self,
         command: String,
         cwd: String,
         pid: u32,
         log_dir: Option<&Path>,
+        pty_writer: Option<Box<dyn Write + Send>>,
     ) -> Arc<BackgroundShell> {
         let task_id = self.next_id();
         let (kill_tx, kill_rx) = oneshot::channel();
@@ -560,7 +653,7 @@ impl BgTaskRegistry {
 
         let shell = Arc::new(BackgroundShell::new(
             task_id, command, cwd, true, // is_background
-            kill_tx, log_path,
+            kill_tx, log_path, pty_writer,
         ));
 
         {

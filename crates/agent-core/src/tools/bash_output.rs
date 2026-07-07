@@ -9,6 +9,8 @@ use async_trait::async_trait;
 use common::{AppError, AppResult};
 use serde_json::{json, Value};
 
+use crate::tools::bash::clean_ansi_progress;
+
 use super::background::{BgTaskRegistry, ShellState, READ_CHUNK_BYTES};
 use super::Tool;
 
@@ -92,7 +94,7 @@ impl Tool for BashOutputTool {
             ));
         }
         if !snapshot.content.is_empty() {
-            text.push_str(&snapshot.content);
+            text.push_str(&clean_ansi_progress(&snapshot.content));
             if !text.ends_with('\n') {
                 text.push('\n');
             }

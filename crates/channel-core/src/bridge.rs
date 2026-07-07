@@ -170,6 +170,30 @@ impl ChannelBridge {
         self.channel.lock().unwrap().is_some() && self.last_owner_target.lock().unwrap().is_some()
     }
 
+    /// 主动向指定用户发送消息（不依赖 `last_owner_target`）。
+    /// 渠道未就绪时返回 false。
+    ///
+    /// `channel_context` 为空时，由具体 Channel 实现自行兜底
+    /// （如 WeChatChannel 会从 context_store 查之前缓存过的 context_token）。
+    pub fn send_to_user(&self, to: &str, text: &str) -> bool {
+        let channel = match self.channel.lock().unwrap().clone() {
+            Some(c) => c,
+            None => return false,
+        };
+        let to = to.to_string();
+        let text = text.to_string();
+        tokio::spawn(async move {
+            let _ = channel
+                .send_text(&OutboundMessage {
+                    to,
+                    text,
+                    channel_context: Value::Null,
+                })
+                .await;
+        });
+        true
+    }
+
     fn forward_target(&self) -> Option<(Arc<dyn Channel>, OwnerTarget)> {
         let channel = self.channel.lock().unwrap().clone()?;
         let target = self.last_owner_target.lock().unwrap().clone()?;
