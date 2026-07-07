@@ -1121,7 +1121,7 @@ async fn send_message(
         .await
         .map_err(|e| AppError::msg(e.to_string()))?;
 
-    let _runtime = cancellation::register_for_session(request_id, Some(session_id.clone()));
+    cancellation::register_for_session(request_id.clone(), Some(session_id.clone()));
     let input = TurnInput::new(content, attachments)
         .with_meta(meta)
         .with_continue_run(continue_run.unwrap_or(false))
@@ -1133,6 +1133,20 @@ async fn send_message(
             .send(input)
             .map_err(|_| AppError::msg("对话运行时已关闭"))?;
     }
+
+    let cleanup_runtime = runtime.clone();
+    tokio::spawn(async move {
+        for _ in 0..500 {
+            if cleanup_runtime.is_active() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        while cleanup_runtime.is_active() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        cancellation::unregister(&request_id);
+    });
 
     Ok(empty_assistant_message())
 }
@@ -2192,6 +2206,9 @@ struct SessionBackgroundReport {
     /// 当前 session 是否有挂起态 checkpoint（架构 §4.12.6）。surface 用来决定
     /// 是否在 BackgroundTaskPanel 渲染「挂起中」徽标。
     has_suspended_checkpoint: bool,
+    /// 挂起时刻（Unix epoch ms），从 run_checkpoint.json 读取。
+    /// 重启后前端据此展示「已暂停 X 分 Y 秒」，不依赖运行时 run_suspended 事件。
+    suspended_at_ms: Option<i64>,
 }
 
 /// `read_background_task_output` 的返回值。前端 BackgroundTaskPanel 调它轮询
@@ -2277,14 +2294,16 @@ fn list_background_tasks(app: AppHandle, session_id: String) -> AppResult<Sessio
         .collect();
     let pending_crons =
         agent_core::wakeup::WakeupScheduler::global().list_pending_crons(&session_id);
-    let has_suspended_checkpoint = agent_core::storage::run_checkpoint::load(&dd, &session_id)
-        .ok()
-        .flatten()
-        .is_some();
+    let (has_suspended_checkpoint, suspended_at_ms) =
+        match agent_core::storage::run_checkpoint::load(&dd, &session_id) {
+            Ok(Some(ck)) => (true, Some(ck.suspended_at_ms)),
+            _ => (false, None),
+        };
     Ok(SessionBackgroundReport {
         shells,
         pending_crons,
         has_suspended_checkpoint,
+        suspended_at_ms,
     })
 }
 
@@ -2938,6 +2957,11 @@ pub fn run() {
             ));
             // 微信渠道自动接入：已扫码登录过就直接拉起后台 run_loop，无需用户再点启动。
             wechat::autostart(app.handle());
+            // 连接器注册表：让 agent 能通过 ListConnectors/SendChannelMessage 工具
+            // 与微信等已连接渠道交互。
+            if let Some(ws) = app.try_state::<Arc<wechat::WeChatState>>() {
+                wechat::init_registry(ws.inner().clone());
+            }
             // macOS 在进程启动时会自动把 Regular 应用 activate 到前台，
             // dev 每次改代码重编译都会重启进程 → 抢走当前焦点。
             // 在进入 NSApplicationDidFinishLaunching 后立刻降级为 Accessory，

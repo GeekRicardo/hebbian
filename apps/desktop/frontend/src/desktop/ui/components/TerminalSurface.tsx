@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { Plus, X, SquareTerminal, PanelRightClose } from "lucide-react";
+import { ChevronRight, Circle, Folder, Maximize2, Plus, SquareTerminal, X } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "@/desktop/bridge/tauri";
 import { listen } from "@/desktop/bridge/transport";
@@ -47,10 +47,33 @@ function fireForget(p: Promise<unknown>) {
 }
 
 const DARK_THEME = {
-  background: "#0b0c0a",
-  foreground: "#d6dac9",
-  cursor: "#cdf24b",
-  selectionBackground: "#3a3f2e",
+  background: "#090b10",
+  foreground: "#d7dde8",
+  cursor: "#7dd3fc",
+  cursorAccent: "#090b10",
+  selectionBackground: "#25415f",
+  black: "#111827",
+  red: "#f87171",
+  green: "#86efac",
+  yellow: "#fde68a",
+  blue: "#93c5fd",
+  magenta: "#d8b4fe",
+  cyan: "#67e8f9",
+  white: "#e5e7eb",
+  brightBlack: "#4b5563",
+  brightRed: "#fca5a5",
+  brightGreen: "#bbf7d0",
+  brightYellow: "#fef3c7",
+  brightBlue: "#bfdbfe",
+  brightMagenta: "#e9d5ff",
+  brightCyan: "#a5f3fc",
+  brightWhite: "#ffffff",
+};
+
+const TERMINAL_CHROME = {
+  red: "#ff5f57",
+  yellow: "#febc2e",
+  green: "#28c840",
 };
 
 interface TerminalSurfaceProps {
@@ -68,6 +91,8 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
   const [activeView, setActiveView] = useState<ViewOwner>(variant);
 
   const isCeded = activeView !== variant;
+  const activeTerm = terminals.find((t) => t.id === activeTermId) ?? null;
+  const liveCount = terminals.filter((t) => t.alive).length;
 
   // xterm 实例 / host DOM，按 termId 索引（不进 React state，避免重渲染）。
   const viewsRef = useRef<Map<string, TermView>>(new Map());
@@ -158,12 +183,16 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
           getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() ||
           "monospace",
         fontSize: 13,
-        lineHeight: 1.2,
+        lineHeight: 1.24,
         cursorBlink: true,
-        scrollback: 5000,
+        cursorStyle: "block",
+        cursorWidth: 1,
+        scrollback: 10000,
         allowProposedApi: true,
         macOptionIsMeta: true,
         minimumContrastRatio: 4.5,
+        rightClickSelectsWord: true,
+        smoothScrollDuration: 80,
         theme: DARK_THEME,
       });
       const fit = new FitAddon();
@@ -338,13 +367,18 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
 
   if (isCeded) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 bg-muted/30 p-6 text-center">
-        <SquareTerminal className="h-8 w-8 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">终端已在独立窗口打开</p>
+      <div className="flex h-full flex-col items-center justify-center gap-4 bg-[#090b10] p-6 text-center text-slate-300">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 shadow-2xl shadow-black/40">
+          <SquareTerminal className="h-8 w-8 text-sky-300" />
+        </div>
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-slate-100">终端已在独立窗口打开</p>
+          <p className="text-xs text-slate-500">收回后会继续显示同一个 shell</p>
+        </div>
         <button
           type="button"
           onClick={() => void api.terminalClosePopout()}
-          className="rounded border border-border px-3 py-1 text-xs hover:bg-accent"
+          className="rounded-lg border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs text-slate-200 shadow-sm hover:bg-white/[0.1]"
         >
           收回到这里
         </button>
@@ -353,10 +387,48 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
   }
 
   return (
-    <div className="flex h-full flex-col bg-[#0b0c0a]">
+    <div className="flex h-full flex-col overflow-hidden bg-[#05070b] text-slate-200">
+      <div className="flex h-10 shrink-0 items-center gap-3 border-b border-white/10 bg-gradient-to-b from-[#191d27] to-[#10131b] px-3 shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
+        <div className="flex shrink-0 items-center gap-1.5" aria-hidden="true">
+          <span className="h-3 w-3 rounded-full shadow-inner" style={{ backgroundColor: TERMINAL_CHROME.red }} />
+          <span className="h-3 w-3 rounded-full shadow-inner" style={{ backgroundColor: TERMINAL_CHROME.yellow }} />
+          <span className="h-3 w-3 rounded-full shadow-inner" style={{ backgroundColor: TERMINAL_CHROME.green }} />
+        </div>
+        <div className="flex min-w-0 flex-1 items-center gap-2 text-xs">
+          <SquareTerminal className="h-3.5 w-3.5 shrink-0 text-sky-300" />
+          <span className="truncate font-medium text-slate-100">{activeTerm ? baseName(activeTerm.cwd) : "Terminal"}</span>
+          {activeTerm && (
+            <span className="hidden min-w-0 items-center gap-1 truncate text-slate-500 sm:flex" title={activeTerm.cwd}>
+              <ChevronRight className="h-3 w-3 shrink-0" />
+              <span className="truncate">{compactPath(activeTerm.cwd)}</span>
+            </span>
+          )}
+        </div>
+        <div className="hidden shrink-0 items-center gap-2 text-[11px] text-slate-500 md:flex">
+          {activeTerm && (
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 tabular-nums">
+              {activeTerm.alive ? "运行中" : "已退出"}
+            </span>
+          )}
+          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 tabular-nums">
+            {liveCount}/{terminals.length || 0}
+          </span>
+        </div>
+        {variant === "embedded" && (
+          <button
+            type="button"
+            onClick={() => void api.terminalPopout()}
+            title="在独立窗口打开"
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
       {/* 子终端 tab 条 */}
-      <div className="flex h-8 shrink-0 items-stretch border-b border-border/40 bg-background/40">
-        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto px-1 [scrollbar-width:thin]">
+      <div className="flex h-9 shrink-0 items-stretch border-b border-white/10 bg-[#0b0f17]">
+        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto px-2 pt-1 [scrollbar-width:thin]">
           {terminals.map((t) => (
             <button
               key={t.id}
@@ -364,18 +436,18 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
               onClick={() => setActiveTermId(t.id)}
               title={t.cwd}
               className={cn(
-                // 右侧固定留出 x 的位置（pr-6），x 用 absolute 覆盖在那儿——hover 才显形，
-                // 不挤压标题、不改变 tab 宽度。
-                "group relative inline-flex h-6 shrink-0 items-center gap-1 rounded py-0 pl-2 pr-6 text-[12px] transition-colors",
+                "group relative inline-flex h-7 max-w-[180px] shrink-0 items-center gap-1.5 rounded-t-lg border px-2.5 pr-7 text-[12px] transition-colors",
                 t.id === activeTermId
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                !t.alive && "opacity-50",
+                  ? "border-white/10 border-b-[#090b10] bg-[#090b10] text-slate-100 shadow-[0_-1px_0_rgba(255,255,255,0.06)_inset]"
+                  : "border-transparent bg-white/[0.03] text-slate-500 hover:bg-white/[0.07] hover:text-slate-200",
+                !t.alive && "opacity-60",
               )}
             >
-              <SquareTerminal className="h-3 w-3 shrink-0" />
-              <span className="max-w-[120px] truncate">{baseName(t.cwd)}</span>
-              {!t.alive && <span className="shrink-0 text-[10px]">·已退出</span>}
+              <Circle
+                className={cn("h-2 w-2 shrink-0", t.alive ? "fill-emerald-400 text-emerald-400" : "fill-slate-600 text-slate-600")}
+              />
+              <span className="truncate">{baseName(t.cwd)}</span>
+              {!t.alive && <span className="shrink-0 text-[10px] text-slate-500">已退出</span>}
               <span
                 role="button"
                 tabIndex={-1}
@@ -384,37 +456,28 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
                   void closeTerminal(t.id);
                 }}
                 title="关闭"
-                className="absolute right-1 top-1/2 grid h-4 w-4 -translate-y-1/2 place-items-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+                className="absolute right-1.5 top-1/2 grid h-4 w-4 -translate-y-1/2 place-items-center rounded text-slate-500 opacity-0 transition-opacity hover:bg-white/10 hover:text-slate-100 group-hover:opacity-100"
               >
                 <X className="h-2.5 w-2.5" />
               </span>
             </button>
           ))}
         </div>
-        <div className="flex shrink-0 items-center gap-0.5 border-l border-border/40 px-1">
+        <div className="flex shrink-0 items-center border-l border-white/10 px-1.5">
           <button
             type="button"
             onClick={() => void openTerminal()}
             title="新终端"
-            className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="grid h-7 w-7 place-items-center rounded-md text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100"
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="h-4 w-4" />
           </button>
-          {variant === "embedded" && (
-            <button
-              type="button"
-              onClick={() => void api.terminalPopout()}
-              title="在独立窗口打开"
-              className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <PanelRightClose className="h-3.5 w-3.5" />
-            </button>
-          )}
         </div>
       </div>
 
       {/* 终端渲染区：所有子终端 host 共存于 DOM，非激活的隐藏 */}
-      <div className="relative min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1 bg-[#090b10]">
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-4 bg-gradient-to-b from-black/25 to-transparent" />
         {terminals.map((t) => (
           <div
             key={t.id}
@@ -423,12 +486,21 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
               if (el) hostsRef.current.set(t.id, el);
               else hostsRef.current.delete(t.id);
             }}
-            className={cn("absolute inset-0 p-1", t.id !== activeTermId && "hidden")}
+            className={cn(
+              "absolute inset-0 p-3 [&_.xterm]:h-full [&_.xterm-screen]:rounded-md [&_.xterm-viewport]:!bg-transparent [&_.xterm-viewport::-webkit-scrollbar]:w-2 [&_.xterm-viewport::-webkit-scrollbar-thumb]:rounded-full [&_.xterm-viewport::-webkit-scrollbar-thumb]:bg-white/20 [&_.xterm-viewport::-webkit-scrollbar-track]:bg-transparent",
+              t.id !== activeTermId && "hidden",
+            )}
           />
         ))}
         {terminals.length === 0 && (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            点右上角 + 新建终端
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-slate-500">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <Folder className="h-7 w-7 text-slate-400" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-sm text-slate-300">还没有终端</p>
+              <p className="text-xs">点右上角 + 新建一个 shell</p>
+            </div>
           </div>
         )}
       </div>
@@ -440,4 +512,13 @@ function baseName(path: string): string {
   if (!path) return "shell";
   const parts = path.replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || "/";
+}
+
+function compactPath(path: string): string {
+  if (!path) return "";
+  const normalized = path.replace(/\/+$/, "");
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.length <= 3) return normalized || "/";
+  const prefix = normalized.startsWith("/") ? "/" : "";
+  return `${prefix}…/${parts.slice(-2).join("/")}`;
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Sparkles, ChevronDown, RotateCw } from "lucide-react";
+import { Sparkles, ChevronDown, ChevronUp, RotateCw } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { MessageList } from "./MessageList";
 import { ChatInput } from "./chatInput";
@@ -30,6 +30,15 @@ import { shouldUseNewConversationInputLayout } from "@/desktop/ui/newConversatio
 import type { MessageAttachment } from "@/desktop/ui/types";
 
 const PINNED_USER_MESSAGE_VISIBLE = false;
+const BOTTOM_SLACK_PX = 80;
+const USER_SCROLL_TARGET_TOP_PX = 12;
+
+type SessionScrollSnapshot = {
+  scrollTop: number;
+  stickToBottom: boolean;
+};
+
+const sessionScrollSnapshots = new Map<string, SessionScrollSnapshot>();
 
 /**
  * 采样滚动容器内「视口顶部第一条可见消息」作锚点：返回它的 data-message-id 与顶边相对
@@ -126,6 +135,19 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
   // 程序化滚动标志：scrollToPinnedMessage / scrollToPrevUserMessage 触发 scrollTo 时
   // handleScroll 会跟着触发，此时不应清除 anchor。
   const isProgrammaticScrollRef = useRef(false);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [scrollNavUserId, setScrollNavUserId] = useState<string | null>(null);
+  const lastStreamingRunUserIdRef = useRef<string | null>(null);
+  const stayedAtBottomDuringRunRef = useRef(true);
+  const wasStreamingRef = useRef(false);
+  const handledInjectedUserIdRef = useRef<string | null>(null);
+  const saveSessionScrollSnapshot = useCallback((sessionId: string, el: HTMLElement) => {
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    sessionScrollSnapshots.set(sessionId, {
+      scrollTop: el.scrollTop,
+      stickToBottom: distanceFromBottom <= BOTTOM_SLACK_PX,
+    });
+  }, []);
   // 浮动副本最大高度（截断 ~2 行），也是几何判定的基准。
   const PINNED_HEIGHT_PX = 72;
   const PINNED_ALIGN_TOLERANCE_PX = 4;
@@ -193,6 +215,26 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     userMessageCount: userMessageHistory.length,
     isStreaming,
   });
+  const latestInjectedUserId =
+    liveTimelineMessages.length > 0 ? liveTimelineMessages[liveTimelineMessages.length - 1].id : null;
+  const latestUserId = useMemo(() => {
+    for (let i = rawMessages.length - 1; i >= 0; i--) {
+      if (rawMessages[i].role === "user") return rawMessages[i].id;
+    }
+    return null;
+  }, [rawMessages]);
+
+  useEffect(() => {
+    if (isStreaming && !wasStreamingRef.current) {
+      lastStreamingRunUserIdRef.current = latestUserId;
+      stayedAtBottomDuringRunRef.current = stickToBottomRef.current;
+    } else if (isStreaming) {
+      lastStreamingRunUserIdRef.current = latestUserId;
+    } else if (wasStreamingRef.current) {
+      setScrollNavUserId(stayedAtBottomDuringRunRef.current ? lastStreamingRunUserIdRef.current : null);
+    }
+    wasStreamingRef.current = isStreaming;
+  }, [isStreaming, latestUserId]);
 
   // 计算每条消息的匹配区间（只对非 marker 生效）
   const matchesPerMessage = useMemo(() => {
@@ -230,14 +272,31 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     setActive(0);
   }, [currentSession?.id, setActive]);
 
-  // 切对话时强制贴回底部 + 重置浮动状态
-  useEffect(() => {
-    stickToBottomRef.current = true;
+  // 切 session 时保存/恢复本次应用生命周期内的阅读位置；没有快照的新 session 仍默认到底部。
+  useLayoutEffect(() => {
+    const sessionId = currentSession?.id;
+    const el = scrollRef.current;
+    if (!sessionId || !el) return;
+
+    const snapshot = sessionScrollSnapshots.get(sessionId);
+    const restoreToBottom = !snapshot || snapshot.stickToBottom;
+    stickToBottomRef.current = restoreToBottom;
+    setIsAtBottom(restoreToBottom);
+    setScrollNavUserId(null);
     anchorRef.current = null;
     setPinnedUserId(null);
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [currentSession?.id]);
+    if (restoreToBottom) {
+      el.scrollTop = el.scrollHeight;
+    } else {
+      el.scrollTop = Math.min(snapshot.scrollTop, stickyBottomScrollTop(el));
+      scrollAnchorRef.current = sampleTopAnchor(el);
+    }
+    lastScrollTopRef.current = el.scrollTop;
+
+    return () => {
+      saveSessionScrollSnapshot(sessionId, el);
+    };
+  }, [currentSession?.id, saveSessionScrollSnapshot]);
 
   // 流式 delta / 新消息：仅当用户当前贴底时才自动滚。
   // 这里依赖 streamingText / streamingParts 等高频变化的 ref 来触发 effect，
@@ -246,6 +305,13 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     if (!stickToBottomRef.current) return;
     const el = scrollRef.current;
     if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom > BOTTOM_SLACK_PX) {
+      stickToBottomRef.current = false;
+      setIsAtBottom(false);
+      scrollAnchorRef.current = sampleTopAnchor(el);
+      return;
+    }
     el.scrollTop = el.scrollHeight;
   }, [currentSession?.messages.length, streamingText, streamingParts]);
 
@@ -317,8 +383,59 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSession?.id]);
 
+  const updateScrollNavigation = useCallback((el: HTMLElement, atBottom: boolean, userInitiated: boolean) => {
+    setIsAtBottom(atBottom);
+    if (atBottom) return;
+    if (userInitiated) stayedAtBottomDuringRunRef.current = false;
+    const containerTop = el.getBoundingClientRect().top;
+    const userBubbles = el.querySelectorAll<HTMLElement>('[data-message-role="user"]');
+    let targetId: string | null = null;
+    for (const bubble of userBubbles) {
+      const rect = bubble.getBoundingClientRect();
+      if (rect.top < containerTop) {
+        targetId = bubble.getAttribute("data-message-id");
+      } else {
+        break;
+      }
+    }
+    setScrollNavUserId(targetId);
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !currentSession?.id) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    updateScrollNavigation(el, distanceFromBottom <= BOTTOM_SLACK_PX, false);
+  }, [currentSession?.id, updateScrollNavigation]);
+
+  const scrollToUserMessage = useCallback((messageId: string) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const target = el.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
+    if (!target) return;
+    isProgrammaticScrollRef.current = true;
+    const top = Math.max(0, target.offsetTop - USER_SCROLL_TARGET_TOP_PX);
+    el.scrollTo({ top, behavior: "instant" });
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottomRef.current = true;
+    setIsAtBottom(true);
+    setScrollNavUserId(null);
+    scrollAnchorRef.current = null;
+    isProgrammaticScrollRef.current = true;
+    el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!latestInjectedUserId || handledInjectedUserIdRef.current === latestInjectedUserId) return;
+    handledInjectedUserIdRef.current = latestInjectedUserId;
+    scrollToUserMessage(latestInjectedUserId);
+  }, [latestInjectedUserId, scrollToUserMessage]);
+
   // 监听滚动：贴底检测 + 浮动副本几何判定 + 死区保护
-  const BOTTOM_SLACK_PX = 80;
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -330,13 +447,19 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
       isProgrammaticScrollRef.current = false;
       // 贴底检测仍然需要
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      stickToBottomRef.current = distanceFromBottom <= BOTTOM_SLACK_PX;
+      const atBottom = distanceFromBottom <= BOTTOM_SLACK_PX;
+      stickToBottomRef.current = atBottom;
+      updateScrollNavigation(el, atBottom, false);
+      if (currentSession?.id) saveSessionScrollSnapshot(currentSession.id, el);
       return;
     }
 
     // 贴底检测
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = distanceFromBottom <= BOTTOM_SLACK_PX;
+    const atBottom = distanceFromBottom <= BOTTOM_SLACK_PX;
+    stickToBottomRef.current = atBottom;
+    updateScrollNavigation(el, atBottom, true);
+    if (currentSession?.id) saveSessionScrollSnapshot(currentSession.id, el);
 
     // 持续更新滚动锚点：记下当前视口顶部第一条可见消息，供 sidebar 展开/收起 /
     // 编辑区出现重排时把内容钉回原位。贴底时清掉锚点（重排走贴底分支，不需要锚定）。
@@ -419,7 +542,7 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     }
 
     setPinnedUserId(id);
-  }, []);
+  }, [updateScrollNavigation, currentSession?.id, saveSessionScrollSnapshot]);
 
   // 点击浮动条：滚动到该 user 消息真实位置，让真实顶边 = 浮动区下边缘。
   // 同时设置锚定 = 该消息 + 死区（容器顶部往下 2 倍浮动区高度）。
@@ -607,9 +730,13 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
 
   const handleSend = useCallback(
     async (content: string, attachments: MessageAttachment[]) => {
-      // 用户主动发消息 → 期望看到自己刚发的消息，强制贴回底部
-      // （即使之前在看历史）。流式 delta 也会重新跟随到底。
-      stickToBottomRef.current = true;
+      // 普通发消息开启新 run 时贴底；流式中插队只保证新 user bubble 可见，
+      // 不重新接管后续 assistant 输出，避免和用户上滚继续打架。
+      if (!isStreaming) {
+        stickToBottomRef.current = true;
+        setIsAtBottom(true);
+        setScrollNavUserId(null);
+      }
       // 点发送那一下就请求折叠右侧工作台（与「Run 跑完自动展开」配对）：
       // sidebar 先缓慢折叠，输入框随后过渡到全宽。
       useStore.getState().triggerCollapseRightSidebar();
@@ -619,7 +746,7 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
         toast.error(e.message || String(e));
       }
     },
-    [sendUserMessage]
+    [sendUserMessage, isStreaming]
   );
 
   const handleCancel = useCallback(async () => {
@@ -1133,6 +1260,30 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
             <span>
               模型出错，重试中 {modelRetry.attempt}/{modelRetry.max}…
             </span>
+          </div>
+        )}
+        {(scrollNavUserId || !isAtBottom) && (
+          <div className="absolute right-3 bottom-full mb-2 z-40 flex flex-col gap-1 pointer-events-auto">
+            {scrollNavUserId && (
+              <button
+                type="button"
+                onClick={() => scrollToUserMessage(scrollNavUserId)}
+                title="跳到上一条消息"
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground shadow-md backdrop-blur hover:bg-accent hover:text-foreground"
+              >
+                <ChevronUp className="h-4 w-4" />
+              </button>
+            )}
+            {!isAtBottom && (
+              <button
+                type="button"
+                onClick={scrollToBottom}
+                title="回到底部"
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground shadow-md backdrop-blur hover:bg-accent hover:text-foreground"
+              >
+                <ChevronDown className="h-4 w-4" />
+              </button>
+            )}
           </div>
         )}
         <InputQueuePanel />

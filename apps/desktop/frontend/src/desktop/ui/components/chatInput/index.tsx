@@ -43,7 +43,10 @@ import { isSessionCompacting } from "@/desktop/ui/components/compactingState";
 import { ProviderUsageIndicator } from "@/desktop/ui/components/ProviderUsageIndicator";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
 import { PathTypeIcon } from "@/desktop/ui/components/workspaceFields";
-import { projectInputWithoutAllowedPath } from "@/desktop/ui/lib/projectFolders";
+import {
+  projectInputWithAllowedPaths,
+  projectInputWithoutAllowedPath,
+} from "@/desktop/ui/lib/projectFolders";
 import { shouldSuppressBareEnterOnDocument } from "@/desktop/ui/lib/keyboardShortcuts";
 import {
   buildSlashCommandCatalog,
@@ -72,11 +75,11 @@ interface Props {
   userMessageHistory?: string[];
 }
 
-/** 选区引用渲染成 `path:line` 或 `path:start-end` 文本。 */
+/** 选区引用渲染成 `{path}:#L{line}:{col}-L{line}:{col}` 格式（含列号 + `#` 前缀）。 */
 function formatSelectionRef(ref: EditorSelectionRef): string {
-  return ref.startLine === ref.endLine
-    ? `${ref.path}:${ref.startLine}`
-    : `${ref.path}:${ref.startLine}-${ref.endLine}`;
+  return ref.startLine === ref.endLine && ref.startColumn === ref.endColumn
+    ? `${ref.path}:#L${ref.startLine}:${ref.startColumn}`
+    : `${ref.path}:#L${ref.startLine}:${ref.startColumn}-L${ref.endLine}:${ref.endColumn}`;
 }
 
 export function ChatInput(props: Props) {
@@ -203,7 +206,12 @@ function ChatInputInner({
     }
     if (selRef) {
       const ref = formatSelectionRef(selRef);
-      return text ? `${ref}\n${text}` : ref;
+      // 含选中文本时：`{path}:#L{line}:{col}-L{line}:{col}\n```\n{selected_text}\n````
+      // 让模型直接看到上下文，类似 Cursor 的代码引用风格。
+      const codeBlock = selRef.selectedText
+        ? `\n\`\`\`\n${selRef.selectedText}\n\`\`\``
+        : "";
+      return text ? `${ref}${codeBlock}\n${text}` : `${ref}${codeBlock}`;
     }
     return text;
   }
@@ -503,6 +511,15 @@ function ChatInputInner({
         if (typeof d === "string" && !merged.includes(d)) merged.push(d);
       }
       await setPendingAllowedPaths(merged);
+
+      // 如果当前对话绑定了项目，新目录也追加到项目配置（右侧 sidebar 的
+      // 文件树和 git 面板会因 currentSession 刷新实时反映）。
+      if (activeProject) {
+        const dirs = arr.filter((d): d is string => typeof d === "string");
+        if (dirs.length > 0) {
+          await saveProject(projectInputWithAllowedPaths(activeProject, dirs));
+        }
+      }
     } catch (e: any) {
       toast.error(e?.message ?? String(e));
     }
@@ -744,8 +761,8 @@ function ChatInputInner({
                 <span className="truncate">
                   {pathLeaf(editorSelectionRef.path) || editorSelectionRef.path}
                   {editorSelectionRef.startLine === editorSelectionRef.endLine
-                    ? `:${editorSelectionRef.startLine}`
-                    : `:${editorSelectionRef.startLine}-${editorSelectionRef.endLine}`}
+                    ? `:#L${editorSelectionRef.startLine}:${editorSelectionRef.startColumn}`
+                    : `:#L${editorSelectionRef.startLine}:${editorSelectionRef.startColumn}-L${editorSelectionRef.endLine}:${editorSelectionRef.endColumn}`}
                 </span>
                 <button
                   type="button"

@@ -5,22 +5,29 @@ import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
 import { Codicon } from "./Codicon";
+import { FileIcon } from "./FileIcon";
 import { gitDiffTabId } from "@/desktop/ui/store/useStore";
 import type { GitFileStatus, GitProjectStatus } from "@/desktop/ui/types";
 
 /**
- * 源代码管理（Git）栏：VSCode SCM 风格（架构 §4.12.13）。
- *
- * - 按项目（git 仓库根）分组；每项目分 Staged / Changes 两段
- * - 点文件 → 在中间编辑区开 git diff（HEAD/index vs 工作区）
- * - 行尾 hover 操作：stage / unstage / discard（discard 二次确认）
- * - 项目顶部 commit message 输入 + 提交（仅 Staged 非空可用）
- *
- * 与「修改文件」栏的分工：那栏是 AI 单次 Run 的 edits 快照、可整 Run 回退；
- * 本栏是项目本身的 git 状态（用户手改 + AI 改混在一起，相对 HEAD/index）。
- *
- * ⚠️ discard / commit 直接动用户真实仓库、不可逆，不在 edits-worktree 回退保护内。
+ * 源代码管理（Git）栏：VS Code SCM 风格。
  */
+interface TreeGroup {
+  dir: string;
+  name: string;
+  files: GitFileStatus[];
+  children: TreeGroup[];
+}
+
+const GIT_STATUS_COLORS: Record<string, string> = {
+  M: "text-amber-600 dark:text-amber-400",
+  A: "text-emerald-600 dark:text-emerald-400",
+  D: "text-rose-600 dark:text-rose-400",
+  U: "text-sky-600 dark:text-sky-400",
+};
+
+/* ─── 主组件 ─── */
+
 export function GitPanel() {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
   const workdir = useStore((s) => s.currentSession?.workdir ?? null);
@@ -56,10 +63,7 @@ export function GitPanel() {
     }
   }, [roots]);
 
-  // 切到本 tab / 切对话时拉一次（不轮询，避免频繁起 git 进程）。
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+  useFocusRefresh(refresh);
 
   if (!sessionId) return <EmptyState text="当前没打开对话" />;
   if (roots.length === 0) {
@@ -99,6 +103,59 @@ export function GitPanel() {
   );
 }
 
+function useFocusRefresh(refresh: () => void) {
+  useEffect(() => {
+    refresh();
+  }, [refresh]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+/* ─── 目录树构建 ─── */
+
+function buildTree(files: GitFileStatus[]): TreeGroup[] {
+  const root: TreeGroup = { dir: "", name: "", files: [], children: [] };
+  const map: Record<string, TreeGroup> = { "": root };
+
+  for (const f of files) {
+    const parts = f.path.split("/");
+    let current = "";
+    for (let i = 0; i < parts.length - 1; i++) {
+      const parent = current;
+      current = current ? `${current}/${parts[i]}` : parts[i];
+      if (!map[current]) {
+        const group: TreeGroup = { dir: current, name: parts[i], files: [], children: [] };
+        map[current] = group;
+        map[parent].children.push(group);
+      }
+    }
+    if (map[current]) {
+      map[current].files.push(f);
+    }
+  }
+
+  function sortGroup(g: TreeGroup) {
+    g.children.sort((a, b) => a.name.localeCompare(b.name));
+    g.files.sort((a, b) => a.path.localeCompare(b.path));
+    for (const c of g.children) sortGroup(c);
+  }
+  sortGroup(root);
+
+  return root.children;
+}
+
+function countStats(files: GitFileStatus[]): { added: number; modified: number; deleted: number } {
+  const stats = { added: 0, modified: 0, deleted: 0 };
+  for (const f of files) {
+    if (f.untracked) { stats.added++; continue; }
+    const y = f.y.trim();
+    if (y === "A") stats.added++;
+    else if (y === "D") stats.deleted++;
+    else stats.modified++;
+  }
+  return stats;
+}
+
+/* ─── 子组件 ─── */
+
 function ProjectSection({
   project,
   onChanged,
@@ -112,6 +169,11 @@ function ProjectSection({
 
   const staged = project.files.filter((f) => f.staged);
   const changes = project.files.filter((f) => !f.staged);
+  const stagedTree = useMemo(() => buildTree(staged), [staged]);
+  const changesTree = useMemo(() => buildTree(changes), [changes]);
+  const stagedStats = useMemo(() => countStats(staged), [staged]);
+  const changesStats = useMemo(() => countStats(changes), [changes]);
+  const totalFiles = project.files.length;
 
   const commit = async () => {
     if (!message.trim() || staged.length === 0) return;
@@ -149,24 +211,18 @@ function ProjectSection({
             {project.branch}
           </span>
         )}
-        <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
-          {project.files.length} 项改动
-        </span>
+        <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{totalFiles} 项</span>
       </button>
 
       {open && (
         <>
-          {/* commit 区：有暂存才显示输入 */}
           <div className="border-t border-border/60 px-2 py-1.5">
             <div className="flex items-center gap-1">
               <input
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 onKeyDown={(e) => {
-                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                    e.preventDefault();
-                    void commit();
-                  }
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); void commit(); }
                 }}
                 placeholder={staged.length === 0 ? "先暂存改动再提交" : "提交信息（⌘/Ctrl+Enter）"}
                 disabled={staged.length === 0}
@@ -186,20 +242,20 @@ function ProjectSection({
           </div>
 
           {staged.length > 0 && (
-            <Group title="暂存的更改" count={staged.length}>
-              {staged.map((f) => (
-                <FileRow key={`s:${f.path}`} root={project.root} file={f} staged onChanged={onChanged} />
-              ))}
-            </Group>
+            <div>
+              <GroupHeader title="暂存的更改" count={staged.length} stats={stagedStats} />
+              <TreeGroupPanel trees={stagedTree} root={project.root} staged onChanged={onChanged} />
+            </div>
           )}
+
           {changes.length > 0 && (
-            <Group title="更改" count={changes.length}>
-              {changes.map((f) => (
-                <FileRow key={`w:${f.path}`} root={project.root} file={f} staged={false} onChanged={onChanged} />
-              ))}
-            </Group>
+            <div>
+              <GroupHeader title="更改" count={changes.length} stats={changesStats} />
+              <TreeGroupPanel trees={changesTree} root={project.root} staged={false} onChanged={onChanged} />
+            </div>
           )}
-          {project.files.length === 0 && (
+
+          {totalFiles === 0 && (
             <div className="px-3 py-2 text-[11px] text-muted-foreground">工作区干净，无改动。</div>
           )}
         </>
@@ -208,27 +264,104 @@ function ProjectSection({
   );
 }
 
-function Group({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
+function GroupHeader({
+  title,
+  count,
+  stats,
+}: {
+  title: string;
+  count: number;
+  stats: { added: number; modified: number; deleted: number };
+}) {
+  const statParts: string[] = [];
+  if (stats.added > 0) statParts.push(`+${stats.added}`);
+  if (stats.deleted > 0) statParts.push(`-${stats.deleted}`);
+  if (stats.modified > 0) statParts.push(`~${stats.modified}`);
+
   return (
-    <div className="pb-1">
-      <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-        {title} · {count}
-      </div>
-      {children}
+    <div className="flex items-center justify-between px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+      <span>{title} · {count}</span>
+      {statParts.length > 0 && (
+        <span className="shrink-0 text-[10px]">
+          {statParts.map((s, i) => (
+            <span
+              key={i}
+              className={cn("ml-1", s.startsWith("+") ? "text-emerald-500" : s.startsWith("-") ? "text-rose-500" : "text-amber-500")}
+            >
+              {s}
+            </span>
+          ))}
+        </span>
+      )}
     </div>
   );
 }
 
-function FileRow({
+/** 展开树：递归渲染目录和文件。 */
+function TreeGroupPanel({
+  trees,
+  root,
+  staged,
+  onChanged,
+  depth = 0,
+}: {
+  trees: TreeGroup[];
+  root: string;
+  staged: boolean;
+  onChanged: () => void;
+  depth?: number;
+}) {
+  const [expandedByDir, setExpandedByDir] = useState<Record<string, boolean>>({});
+
+  return (
+    <>
+      {trees.map((group) => {
+        const expanded = expandedByDir[group.dir] !== false;
+        return (
+          <div key={group.dir}>
+            <div
+              className="flex h-[22px] cursor-pointer items-center gap-1.5 px-3 text-[12px] transition-colors hover:bg-accent/70"
+              style={{ paddingLeft: `${12 + depth * 12}px` }}
+              onClick={() => setExpandedByDir((prev) => ({ ...prev, [group.dir]: !expanded }))}
+            >
+              {expanded ? (
+                <Codicon name="chevron-down" className="shrink-0 text-[13px] text-muted-foreground" />
+              ) : (
+                <Codicon name="chevron-right" className="shrink-0 text-[13px] text-muted-foreground" />
+              )}
+              <Codicon name="folder-opened" className="shrink-0 text-[14px] text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate">{group.name}</span>
+              <span className="shrink-0 text-[10px] text-muted-foreground">
+                {group.files.length + group.children.length}
+              </span>
+            </div>
+            {expanded && (
+              <>
+                <TreeGroupPanel trees={group.children} root={root} staged={staged} onChanged={onChanged} depth={depth + 1} />
+                {group.files.map((f) => (
+                  <GitFileRow key={f.path} root={root} file={f} staged={staged} onChanged={onChanged} depth={depth + 1} />
+                ))}
+              </>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function GitFileRow({
   root,
   file,
   staged,
   onChanged,
+  depth,
 }: {
   root: string;
   file: GitFileStatus;
   staged: boolean;
   onChanged: () => void;
+  depth: number;
 }) {
   const openGitDiff = useStore((s) => s.openGitDiff);
   const activeTabId = useStore((s) => {
@@ -253,12 +386,16 @@ function FileRow({
     }
   };
 
+  const parts = file.path.split("/");
+  const dirPart = parts.length > 1 ? parts.slice(0, -1).join("/") : null;
+
   return (
     <div
       className={cn(
         "group/git flex h-[22px] items-center gap-1.5 px-3 text-[12px]",
         isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/70",
       )}
+      style={{ paddingLeft: `${12 + depth * 12}px` }}
     >
       <button
         type="button"
@@ -269,11 +406,16 @@ function FileRow({
         <span className={cn("w-3.5 shrink-0 text-center font-mono text-[11px] font-bold", statusColor(code))}>
           {code}
         </span>
+        <FileIcon path={file.path} className="shrink-0 text-[14px] text-muted-foreground" />
         <span className="min-w-0 truncate font-mono">{leafName(file.path)}</span>
+        {dirPart && (
+          <span className="hidden truncate pl-1 text-[10px] text-muted-foreground/60 group-hover/git:block">
+            …/{dirPart}
+          </span>
+        )}
       </button>
 
-      {/* 行尾操作（hover 显示），busy 时禁用 */}
-      <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/git:opacity-100">
+      <div className="flex shrink-0 items-center gap-0.5">
         {confirmDiscard ? (
           <button
             type="button"
@@ -294,19 +436,10 @@ function FileRow({
           </IconBtn>
         ) : (
           <>
-            <IconBtn
-              title="丢弃改动（不可恢复）"
-              onClick={() => setConfirmDiscard(true)}
-              disabled={busy}
-              danger
-            >
+            <IconBtn title="丢弃改动（不可恢复）" onClick={() => setConfirmDiscard(true)} disabled={busy} danger>
               <Codicon name="discard" className="text-[13px]" />
             </IconBtn>
-            <IconBtn
-              title="暂存"
-              onClick={() => act(() => api.gitStage(root, file.path), "暂存")}
-              disabled={busy}
-            >
+            <IconBtn title="暂存" onClick={() => act(() => api.gitStage(root, file.path), "暂存")} disabled={busy}>
               <Codicon name="add" className="text-[13px]" />
             </IconBtn>
           </>
@@ -316,18 +449,25 @@ function FileRow({
   );
 }
 
-function IconBtn({
-  title,
-  onClick,
-  disabled,
-  danger = false,
-  children,
-}: {
-  title: string;
-  onClick: () => void;
-  disabled?: boolean;
-  danger?: boolean;
-  children: React.ReactNode;
+/* ─── 帮助函数 ─── */
+
+function statusCode(file: GitFileStatus, staged: boolean): string {
+  if (file.untracked) return "U";
+  const c = (staged ? file.x : file.y).trim();
+  return c || "M";
+}
+
+function statusColor(code: string): string {
+  return GIT_STATUS_COLORS[code] ?? "text-amber-600 dark:text-amber-400";
+}
+
+function leafName(path: string): string {
+  const parts = path.replace(/\\/g, "/").split("/");
+  return parts[parts.length - 1] || path;
+}
+
+function IconBtn({ title, onClick, disabled, danger = false, children }: {
+  title: string; onClick: () => void; disabled?: boolean; danger?: boolean; children: React.ReactNode;
 }) {
   return (
     <button
@@ -344,33 +484,6 @@ function IconBtn({
       {children}
     </button>
   );
-}
-
-/** 取要展示的单字状态码：暂存看 index 态 X，未暂存看 worktree 态 Y；未跟踪统一 U。 */
-function statusCode(file: GitFileStatus, staged: boolean): string {
-  if (file.untracked) return "U";
-  const c = (staged ? file.x : file.y).trim();
-  return c || "M";
-}
-
-function statusColor(code: string): string {
-  switch (code) {
-    case "A":
-      return "text-emerald-600 dark:text-emerald-400";
-    case "D":
-      return "text-rose-600 dark:text-rose-400";
-    case "U":
-      return "text-sky-600 dark:text-sky-400";
-    case "R":
-      return "text-violet-600 dark:text-violet-400";
-    default:
-      return "text-amber-600 dark:text-amber-400";
-  }
-}
-
-function leafName(path: string): string {
-  const parts = path.replace(/\\/g, "/").split("/");
-  return parts[parts.length - 1] || path;
 }
 
 function EmptyState({ text, hint }: { text: string; hint?: string }) {

@@ -61,7 +61,7 @@ import type {
 const EMPTY_STR_ARR: string[] = [];
 import { cn, formatTime } from "@/desktop/ui/lib/utils";
 import { ansiToHtml } from "@/desktop/ui/lib/ansiToHtml";
-import { extractBgTaskId } from "@/desktop/ui/lib/bgTaskId";
+import { extractBgTaskId, extractSubagentTaskId } from "@/desktop/ui/lib/bgTaskId";
 import { FOCUS_TOOL_CALL_EVENT } from "@/desktop/ui/lib/focusToolCall";
 import { toast } from "sonner";
 import { animations } from "@/assets/animations";
@@ -618,17 +618,64 @@ function callArgs(call: ToolCallItem): Record<string, unknown> {
   return parseArgsObject(call.argumentsText);
 }
 
+/**
+ * 当流式 tool_call_delta 中 name 未到而 arguments 已到（如 DeepSeek / Gemini 等
+ * provider 先出参数再出 name）时，从参数特征推断工具名，避免前端展示"自定义工具"。
+ *
+ * 参数特征判断优先级：
+ * 1. 唯一参数 → 精确匹配（old_string → Edit, command → Bash 等）
+ * 2. 多工具共享参数 → 额外特征区分（file_path+offset → Read 等）
+ * 3. 大致匹配（pattern → Grep）
+ */
+function inferToolNameFromArgs(args: Record<string, unknown>): string | null {
+  if ("old_string" in args) return "Edit";
+  if ("command" in args) return "Bash";
+  if ("url" in args) return "Fetch";
+  if ("question" in args) return "Ask";
+  if ("query" in args) return "WebSearch";
+  if ("subagent_type" in args) return "Task";
+  if ("todos" in args) return "TodoWrite";
+  if ("skill" in args) return "Skill";
+  if ("delay_secs" in args || "fire_at" in args) return "ScheduleWakeup";
+  if ("plan_markdown" in args) return "ExitPlanMode";
+  if ("action" in args) return "PlanMode";
+  if ("case_insensitive" in args || "glob" in args || "output_mode" in args) return "Grep";
+  if ("key" in args || "summary" in args || "category" in args) return "WriteMemory";
+  if ("id" in args && !("file_path" in args)) return "ReadMemory";
+  if ("task_id" in args) return "BashOutput";
+  if ("file_path" in args) {
+    if ("new_string" in args) return "Write";
+    if ("offset" in args || "limit" in args) return "Read";
+    return "Read";
+  }
+  if ("pattern" in args) return "Grep";
+  return null;
+}
+
+/** 优先用 call.name，回退到参数推断，再回退到兜底文字。 */
+function toolName(call: ToolCallItem): string | null {
+  return call.name ?? inferToolNameFromArgs(callArgs(call)) ?? null;
+}
+
+function isShellCommandTool(name?: string | null): boolean {
+  return name === "Bash" || name === "PowerShell" || name === "InteractiveBash";
+}
+
+function isShellCompanionTool(name?: string | null): boolean {
+  return name === "BashOutput" || name === "BashInput" || name === "KillShell";
+}
+
 function callSummary(call: ToolCallItem): string {
   const args = callArgs(call);
-  const name = call.name || "工具调用";
-  if (name === "Bash") {
-    return argString(args, "command") || "运行命令";
-  }
-  if (name === "PowerShell") {
+  const name = toolName(call) || "工具调用";
+  if (isShellCommandTool(name)) {
     return argString(args, "command") || "运行命令";
   }
   if (name === "BashOutput") {
     return argString(args, "task_id") || "读取后台命令输出";
+  }
+  if (name === "BashInput") {
+    return argString(args, "task_id") || "发送后台命令输入";
   }
   if (name === "KillShell") {
     return argString(args, "task_id") || "停止后台命令";
@@ -690,9 +737,9 @@ function callSummary(call: ToolCallItem): string {
 }
 
 function defaultActionLabel(name: string): string {
-  if (name === "Bash") return "运行命令";
-  if (name === "PowerShell") return "运行命令";
+  if (isShellCommandTool(name)) return "运行命令";
   if (name === "BashOutput") return "读取后台命令输出";
+  if (name === "BashInput") return "发送后台命令输入";
   if (name === "KillShell") return "停止后台命令";
   if (name === "Read") return "读取文件";
   if (name === "ReadMemory") return "读取记忆";
@@ -712,7 +759,7 @@ function defaultActionLabel(name: string): string {
 }
 
 function callDescription(call: ToolCallItem): string {
-  const name = call.name || "工具调用";
+  const name = toolName(call) || "工具调用";
   // 模型若在入参里写了 description（如 Bash 推荐的简短意图说明），优先展示，
   // 它通常比通用动词更具体。fallback 才回到 "运行命令" 这一档。
   const args = callArgs(call);
@@ -761,8 +808,8 @@ function ToolIcon({ name }: { name?: string | null }) {
   const square = <span className="h-3 w-3 rounded-[2px] border border-current bg-transparent shadow-none" />;
   let icon: ReactNode;
 
-  if (name === "Bash" || name === "PowerShell") icon = <Terminal className={iconCls} />;
-  else if (name === "BashOutput") icon = <SquareTerminal className={iconCls} />;
+  if (isShellCommandTool(name)) icon = <Terminal className={iconCls} />;
+  else if (name === "BashOutput" || name === "BashInput") icon = <SquareTerminal className={iconCls} />;
   else if (name === "KillShell") icon = <CircleStop className={iconCls} />;
   else if (name === "Read") icon = <ScrollText className={iconCls} />;
   else if (name === "ReadMemory") icon = <BookOpen className={iconCls} />;
@@ -1384,15 +1431,16 @@ function ToolCallDetail({
   appSettings?: AppSettings;
   sessionId?: string;
 }) {
-  const name = call.name || "工具调用";
+  const name = toolName(call) || "工具调用";
   const result = call.result || "等待返回…";
   const title = `${name} · ${callSummary(call)}`;
 
-  // 提取 Bash 后台任务的 task_id（与 sidebar 共用一份正则，兼容当前 / 旧版文案）
+  // 提取 shell 后台任务的 task_id（与 sidebar 共用一份正则，兼容当前 / 旧版文案）
   const taskIdFromResult = extractBgTaskId(call.result);
+  const subagentTaskIdFromResult = call.name === "Task" ? extractSubagentTaskId(call.result) : null;
 
-  // 对于前台 Bash，需要从注册表匹配 task_id
-  const cmd = name === "Bash" || name === "PowerShell" ? argString(callArgs(call), "command") : "";
+  // 对于前台 shell，需要从注册表匹配 task_id
+  const cmd = isShellCommandTool(name) ? argString(callArgs(call), "command") : "";
   const [matchedTaskId, setMatchedTaskId] = useState<string | null>(null);
   const [bgTaskState, setBgTaskState] = useState<string | null>(null);
   const [bgOutput, setBgOutput] = useState<string>("");
@@ -1413,10 +1461,10 @@ function ToolCallDetail({
     return () => clearInterval(timer);
   }, [call.status]);
 
-  // 前台 Bash 运行中时，轮询 listBackgroundTasks 按 command 匹配 task_id
+  // 前台 shell 运行中时，轮询 listBackgroundTasks 按 command 匹配 task_id
   useEffect(() => {
     // 仅对运行中的前台 Bash 生效（真后台从 result 已能提取 task_id）
-    if (!sessionId || killedLocally || taskIdFromResult || (name !== "Bash" && name !== "PowerShell") || call.status === "done" || !cmd) {
+    if (!sessionId || killedLocally || taskIdFromResult || !isShellCommandTool(name) || call.status === "done" || !cmd) {
       return;
     }
 
@@ -1510,16 +1558,29 @@ function ToolCallDetail({
 
   const isBgTaskRunning = bgTaskState === "running";
   const isRunning = call.status === "running";
-  // 所有 running 的 Bash/PowerShell 都显示按钮。
+  // 所有 running 的 shell 命令都显示按钮。
   // 有 task_id 时精确 kill，没有时走 interrupt 取消整轮 run。
-  const canKill = sessionId && !killedLocally && (isRunning || isBgTaskRunning) && (name === "Bash" || name === "PowerShell");
+  const canKill = sessionId && !killedLocally && (isRunning || isBgTaskRunning) && isShellCommandTool(name);
 
-  if (
-    name === "Bash" ||
-    name === "PowerShell" ||
-    name === "BashOutput" ||
-    name === "KillShell"
-  ) {
+  if (subagentTaskIdFromResult) {
+    const subagentName = call.subagentType || "子代理";
+    return (
+      <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-[12px] leading-relaxed text-foreground/85">
+        <div className="flex items-center gap-2">
+          <Bot className="h-3.5 w-3.5 shrink-0 text-primary" />
+          <span className="font-medium">{subagentName} 正在后台运行</span>
+          <code className="ml-auto rounded bg-background/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+            {subagentTaskIdFromResult}
+          </code>
+        </div>
+        <div className="mt-1 text-muted-foreground">
+          主会话可以继续使用；子代理完成后会自动唤醒这个会话，并把结果追加到对话里。
+        </div>
+      </div>
+    );
+  }
+
+  if (isShellCommandTool(name) || isShellCompanionTool(name)) {
     // status=running 且收到过 ToolOutputDelta：实时控制台展示，命令仍在跑。
     // status=done 后 result 已是聚合后的完整文本，覆盖掉 liveOutput。
     const live = call.liveOutput ?? "";
@@ -1715,7 +1776,7 @@ function NestedTaskContent({
   if (renderParts.length === 0) return null;
 
   return (
-    <div className="ml-3 border-l-2 border-primary/20 pl-3 py-1 space-y-1 max-h-96 overflow-y-auto">
+    <div className="ml-3 border-l-2 border-primary/20 pl-3 py-1 space-y-1">
       {renderParts.map((part) => {
         if (part.type === "text") {
           return (
@@ -1754,8 +1815,9 @@ function NestedTaskContent({
 }
 
 function toolDisplayName(call: ToolCallItem): string {
+  const name = toolName(call);
   if (call.name === "Task" && call.subagentType) return call.subagentType;
-  return call.name || "工具调用";
+  return name || "工具调用";
 }
 
 function formatToolSummary(calls: ToolCallItem[], reasonings: ReasoningRenderPart[] = []): string {
@@ -2045,11 +2107,11 @@ function RunningActivityBlock({
             const running = call.status !== "done";
             const active = !!expandedKeys?.has(call.key);
             const args = toolPreviewArgs(call);
-            const showDefaultDetail = running && (call.name === "Bash" || call.name === "PowerShell");
+            const showDefaultDetail = running && isShellCommandTool(toolName(call));
             const detailActive = canToggleItems ? active || showDefaultDetail : showDefaultDetail;
             const rowTitle = (
               <div className="flex min-w-0 items-center gap-1.5 py-0.5">
-                <ToolIcon name={call.name} />
+                <ToolIcon name={toolName(call)} />
                 <span
                   className={cn(
                     "min-w-0 shrink-0 truncate font-semibold text-foreground/85",
@@ -2205,10 +2267,14 @@ function ToolCallTimeline({
   }, [calls, expandedKeys, onToggle]);
 
   const hasAsk = calls.some((call) => call.name === "Ask");
+  const hasRunningTask = calls.some(
+    (call) => call.name === "Task" && call.nestedParts && call.nestedParts.length > 0,
+  );
   const allDone = calls.every((call) => call.status === "done") && reasonings.every((part) => !part.streaming);
   const groupKey = `group:${[...reasonings.map((part) => part.key), ...calls.map((call) => call.key)].join("|")}`;
   const groupExpanded = expandedKeys.has(groupKey);
-  const collapsibleSummary = !hasAsk && (allDone || (assistantStreaming && collapseAfterContent));
+  // Task 有嵌套输出时不折叠汇总（子 agent 实时输出应始终可见）
+  const collapsibleSummary = !hasAsk && !hasRunningTask && (allDone || (assistantStreaming && collapseAfterContent));
   const showRunningMinimal = !hasAsk && assistantStreaming && !collapseAfterContent;
 
   if (calls.length === 0) return null;
@@ -2232,7 +2298,9 @@ function ToolCallTimeline({
           const index = toolIndex++;
           const READ_LIKE = new Set(["Read", "Grep", "Glob", "Ask"]);
           const autoExpand = !READ_LIKE.has(call.name ?? "");
-          const defaultExpanded = autoExpand && call.status !== "done";
+          // Task 有嵌套输出时始终展开——子 agent 实时输出不折叠
+          const isTaskWithNested = call.name === "Task" && call.nestedParts && call.nestedParts.length > 0;
+          const defaultExpanded = isTaskWithNested || (autoExpand && call.status !== "done");
           const active = expandedKeys.has(call.key) ? !defaultExpanded : defaultExpanded;
           const nextActivity = activityItems[activityIndex + 1];
           const connectsToNextTool = nextActivity?.type === "tool_call";
@@ -2433,13 +2501,13 @@ function ToolCallRow({
         ) : (
           <button type="button" onClick={() => onToggle(call.key)} className={titleClass}>
             <span className="grid h-4 w-4 place-items-center text-muted-foreground">
-              <ToolIcon name={call.name} />
+              <ToolIcon name={toolName(call)} />
             </span>
             <span className="flex min-w-0 items-center text-[12px] text-muted-foreground">
               <span className="mr-[2ch] min-w-0 shrink-0 whitespace-nowrap font-semibold text-foreground">
                 {call.name === "Task" && call.subagentType
                   ? call.subagentType
-                  : call.name || "工具调用"}
+                  : toolName(call) || "工具调用"}
               </span>
               <span className="mr-[2ch] shrink-0">{callDescription(call)}</span>
               <code className="min-w-0 truncate font-mono text-[11px] text-foreground">

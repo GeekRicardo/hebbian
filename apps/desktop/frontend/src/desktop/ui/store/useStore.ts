@@ -26,6 +26,7 @@ import type {
   ReasoningConfig,
   SearchHit,
   Session,
+  SessionBackgroundReport,
   SessionMeta,
   StreamingAssistantPart,
   TodoItem,
@@ -305,6 +306,35 @@ function trimToastText(s: string, limit = 160): string {
   return oneLine.length <= limit ? oneLine : oneLine.slice(0, limit) + "…";
 }
 
+/**
+ * 从 SessionBackgroundReport 推导 SuspendedInfo（架构 §4.12）。
+ * 重启后 run_suspended 事件不存在，但 scheduler 已由 recover_pending_crons 恢复
+ * 了 pending_crons。本函数据此重建 SuspendedInfo，让主时间线 SuspendedBanner
+ * 显示倒计时，与侧栏 BackgroundTaskTab 一致。
+ */
+function deriveSuspendedFromReport(
+  report: SessionBackgroundReport,
+): SuspendedInfo | null {
+  if (report.pending_crons.length > 0) {
+    const first = report.pending_crons[0];
+    return {
+      reason: "cron",
+      resumesAtMs: first.fire_at_ms,
+      waitingForTaskIds: [],
+      suspendedAtMs: report.suspended_at_ms ?? Date.now(),
+    };
+  }
+  if (report.has_suspended_checkpoint) {
+    return {
+      reason: "manual",
+      resumesAtMs: null,
+      waitingForTaskIds: [],
+      suspendedAtMs: report.suspended_at_ms ?? Date.now(),
+    };
+  }
+  return null;
+}
+
 // applyEventToSlot / applyNestedEvent / setPartJudging / dropKey 已抽到 slotReducer.ts
 // （单一源 + standalone 单测覆盖），useStore 直接 import 复用。
 
@@ -520,11 +550,18 @@ function pruneUnpinnedTabs(
   };
 }
 
-/** 编辑器实时选区引用：选中的文本段所在文件 + 起止行号（1-based，闭区间）。 */
+/** 编辑器实时选区引用：选中的文本段所在文件 + 起止行号 + 起止列号 + 选中文本。
+ *
+ * `startLine`/`endLine`/`startColumn`/`endColumn` 均为 1-based。
+ * `selectedText` 是用户在 Monaco 中选中的具体文本内容，发送时附上让模型直接看到上下文。
+ */
 export interface EditorSelectionRef {
   path: string;
   startLine: number;
   endLine: number;
+  startColumn: number;
+  endColumn: number;
+  selectedText: string;
 }
 
 interface AppState {
@@ -647,6 +684,8 @@ interface AppState {
     sessionId: string,
     plan: { plan_id: string; plan_path: string; markdown: string; summary: string } | null,
   ) => void;
+  /** 设定指定 session 的 SuspendedInfo（重启后从 listBackgroundTasks 推导，架构 §4.12）。 */
+  setSessionSuspended: (sessionId: string, info: SuspendedInfo) => void;
   /** 用整列表覆盖 sessionId / planId 下的 comments——PlanTab 拉初值时用。 */
   replaceSessionPlanComments: (
     sessionId: string,
@@ -1141,6 +1180,10 @@ export const useStore = create<AppState>((set, get) => ({
   },
   setSessionActivePlan(sessionId, plan) {
     patchSessionSlot(set, get, sessionId, (slot) => ({ ...slot, activePlan: plan }));
+  },
+  /** 把 SuspendedInfo 落到 slot + top-level suspended（重启恢复用，架构 §4.12）。 */
+  setSessionSuspended(sessionId: string, info: SuspendedInfo) {
+    patchSessionSlot(set, get, sessionId, (slot) => ({ ...slot, suspended: info }));
   },
   replaceSessionPlanComments(sessionId, planId, comments) {
     patchSessionSlot(set, get, sessionId, (slot) => ({
@@ -1723,6 +1766,21 @@ export const useStore = create<AppState>((set, get) => ({
     api
       .getRunMode(id)
       .then((mode) => get().setSessionRunMode(id, mode))
+      .catch(() => {});
+    // 重启后从 listBackgroundTasks 推导 suspended 状态（架构 §4.12）：运行时
+    // run_suspended 事件不会跨进程保留，但 scheduler 已由 recover_pending_crons 恢复
+    // 了 pending_crons。此处检查 pending_crons / has_suspended_checkpoint，把
+    // SuspendedInfo 落到 slot 和 top-level suspended，让主时间线 SuspendedBanner 显示
+    // 倒计时，与侧栏 BackgroundTaskTab 一致。
+    api
+      .listBackgroundTasks(id)
+      .then((report) => {
+        if (get().currentSession?.id !== id) return;
+        const suspendedInfo = deriveSuspendedFromReport(report);
+        if (suspendedInfo) {
+          get().setSessionSuspended(id, suspendedInfo);
+        }
+      })
       .catch(() => {});
     get().refreshContextUsage();
     get().refreshEdits();

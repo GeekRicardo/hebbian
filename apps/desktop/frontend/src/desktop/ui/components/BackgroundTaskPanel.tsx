@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   AlertCircle,
+  Bot,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -161,7 +162,7 @@ export function BackgroundTaskTab() {
                   return next;
                 })
               }
-              onKill={item.task_id ? () => killShell(item.task_id!) : undefined}
+              onKill={item.kind === "bash" && item.task_id ? () => killShell(item.task_id!) : undefined}
             />
           ))}
         </div>
@@ -186,13 +187,14 @@ function TaskCard({
   onKill?: () => void;
 }) {
   const isCron = item.kind === "cron";
+  const isSubagent = item.kind === "subagent";
   const isRunning = item.status === "running";
   const [liveOutput, setLiveOutput] = useState<string>("");
   const cursorRef = useRef<number>(0);
 
-  // 卡片展开 + 任务运行中：polling 实时输出（~600ms 一次）。cron 无输出可拉，跳过。
+  // 卡片展开 + 任务运行中：polling 实时输出（~600ms 一次）。cron / subagent 无输出可拉，跳过。
   useEffect(() => {
-    if (isCron || !expanded || !isRunning || !item.task_id) return;
+    if (isCron || isSubagent || !expanded || !isRunning || !item.task_id) return;
     cursorRef.current = 0;
     setLiveOutput("");
     let cancelled = false;
@@ -218,7 +220,7 @@ function TaskCard({
       cancelled = true;
       clearInterval(t);
     };
-  }, [expanded, isRunning, sessionId, item.task_id]);
+  }, [expanded, isRunning, isCron, isSubagent, sessionId, item.task_id]);
 
   // 跳到 chat 区域里对应的 Bash 工具卡片，并展开 + 边框闪烁——比之前只滚到
   // message bubble 更精确，跟 EditTree 用同一套 focusToolCall 机制。
@@ -260,6 +262,13 @@ function TaskCard({
                   : `已于 ${formatClock(item.cron!.fireAtMs)} 唤醒`}
               </span>
             </>
+          ) : isSubagent ? (
+            <>
+              <Bot className="h-3 w-3 shrink-0 text-muted-foreground" />
+              <code className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                {item.task_id ?? "subagent"}
+              </code>
+            </>
           ) : (
             <>
               <code className="shrink-0 font-mono text-[10px] text-muted-foreground">
@@ -293,7 +302,7 @@ function TaskCard({
           className="mt-1 truncate font-mono text-[11px] text-foreground/85"
           title={item.command}
         >
-          {isCron ? `⏰ ${item.command}` : `$ ${item.command}`}
+          {isCron ? `⏰ ${item.command}` : isSubagent ? `🤖 ${item.command}` : `$ ${item.command}`}
         </div>
       </button>
       {expanded && (
@@ -312,6 +321,18 @@ function TaskCard({
                     （{cronCountdown(item.cron!.fireAtMs, now)} 后）
                   </span>
                 )}
+              </div>
+            </div>
+          ) : isSubagent ? (
+            <div className="space-y-1 text-[11px] leading-relaxed text-foreground/85">
+              <div>
+                <span className="text-muted-foreground">子代理：</span>
+                {item.command}
+              </div>
+              <div className="text-muted-foreground">
+                {isRunning
+                  ? "正在后台运行。完成后会自动唤醒这个会话，结果会出现在对话里。"
+                  : "已完成，并已唤醒这个会话。"}
               </div>
             </div>
           ) : (

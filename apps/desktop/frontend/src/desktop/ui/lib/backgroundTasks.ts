@@ -3,7 +3,7 @@ import type {
   Message,
   SessionBackgroundReport,
 } from "@/desktop/ui/types";
-import { extractBgTaskId } from "./bgTaskId";
+import { extractBgTaskId, extractSubagentTaskId } from "./bgTaskId";
 
 /**
  * 右侧 sidebar「后台任务」列表的一条派生项。
@@ -11,8 +11,8 @@ import { extractBgTaskId } from "./bgTaskId";
  * 永久保留；实时状态（运行中的输出 / 倒计时）再用注册表 report join。
  */
 export interface TaskItem {
-  /** 任务类型：Bash 后台 shell / ScheduleWakeup 定时唤醒 */
-  kind: "bash" | "cron";
+  /** 任务类型：Bash 后台 shell / ScheduleWakeup 定时唤醒 / 后台 subagent */
+  kind: "bash" | "cron" | "subagent";
   /** 注册表 task_id；某些异常 case 模型 result 还没 parse 出来时为 null。cron 恒 null */
   task_id: string | null;
   /** 对应 tool_call.id，用于在 chat 区滚动定位 */
@@ -62,6 +62,12 @@ export function deriveBackgroundTasks(
     pendingCronByReason.set(c.reason, c);
   }
   const consumed = new Set<string>();
+  const finishedSubagents = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "user" && m.meta?.type === "system_notification" && m.meta.kind === "bg_task_finished" && m.meta.task_id) {
+      finishedSubagents.add(m.meta.task_id);
+    }
+  }
   const items: TaskItem[] = [];
 
   // 1. 从 messages 找历史 Bash bg task（含前台超时转后台的）+ ScheduleWakeup
@@ -89,6 +95,23 @@ export function deriveBackgroundTasks(
           result: tc.result,
           duration_ms: tc.duration_ms,
           cron: { reason, fireAtMs, pending: !!pending },
+        });
+        continue;
+      }
+      if (tc.name === "Task") {
+        const input = (tc.input as Record<string, any> | undefined) ?? {};
+        const result = tc.result ?? "";
+        const taskId = extractSubagentTaskId(result);
+        if (!taskId) continue;
+        items.push({
+          kind: "subagent",
+          task_id: taskId,
+          tool_call_id: tc.id,
+          message_id: m.id,
+          command: typeof input.subagent_type === "string" ? input.subagent_type : "subagent",
+          status: finishedSubagents.has(taskId) ? "exited" : "running",
+          result: tc.result,
+          duration_ms: tc.duration_ms,
         });
         continue;
       }

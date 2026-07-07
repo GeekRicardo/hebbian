@@ -9,10 +9,17 @@
  * 避免两处各写一套正则导致一处匹配、一处漏匹配（曾因 `\]\s+后台` 要求 `]` 后紧跟
  * “后台”二字而对 `] 已在后台启动` 全部 NO MATCH）。
  */
-const TASK_ID_RE = /(?:task_id=|\[)(bash_\d+)/;
+const BASH_TASK_ID_RE = /(?:task_id=|\[)(bash_\d+)/;
+const SUBAGENT_TASK_ID_RE = /task_id=(subagent-[\w-]+)/;
 
 export function extractBgTaskId(result: string | null | undefined): string | null {
   if (!result) return null;
-  const m = result.match(TASK_ID_RE);
+  const m = result.match(BASH_TASK_ID_RE);
+  return m ? m[1] : null;
+}
+
+export function extractSubagentTaskId(result: string | null | undefined): string | null {
+  if (!result) return null;
+  const m = result.match(SUBAGENT_TASK_ID_RE);
   return m ? m[1] : null;
 }

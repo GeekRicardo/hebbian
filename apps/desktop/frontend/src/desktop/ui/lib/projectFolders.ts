@@ -25,3 +25,24 @@ export function projectInputWithoutAllowedPath(
     source: project.source ?? null,
   };
 }
+
+/**
+ * 给项目的允许路径追加新路径，与 session 级「添加允许访问的文件夹」对称。
+ * 已存在于项目配置中的路径会被去重。
+ */
+export function projectInputWithAllowedPaths(
+  project: WorkspaceProject,
+  newPaths: string[],
+): WorkspaceProjectInput {
+  const folders = project.folders;
+  const workdir = folders[0]?.path ?? "";
+  const existing = folders.slice(1).map((f) => f.path);
+  const allowed_paths = [...new Set([...existing, ...newPaths])];
+  return {
+    id: project.id,
+    name: project.name,
+    workdir,
+    allowed_paths,
+    source: project.source ?? null,
+  };
+}

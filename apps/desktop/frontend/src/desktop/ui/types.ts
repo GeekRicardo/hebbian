@@ -1153,6 +1153,8 @@ export interface SessionBackgroundReport {
   shells: BackgroundTaskInfo[];
   pending_crons: PendingCron[];
   has_suspended_checkpoint: boolean;
+  /** 挂起时刻（Unix epoch ms），从 run_checkpoint.json 读取。重启后用于推导 SuspendedInfo。 */
+  suspended_at_ms: number | null;
 }
 
 /**

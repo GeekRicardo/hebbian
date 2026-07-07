@@ -1,4 +1,7 @@
-import { projectInputWithoutAllowedPath } from "./projectFolders";
+import {
+  projectInputWithoutAllowedPath,
+  projectInputWithAllowedPaths,
+} from "./projectFolders";
 import type { WorkspaceProject } from "@/desktop/ui/types";
 
 function makeProject(): WorkspaceProject {
@@ -62,6 +65,57 @@ assertEqual(
   projectInputWithoutAllowedPath(
     { ...makeProject(), source: undefined },
     "/tmp/demo-lib",
+  ).source,
+  null,
+  "defaults missing source to null",
+);
+
+// ── projectInputWithAllowedPaths ─────────────────────────────────────
+
+// 追加新路径到项目配置
+assertEqual(
+  projectInputWithAllowedPaths(makeProject(), ["/tmp/demo-new"]),
+  {
+    id: "-tmp-demo",
+    name: "demo",
+    workdir: "/tmp/demo",
+    allowed_paths: ["/tmp/demo-lib", "/tmp/demo-docs", "/tmp/demo-new"],
+    source: "manual",
+  },
+  "appends new paths to existing allowed_paths",
+);
+
+// 去重：新路径与已有路径重复时不重复添加
+assertEqual(
+  projectInputWithAllowedPaths(makeProject(), ["/tmp/demo-lib", "/tmp/demo-new"]),
+  {
+    id: "-tmp-demo",
+    name: "demo",
+    workdir: "/tmp/demo",
+    allowed_paths: ["/tmp/demo-lib", "/tmp/demo-docs", "/tmp/demo-new"],
+    source: "manual",
+  },
+  "deduplicates paths that already exist in project",
+);
+
+// 空新路径列表：allowed_paths 原样保留
+assertEqual(
+  projectInputWithAllowedPaths(makeProject(), []),
+  {
+    id: "-tmp-demo",
+    name: "demo",
+    workdir: "/tmp/demo",
+    allowed_paths: ["/tmp/demo-lib", "/tmp/demo-docs"],
+    source: "manual",
+  },
+  "empty newPaths leaves allowed_paths intact",
+);
+
+// source 缺省时落为 null
+assertEqual(
+  projectInputWithAllowedPaths(
+    { ...makeProject(), source: undefined },
+    ["/tmp/extra"],
   ).source,
   null,
   "defaults missing source to null",

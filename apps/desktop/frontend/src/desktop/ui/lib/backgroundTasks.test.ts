@@ -51,6 +51,7 @@ const report: any = {
   ],
   pending_crons: [], // cron 已触发，scheduler 已移除——旧实现卡片会消失
   has_suspended_checkpoint: false,
+  suspended_at_ms: null,
 };
 
 const items = deriveBackgroundTasks(messages, report);
@@ -75,6 +76,45 @@ const items2 = deriveBackgroundTasks(messages, {
 const cron2 = items2.find((i) => i.kind === "cron");
 assert(cron2?.cron?.pending === true, "等待中 cron pending=true");
 assert(cron2?.cron?.fireAtMs === t0 + 99_000, "等待中 cron 用 scheduler fire_at_ms");
+
+// 场景 3：后台 subagent 启动后，在 BgTaskFinished wakeup 到达前显示 running；到达后显示 exited
+const subagentMessages: any[] = [
+  {
+    id: "m-subagent-start",
+    role: "assistant",
+    created_at: t0,
+    tool_calls: [
+      {
+        id: "tc-subagent",
+        name: "Task",
+        input: { subagent_type: "reviewer", prompt: "审一下", run_in_background: true },
+        result: "task_id=subagent-202607070321-788f597e",
+      },
+    ],
+  },
+];
+const subagentRunning = deriveBackgroundTasks(subagentMessages, report).find((i) => i.kind === "subagent");
+assert(subagentRunning?.status === "running", "后台 subagent 未收到完成通知时显示 running");
+assert(subagentRunning?.command === "reviewer", "后台 subagent 用 subagent_type 作为标题");
+const subagentExited = deriveBackgroundTasks(
+  [
+    ...subagentMessages,
+    {
+      id: "m-subagent-done",
+      role: "user",
+      content: "<wakeup kind=bg_task_finished>",
+      created_at: t0 + 1,
+      meta: {
+        type: "system_notification",
+        kind: "bg_task_finished",
+        task_id: "subagent-202607070321-788f597e",
+        tool_use_id: "tc-subagent",
+      },
+    },
+  ],
+  report,
+).find((i) => i.kind === "subagent");
+assert(subagentExited?.status === "exited", "后台 subagent 收到完成通知后显示 exited");
 
 if (failed > 0) throw new Error(`${failed} 条断言失败`);
 console.log("\n全部通过");

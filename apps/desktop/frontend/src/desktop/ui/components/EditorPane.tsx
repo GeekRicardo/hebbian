@@ -168,10 +168,13 @@ export default function EditorPane() {
   const handleMount = useCallback<OnMount>(
     (ed, monaco) => {
       editorRef.current = ed;
+
+      // Ctrl/Cmd+S 保存
       ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
         void saveRef.current();
       });
-      // 选区变化 → 实时写入 store：非空选区写 path:line(-endLine)，空选区清 null。
+
+      // 选区变化 → 实时写入 store：非空选区写完整信息，空选区清 null。
       ed.onDidChangeCursorSelection((e) => {
         const path = activePathRef.current;
         const sel = e.selection;
@@ -183,7 +186,44 @@ export default function EditorPane() {
           sel.endColumn === 1 && sel.endLineNumber > sel.startLineNumber
             ? sel.endLineNumber - 1
             : sel.endLineNumber;
-        setEditorSelectionRef({ path, startLine: sel.startLineNumber, endLine });
+        const selectedText = ed.getModel()?.getValueInRange(sel) ?? "";
+        setEditorSelectionRef({
+          path,
+          startLine: sel.startLineNumber,
+          endLine,
+          startColumn: sel.startColumn,
+          endColumn: sel.endColumn,
+          selectedText,
+        });
+      });
+
+      // 右键上下文菜单：「引用选中内容到输入框」
+      ed.addAction({
+        id: "hebbian.referenceSelection",
+        label: "引用选中内容到输入框",
+        contextMenuGroupId: "hebbian",
+        contextMenuOrder: 1,
+        run: (innerEd) => {
+          const path = activePathRef.current;
+          if (!path) return;
+          const sel = innerEd.getSelection();
+          if (!sel || sel.isEmpty()) return;
+          const endLine =
+            sel.endColumn === 1 && sel.endLineNumber > sel.startLineNumber
+              ? sel.endLineNumber - 1
+              : sel.endLineNumber;
+          const selectedText = innerEd.getModel()?.getValueInRange(sel) ?? "";
+          setEditorSelectionRef({
+            path,
+            startLine: sel.startLineNumber,
+            endLine,
+            startColumn: sel.startColumn,
+            endColumn: sel.endColumn,
+            selectedText,
+          });
+          // 切焦点到输入框
+          document.querySelector<HTMLDivElement>('[contenteditable="true"]')?.focus();
+        },
       });
     },
     [setEditorSelectionRef],

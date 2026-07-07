@@ -7,6 +7,8 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use agent_core::tools::connector::{ConnectorInfo, ConnectorRegistry};
+use async_trait::async_trait;
 use channel_core::bridge::ChannelBridge;
 use channel_core::owner_state::OwnerState;
 use channels::wechat::channel::WeChatChannel;
@@ -218,4 +220,45 @@ fn latest_credentials_bot_id() -> Option<String> {
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// DesktopConnectorRegistry：连接 WeChatState 到 agent-core 的 ConnectorRegistry trait
+// ---------------------------------------------------------------------------
+
+pub struct DesktopConnectorRegistry(pub Arc<WeChatState>);
+
+#[async_trait]
+impl ConnectorRegistry for DesktopConnectorRegistry {
+    fn list(&self) -> Vec<ConnectorInfo> {
+        let Some(bot_id) = self.0.running_bot_id() else {
+            return vec![];
+        };
+        vec![ConnectorInfo {
+            id: "wechat".to_string(),
+            display_name: "微信".to_string(),
+            account_id: Some(bot_id),
+        }]
+    }
+
+    async fn send(&self, connector_id: &str, to: &str, text: &str) -> Result<(), String> {
+        if connector_id != "wechat" {
+            return Err(format!("未知连接器：{connector_id}"));
+        }
+        let bridge = self
+            .0
+            .bridge()
+            .ok_or_else(|| "微信连接器未运行，请先在设置中启动微信连接。".to_string())?;
+        if bridge.send_to_user(to, text) {
+            Ok(())
+        } else {
+            Err("微信渠道尚未就绪（可能刚启动还在等待首条消息）。".to_string())
+        }
+    }
+}
+
+/// 在进程启动时向 agent-core 注册全局连接器注册表。
+/// 需在 WeChatState 被 `tauri::Builder::manage` 之后调用。
+pub fn init_registry(wechat: Arc<WeChatState>) {
+    agent_core::tools::connector::set_global_registry(Arc::new(DesktopConnectorRegistry(wechat)));
 }
