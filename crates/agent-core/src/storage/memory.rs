@@ -411,6 +411,19 @@ pub fn write_cursor(data_dir: &Path, session_id: &str, message_id: &str) -> AppR
     Ok(())
 }
 
+/// 清除抽取游标。历史回灌需要从第一条消息重抽时使用；文件不存在视为成功。
+pub fn clear_cursor(data_dir: &Path, session_id: &str) -> AppResult<()> {
+    let path = cursor_path(data_dir, session_id);
+    match std::fs::remove_file(&path) {
+        Ok(()) => {
+            mem_log!("Cursor", "session={session_id} 清除");
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(AppError::msg(format!("清除记忆抽取游标失败：{e}"))),
+    }
+}
+
 // ── frontmatter 序列化 / 解析（手写极简） ────────────────────────────────────
 
 struct MemoryRecord {

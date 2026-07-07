@@ -63,6 +63,8 @@ heb deny-feedback $SID perm_xxx "改用 Edit 工具"   # 拒绝并把反馈塞�
 | `heb mode <SID> <MODE>` | 切换 run mode：`default / plan-mode / auto-mode / yolo` | 下一轮起生效 |
 | `heb ping <SID>` | 检测 daemon 存活，返回 `{"session_id":...}` | 写守护脚本 |
 | `heb list-sessions` | 扫 `~/.hebbian/cli-sockets/` 列出所有存活 daemon，自动清理死 socket | 多 AI 并发调试时发现其他 AI 起的 daemon |
+| `heb model-io <SID>` | 拉当前 session 已记录的 model_io.jsonl | 排查模型到底收到了什么 |
+| `heb memory backfill [--session-id SID] [--limit N] [--offset N] [--reset-cursor] [--consolidate] [--execute] [--json] [--data-dir DIR]` | 重跑历史对话的记忆抽取；默认只预览，加 `--execute` 才调用模型并写盘 | 记忆系统回灌 / 质量评测 / 重建 links |
 
 **`heb run` 与 `heb new` 的区别**：`heb new` 起一个**持久 daemon**（监听 socket，靠 `heb input/allow/answer` 交互驱动，适合调试 / 多轮）。`heb run` 是**一次性、无人值守**——起 in-process、跑一个 run、终态即退，没有 socket、不接交互审批。审批一律自动拒（reason 回灌 agent 让它换路子）、提问一律自动取消。配 `--yolo`（= `--mode yolo`）让界内编辑 + 命令全放、只拦 catastrophic 红线，无人值守一气呵成。
 

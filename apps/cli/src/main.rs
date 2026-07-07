@@ -28,6 +28,7 @@ use clap::{Parser, Subcommand};
 mod client;
 mod daemon;
 mod ipc;
+mod memory_backfill;
 
 use ipc::IpcCommand;
 
@@ -180,6 +181,50 @@ enum Command {
     /// 拉当前 session 已记录的所有 model 请求/响应（每个 turn 一条）
     /// → 输出 `{ entries: [DumpEntry, ...] }`，给 AI 脚本排查"模型到底收到了什么"
     ModelIo { session_id: String },
+
+    /// 记忆系统维护命令
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum MemoryCommand {
+    /// 重跑历史对话的记忆抽取，并可选触发深睡建边
+    Backfill {
+        /// 数据目录（默认 ~/.hebbian）
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+
+        /// 只处理指定 session
+        #[arg(long)]
+        session_id: Option<String>,
+
+        /// 最多处理多少个 session；不填则全部
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// 跳过前 N 个 session（按更新时间倒序）
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+
+        /// 忽略已有抽取游标，从第一条消息重抽
+        #[arg(long)]
+        reset_cursor: bool,
+
+        /// 抽取完成后触发一次深睡建边
+        #[arg(long)]
+        consolidate: bool,
+
+        /// 真的调用记忆模型并写盘；不加时只预览将处理哪些 session
+        #[arg(long)]
+        execute: bool,
+
+        /// 输出机器可读 JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -322,5 +367,30 @@ async fn main() -> Result<()> {
         Command::ModelIo { session_id } => {
             client::send_command(&session_id, IpcCommand::ListModelIo).await
         }
+
+        Command::Memory { command } => match command {
+            MemoryCommand::Backfill {
+                data_dir,
+                session_id,
+                limit,
+                offset,
+                reset_cursor,
+                consolidate,
+                execute,
+                json,
+            } => {
+                memory_backfill::run(memory_backfill::BackfillArgs {
+                    data_dir,
+                    session_id,
+                    limit,
+                    offset,
+                    reset_cursor,
+                    consolidate,
+                    execute,
+                    json,
+                })
+                .await
+            }
+        },
     }
 }
