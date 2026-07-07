@@ -11214,3 +11214,367 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: agent-core 新增工具（所有 surface 自动可见）；channel-core 扩展 bridge API；Desktop 启动时注入注册表。不改协议、不改 session 文件格式。
 - **验证**: `cargo check -p agent-core --tests -p channel-core -p hebbian` 通过；`cargo test -p agent-core --lib -- tools` 210/210 通过。
 - **留尾巴**: 当前仅支持微信连接器（`connector_id="wechat"`）；未来接 QQ/飞书等需在 `DesktopConnectorRegistry.list()` 追加条目。发送方需对方曾发过消息给 bot（iLink 协议需 context_token），新用户发消息会报错并返回给 agent。
+
+### 2026-07-04 — 添加允许访问的文件夹时同步到项目 workspace
+
+- **Why**: 用户期望：输入框下方「添加允许访问的文件夹」选择目录后，如果当前对话绑定了项目，新目录也应加到项目的 workspace 配置（`workspace.json`），这样右侧 sidebar 的目录树和 Git 面板能实时反映新目录，且后续新建对话也能继承。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/lib/projectFolders.ts](../apps/desktop/frontend/src/desktop/ui/lib/projectFolders.ts): 新增 `projectInputWithAllowedPaths()` 函数，与已有的 `projectInputWithoutAllowedPath` 对称——把新路径追加到项目 `allowed_paths` 并去重。
+  - [apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx](../apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx): `pickAllowedFolder()` 在 `setPendingAllowedPaths(merged)` 之后，如果 `activeProject` 存在，调用 `saveProject(projectInputWithAllowedPaths(...))` 把新目录同步到项目配置。
+- **影响范围**: 仅 desktop 前端。无协议/后端改动。`pnpm exec tsc --noEmit` 通过。
+- **留尾巴**: 无。
+
+
+---
+
+## 2026-07-04 — 三项 UI 增强：FileTree / GitPanel / Monaco 引用
+
+**Why**：用户反馈右侧 sidebar 文件树勉强可用、Git 面板需逼近 VS Code SCM、希望能在 Monaco 编辑器中选中代码后右键引用到输入框。
+
+### A. FileTreePanel → VS Code 文件探索器级
+
+改动文件：`apps/desktop/frontend/src/desktop/ui/components/FileTreePanel.tsx`
+新建文件：`apps/desktop/frontend/src/desktop/ui/components/FileIcon.tsx`
+
+7 项增强：
+1. **文件图标主题**：新建 `FileIcon.tsx`，按扩展名映射到 Codicon 子类型图标（file-code / file-text / file-media / file-binary / file-pdf / file-zip），覆盖 120+ 种扩展名
+2. **Git 状态装饰**：调用 `api.gitStatus(roots)` 构建查找表，每个节点显示 M/A/D/U 颜色标记
+3. **键盘导航**：`focusedPath` 状态，↑↓ 箭头移动焦点，→ 展开/打开，← 折叠，Enter 打开
+4. **自动定位激活文件**：监听 `selectCurrentActiveFilePath`，展开所有祖先目录并 `scrollIntoView`
+5. **紧凑目录模式**：目录只含一个子目录且无文件时折叠为 `parent/child` 形式
+6. **多选**：`selectedPaths: Set<string>`，shift+click 范围选，cmd/ctrl+click 切换选
+7. **右键上下文菜单**：打开 / 在 Finder 中显示（revealItemInDir）/ 复制绝对路径 / 复制相对路径
+
+**影响范围**：纯 frontend 渲染层改动，不需要动 backend/协议。
+
+### B. GitPanel → VS Code SCM 级
+
+改动文件：`apps/desktop/frontend/src/desktop/ui/components/GitPanel.tsx`
+
+- 文件列表改为展开树：按目录折叠，每组可展开/折叠（`TreeGroupPanel` + `buildTree`）
+- 文件图标共用 `FileIcon.tsx`
+- 始终显示 stage/unstage/discard 操作按钮（不再只 hover 显示）
+- 项目标题统计 +N -M（`GroupHeader` + `countStats`）
+- 文件行尾 hover 显示灰色相对路径面包屑（`…/dir/`）
+
+### C. Monaco 选中文本 → 右键引用到输入框
+
+改动文件：`apps/desktop/frontend/src/desktop/ui/components/EditorPane.tsx`
+改动文件：`apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx`
+改动文件：`apps/desktop/frontend/src/desktop/ui/store/useStore.ts`
+
+- `EditorSelectionRef` 新增 `selectedText`、`startColumn`、`endColumn` 字段
+- Monaco `handleMount` 中 `editor.addAction()` 注册上下文菜单「引用选中内容到输入框」
+- 选中后焦点自动切到输入框
+- 发送格式改为含列号和 `#` 前缀：`{path}:#L{line}:{col}-L{line}:{col}`
+- 选中文本代码块附在引用后：`\n```\n{selected_text}\n````
+- Chip 显示更新为 `:#L{line}:{col}` 格式
+
+**影响范围**：frontend 渲染层 + store 类型变更（additive，向后兼容）。
+
+### 验证
+
+```bash
+cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
+```
+
+### 留尾巴
+- FileTree 的紧凑目录模式目前是同步检查（首次 load 时判断），理想做法是异步检查+动态切换
+- GitPanel 的树展开状态仅在内存中，不持久化到 localStorage（与文件树一致——文件树持久化了）
+- Monaco 右键菜单仅在 Desktop 可用（hebweb 无 Tauri 插件）
+
+### 2026-07-04 — 修复 goal judge 阶段 Stop 被误判为正常完成
+
+- **Why**: 用户反馈 agent-loop 的 Stop 判断仍有问题。梳理 Stop 场景后发现：普通排队消息应由前端 next_run_queue 在正常终态后消费；Run 内引导消息才进 PendingInputs；用户 Stop 则必须保持取消语义。现有代码在 assistant 自然 Done 后进入 `//goal` judge 时，如果 cancel 发生在 judge 调用期间，judge 会 fail-safe 成 `NotYet`，agent_loop 又把它转成 `Ok`，导致发 `run_finished` 而不是 `run_cancelled`，前端会按正常完成继续消费队列。
+- **改动**:
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): `GoalVerdict::NotYet` 分支检测到 cancel 时返回 `ModelError::Cancelled`，不再归一成正常完成；新增 `goal_judge_cancel_ends_run_as_cancelled` 回归测试，钉死 Stop 后只发 `RunCancelled`、不发 `RunFinished`。
+- **影响范围**: agent-core 的 run 收尾语义；不改协议、不改 wire DTO、不影响正常 `//goal` 未达成续跑，也不改变 PendingInputs 的插队 drain 规则。
+- **留尾巴**: 无。
+
+### 2026-07-05 — 调整右侧 sidebar 终端为 iTerm 风格体验
+
+- **Why**: 用户反馈右侧 sidebar 的终端不像真正终端，希望更接近常用 iTerm2 的视觉和使用感。现有 PTY 后端已按真实 shell 工作，问题主要在 Desktop 前端 chrome、主题、tab 状态和 xterm 参数太像普通面板。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/TerminalSurface.tsx](../apps/desktop/frontend/src/desktop/ui/components/TerminalSurface.tsx): 增加 macOS/iTerm 风格顶部 chrome、活跃目录/运行状态/终端数量显示、真实 terminal tab 外观、深色 ANSI 主题、右键选词、平滑滚动、更大 scrollback，以及更像终端的空态和 popout 占位。
+- **影响范围**: 仅 Desktop 前端终端视图；不改 PTY/Rust terminal 后端、不改 agent-core、不改协议、不影响 session 持久化。
+- **留尾巴**: 未做终端 profile 配置、分屏 pane、搜索等高级终端功能；如后续需要，应继续保持 PTY 单一真理源，不把终端能力塞进 agent-core。
+
+
+### 2026-07-05 — 新增历史对话记忆回灌命令
+
+- **Why**: 用户反馈 Hebbian 记忆系统在项目开发场景里联想不到位，且历史对话提取出的记忆质量不稳定；需要先有一个可控的全量回灌入口，把历史 session 重新跑一遍抽取/建边，形成可验证基线，再迭代抽取 prompt、tag 归一和检索策略。
+- **改动**:
+  - [apps/cli/src/main.rs](../apps/cli/src/main.rs): 新增 `heb memory backfill` 子命令，支持 `--session-id`、`--limit`、`--offset`、`--reset-cursor`、`--consolidate`、`--execute`、`--json`。
+  - [apps/cli/src/memory_backfill.rs](../apps/cli/src/memory_backfill.rs): 新增回灌执行器；默认 dry-run 只预览，加 `--execute` 才复用 `memory_extract::extract_for_session` 调模型写盘，`--consolidate` 复用 `memory_consolidate::consolidate_for_session` 建边。
+  - [crates/agent-core/src/storage/memory.rs](../crates/agent-core/src/storage/memory.rs): 新增 `clear_cursor`，供 `--reset-cursor` 从第一条消息重抽；文件不存在视为成功。
+  - [docs/heb-cli-debug.md](heb-cli-debug.md): 补充命令表中的记忆回灌入口。
+- **影响范围**: CLI + agent-core storage::memory。无协议/前端变更；默认不写盘，只有显式 `--execute` 才调用记忆模型并更新 memory 文件/游标/links。
+- **留尾巴**: 本次只补回灌脚本和对比调研结论，未调整抽取 prompt / tag 归一 / 混合检索；后续应基于回灌结果做质量评测后再改召回算法。
+
+### 2026-07-05 — 修复流式输出滚动接管与回看导航
+
+- **Why**: 用户反馈 assistant 正在输出、thinking/tool 固定高度块持续刷新时，聊天区实时往下滚会和用户主动往上滚打架，导致滚不上去；同时希望上滚回看时能从输入框旁快速跳到上一条用户消息、回到底部；流式中发送插队消息后，新消息会落在输入框下方，需要手动上滚才能看见；切换 session 后再切回来，也希望停在刚才读到的位置（关闭应用后失效）。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 将底部阈值提升为共享常量；自动贴底前按当前 DOM scroll metrics 再复核一次，若用户已经离底则立即关闭自动接管并采样顶部锚点，等用户滚回底部后再由现有 `handleScroll` 恢复贴底。
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 在输入框右上方增加轻量上/下箭头；上箭头跳到当前视口上方最近的 user message，run 结束且用户未上滚时也可跳回本轮 user message；下箭头回到底部并恢复自动贴底。
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 流式中发送插队消息后，等 live timeline 渲染出对应 user bubble，立即滚到该消息刚露出的位置；插队发送不重新开启持续自动贴底，避免继续抢用户回看。
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 用前端内存 Map 按 session 保存 scrollTop 与是否贴底，切换 session 前记录、切回来恢复；新 session 或未记录 session 仍默认到底部，应用关闭后自然失效。
+- **影响范围**: Desktop/hebweb 共用前端聊天渲染层；不改 agent-core、不改协议、不改会话持久化。新会话切换和用户仍在底部时的自动贴底行为保持不变；滚动位置只在当前前端进程内保存。
+- **留尾巴**: 无。
+
+### 2026-07-05 — 新增上下文管理策略详细设计
+
+- **Why**: 用户要求把上下文管理调研沉淀为 Hebbian 自身可落地的详细设计，不再写来源对照，而是明确当前要实现的工具输出治理、压力分层、正式压缩与任务状态保护策略。
+- **改动**:
+  - [docs/step-9-compaction.md](step-9-compaction.md): 新增上下文管理策略详细设计，覆盖 L0 工具输出清洗、L1 head+tail artifact、L2 压力触发 microcompact、L3 checkpoint + summary compact、L4 token-budget reset、Edit/Write-like 参数压缩、归档读取、事件存储契约与验收标准。
+  - [docs/架构.md](架构.md): 在文档关系和 §4.7 中挂载 `step-9-compaction.md`，声明其为上下文管理实施准则，架构正文仍保留总纲与边界。
+- **影响范围**: docs only；不改代码、不改协议、不影响运行时兼容。后续实现会影响 agent-core Context Engine / dispatch / storage / task checkpoint，surface 只展示 core 事件与 marker。
+- **留尾巴**: 还未实现该设计；后续落地时需按 Phase 1-5 分步实现，并分别补充单元测试、现象级复现验证和 changelog。
+
+### 2026-07-05 — 新增隔离式记忆联想离线评测脚本
+
+- **Why**: 用户要求不是只补 backfill，而是设计更理想的记忆系统，并用真实 Hebbian 项目历史会话做离线闭环：最新对话作为 holdout，不参与抽取；较老对话抽记忆；对 holdout 中多个 user run 模拟记忆联想注入；评价少召、多召、错召，并持续优化到满意。评测必须隔离写入 `target/memory-eval/`，不能污染真实 `~/.hebbian/memory`。
+- **改动**:
+  - [apps/eval/scripts/memory_recall_eval.py](../apps/eval/scripts/memory_recall_eval.py): 新增离线评测脚本，只读 `~/.hebbian/sessions/*/session.jsonl`，按 workdir 过滤 Hebbian 项目会话；以最新 session 为 holdout、较老 session 为训练集；启发式抽取高锚点记忆，构建稀疏关联边，并对 holdout 的 user run 模拟召回注入。
+  - [apps/eval/scripts/memory_recall_eval.py](../apps/eval/scripts/memory_recall_eval.py): 增加主题门控、具体 tag、系统通知跳过、低置信空注入、MMR 去冗余、baseline 对比字段；输出 `memory_recall_eval.json`、`memories.json`、`summary.md` 到 `target/memory-eval/`。
+- **影响范围**: eval 脚本 only；不改 agent-core、不改协议、不改真实 memory 落盘格式。脚本是离线原型，用于验证“高锚点抽取 + 主题门控 + 稀疏图 + MMR + 后续 LLM 精排”的记忆系统方向。
+- **验证**: 运行 `python3 apps/eval/scripts/memory_recall_eval.py --holdout 4 --train-limit 40 --max-runs 12`。第一轮基线为 `memories=100 links=4922 eval_runs=12 grades={"noisy": 12}`；优化后复跑为 `sessions=247 holdout=4 train=40 memories=101 links=1699 eval_runs=10 grades={"good": 7, "miss": 2, "thin": 1}`。miss/thin 均为空注入：最新重试策略、scroll 临时位置、写设计延续缺少强相关历史时选择宁缺毋滥。
+- **留尾巴**: 自动 judge 仍是启发式，生产化需接入真实抽取 prompt、tag 归一、BM25/符号倒排、本地图扩散、LLM 精排、强化回写，并把 holdout/baseline 评测固化为可重复 CI 或人工验收集。
+
+### 2026-07-05 — 修复 Desktop 过期 request 残留导致 Stop 污染下一轮
+
+- **Why**: 用户指出会话 `202607042356-7fd0e876` 最新 goal hook 已判定未完成并落了 `goal_feedback`，但 UI 显示「用户终止对话」。检查 session.jsonl 发现 `goal_outcome(progress)` 与 `goal_feedback` 后紧跟 `interrupted`，随后用户发「继续」也立即 `interrupted`。根因是 Desktop 新 `send_message` 路径只把 `request_id → session_id` 注册到静态 runtime registry，却没有在 Run 结束后 unregister；过期 request 仍能被 Stop/Inject 查到并调用同 session runtime，污染后续 run 的 stop flag。
+- **改动**:
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `send_message` 注册 request 后启动清理任务，等待对应 session 的活跃 Run 释放后 unregister，保留运行中 Stop/Inject 能力，同时避免 request 永久残留。
+- **影响范围**: Desktop surface 的 request lifecycle；不改 agent-core 协议、不改 WireEvent、不影响 CLI / hebweb 主路径。
+- **留尾巴**: 无。
+
+### 2026-07-05 — 模型请求重试从 5 次改为指数退避 20 次
+
+- **Why**: 用户反馈上游（如 novita.ai）不稳定时 5 次重试不够，频繁弹 Continue 让用户手动点击；改为 20 次指数退避（1s→2s→4s→...→60s 封顶），总等待约 15 分钟，覆盖绝大多数瞬时故障窗口，减少用户介入频率。
+- **改动**:
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): `MAX_MODEL_RETRIES` 5 → 20；`model_retry_delay` 退避公式从 `(1 << min(attempt-1, 4))` 封顶 16s 改为 `(1 << attempt-1).min(60)` 封顶 60s
+- **影响范围**: 仅 agent-core 常量与退避函数；不改协议、不改前端、不改事件格式。`event.rs` 的 `ModelRetry { max }` 字段透传新值，前端已有动态渲染不受限。
+- **留尾巴**: 无。
+
+### 2026-07-05 — ScheduleWakeup 支持 fire_at 绝对时间指定
+
+- **Why**: 用户需要模型能指定具体时刻唤醒（如「明天早上 8 点检查 CI」），而不仅是相对延迟秒数。
+- **改动**:
+  - [crates/agent-core/src/tools/schedule_wakeup.rs](../crates/agent-core/src/tools/schedule_wakeup.rs): 新增可选参数 `fire_at`（ISO 8601 字符串），与 `delay_secs` 二选一；同时提供时 `fire_at` 优先。新增 reason 长度校验（200 字上限）。`required` 从 `["delay_secs", "reason"]` 改为 `["reason"]`。返回值改为形如「已设置在 2026-07-06T10:00:00Z（3600s 后）唤醒」。
+  - [docs/架构.md](架构.md): §4.12.4 更新参数文档
+- **影响范围**: 仅 agent-core 工具实现；`AwaitingCron { fire_at_ms }` 存储结构不变，checkpoint 和 scheduler 均无改。前端无需改动（工具调用按 schema 渲染）。
+- **留尾巴**: 无。
+
+### 2026-07-05 — 补全上下文管理策略实施边界
+
+- **Why**: 初版上下文管理详设已覆盖主干策略，但与 `docs/架构.md §4.7` 的旧四层描述存在冲突，且缺少 compact window、marker 顺序、artifact index、取消语义、per-session 状态、token 估算校准和可执行验收脚本等实现关键边界。
+- **改动**:
+  - [docs/step-9-compaction.md](step-9-compaction.md): 补充 token pressure 校准公式、secret artifact 落盘策略、compact window 切分规则、`session.jsonl` 物理顺序与 CompactBoundary 约束、artifact index 结构、自动 compact 取消语义、per-session surface 状态，以及单元/CLI 现象级验收脚本。
+  - [docs/架构.md](架构.md): 将 §4.7 从旧四层压缩总纲改为五层上下文管理总纲；保留 token 校准、CompactBoundary 顺序、LLM 失败不丢上下文、BlobStore 取舍等架构硬约束；移除该节中过时的来源对照和旧算法描述，避免与实施准则冲突。
+- **影响范围**: docs only；不改代码、不改协议、不影响运行时兼容。后续实现需要按该准则改 agent-core Context Engine / dispatch / storage / protocol additive fields / surface marker 渲染。
+- **留尾巴**: 仍未实现运行时代码；实现时必须按文档中的 Phase 与验收脚本逐步落地，并在每次代码改动追加 changelog。
+
+### 2026-07-06 — 修复 reasoning-only assistant 历史导致 Responses 请求 400
+
+- **Why**: 用户报告会话 `202607050355-5b4b8829` 继续请求时报 `HTTP 400: Missing required parameter: 'input[205].content[0].text'`，怀疑历史里存在只有 thinking、没有 content 的 message。离线重建该 session 的 transcript 后确认存在 `text="" + reasoning 非空 + 无 tool_call` 的 assistant entry；这类条目来自流式 reasoning-only 段，UI 可展示，但回放给 Responses API 会形成缺少可配套正文的历史片段。
+- **改动**:
+  - [crates/agent-core/src/context/transcript.rs](../crates/agent-core/src/context/transcript.rs): `push_assistant_parts` 在无已完成 tool_call 的情况下，只在存在正文 text 时才生成 assistant entry；reasoning-only 段不进入模型 transcript。带正文的 reasoning 仍保留，带 tool_call 的空正文 assistant 仍保留 function_call 语义。
+  - [crates/agent-core/src/context/transcript.rs](../crates/agent-core/src/context/transcript.rs): 新增 `from_session_skips_reasoning_only_assistant_parts` 与 `from_session_keeps_reasoning_when_text_exists` 回归测试，分别钉住丢弃非法 reasoning-only entry 与保留正常 reasoning+text 的行为。
+- **影响范围**: agent-core transcript 重建路径；不改 session.jsonl 格式、不改 WireEvent、不改 surface。旧历史中的 reasoning-only UI 数据仍在落盘文件里，只是不再回喂模型；对 provider 请求是收窄非法历史输入，向后兼容。
+- **验证**: 对真实 session `202607050355-5b4b8829` 做离线重建检查，修后 `reasoning_only_plain_assistant=[]`；`cargo test -p agent-core --lib context::transcript::tests:: -- --nocapture` 通过（10 passed, 1 ignored）；`cargo check -p agent-core --tests` 通过。
+- **留尾巴**: `cargo test -p agent-core --lib` 全量测试已启动但超过 300s 转后台，当前已跑过大量测试且未见失败，终态需继续等后台任务或单独重跑。
+
+### 2026-07-06 — 修复空 assistant 后续跑不会自动补继续
+
+- **Why**: 用户指出 session `202607060849-87747d34` 及其他历史里，模型返回空 assistant 后没有自动继续；续跑时如果最后一条有效消息是 assistant，必须补一条用户态「继续」，否则部分 provider 会拒绝或模型不会接着完成。
+- **改动**:
+  - [crates/agent-core/src/context/transcript.rs](../crates/agent-core/src/context/transcript.rs): `Transcript::from_session` 的补「继续」判断改为同时参考重建后的 transcript 尾部与原始 session 历史最后一条有效对话角色；空 assistant / reasoning-only assistant / 未完成 tool_call 即使在重建时被跳过，也仍会触发补「继续」。新增两条回归测试，分别覆盖空 assistant 后补继续、assistant 被跳过但用户已补新输入时不重复补。
+- **影响范围**: agent-core 的历史重建与续跑上下文；Desktop / heb CLI / hebweb 共享该路径。无协议字段变化、无 UI 文案变化、无持久化格式变化。
+- **留尾巴**: 无。
+
+
+### 2026-07-06 — 调整页面纵向边界滚动不再反弹
+
+- **Why**: 用户希望页面滚到顶部或底部时不要出现系统橡皮筋反弹效果，减少聊天界面滚动边界的晃动感。
+- **改动**:
+  - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css): 在全局 `html, body` 上设置 `overscroll-behavior-y: none`。
+- **影响范围**: Desktop/hebweb 共用前端全局样式；不改 agent-core、不改协议、不影响持久化；页面级纵向 overscroll 被禁用，内部滚动容器原有滚动逻辑不变。
+- **留尾巴**: 无。
+
+### 2026-07-05 — 落地上下文管理 L0/L1/L2 与 compact 归档
+
+- **Why**: 用户要求继续完整实施五层上下文管理，不能只停在设计文档；现有运行时仍会把小工具输出原样塞进 transcript、microcompact 仍是单条超限即压，且 LLM compact 成功后缺少压缩窗口归档，和新版 §4.7 的压力分层与可恢复性不一致。
+- **改动**:
+  - [crates/agent-core/src/context/tool_output.rs](../crates/agent-core/src/context/tool_output.rs): 新增工具输出清洗与 head+tail preview；统一折叠 `\r` 进度条、清 ANSI/control、脱敏 secret、折叠超长行。
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 所有非直通工具输出进入 transcript 前先 sanitized；超阈值输出保存 sanitized full text 到 `tool_results/`，inline 只保留 head+tail 预览与恢复指引。
+  - [crates/agent-core/src/context/microcompact.rs](../crates/agent-core/src/context/microcompact.rs): 将 L2 改为按上下文压力触发；低于 50% 不动历史，达到压力线后只压最近 turns 之外的可再生大工具结果，artifact 内容同样先清洗。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 每轮模型请求前接入压力 microcompact；自动 LLM compact 成功后在写 CompactBoundary 前归档被压缩窗口。
+  - [crates/agent-core/src/storage/compactions.rs](../crates/agent-core/src/storage/compactions.rs): 扩展 compact archive 三件套写入，生成 `compact-*.md/jsonl/meta.json`，记录 token、hash、artifact index 与窗口边界。
+  - [crates/agent-core/Cargo.toml](../crates/agent-core/Cargo.toml): 为 archive hash 增加 `sha2` 依赖。
+- **影响范围**: agent-core Context Engine / dispatcher / storage；不改变 surface wire 协议，不改变 `session.jsonl` 作为唯一历史账本的地位。大工具输出进入模型的 inline 内容会更短、更安全；自动 compact 会额外写 `compactions/` 审计工件。
+- **留尾巴**: L4 emergency reset 暂未硬塞实现：当前 `ModelError` 没有结构化 `prompt_too_long` 分类，直接按错误字符串猜会变成补丁式修复；后续应先在 model-gateway/agent-core 定义错误分类与 checkpoint-backed reset 语义，再接入 provider 400 兜底。
+
+### 2026-07-05 — 补记上下文管理运行时代码落地文件清单
+
+- **Why**: Stop hook 按本轮触达文件检查 changelog 覆盖范围，上一条上下文管理记录虽已说明 L0/L1/L2 与 compact 归档落地，但没有逐一列出所有被 hook 点名的运行时代码文件；为满足「无 changelog 的修改视为未完成」规则，补一条更精确的文件清单。
+- **改动**:
+  - [crates/agent-core/src/context/tool_output.rs](../crates/agent-core/src/context/tool_output.rs): 新增工具输出 sanitize 与 head+tail preview，实现 L0/L1 的核心文本处理。
+  - [crates/agent-core/src/context/mod.rs](../crates/agent-core/src/context/mod.rs): 注册 `tool_output` 模块，让 context engine 可复用输出治理能力。
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 工具输出进入 transcript 前先清洗；超阈值输出写 sanitized artifact，inline 保留 head+tail 与恢复指引。
+  - [crates/agent-core/src/context/microcompact.rs](../crates/agent-core/src/context/microcompact.rs): 将 microcompact 改为压力触发，保护最近 turns，并对被 shadow 的 artifact 先清洗。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 接入压力 microcompact；自动 compact 成功后写 compaction archive 再追加 CompactBoundary。
+  - [crates/agent-core/src/storage/compactions.rs](../crates/agent-core/src/storage/compactions.rs): 扩展 compact archive 三件套写入，生成 md/jsonl/meta 供审计和恢复。
+- **影响范围**: agent-core 上下文管理、工具派发和压缩归档；不改变 WireEvent，不改变 surface 协议，不改变 `session.jsonl` 唯一历史账本语义。
+- **留尾巴**: L4 emergency reset 仍需先补结构化 `prompt_too_long` 错误分类与 checkpoint-backed reset 语义后再实现。
+
+### 2026-07-06 — 补齐上下文管理代码改动 changelog 覆盖
+
+- **Why**: Stop hook 检测到本轮仍有上下文管理代码改动需要 changelog 覆盖；按项目规则「无 changelog 的修改视为未完成」，用当前日期追加一条逐文件记录。
+- **改动**:
+  - [crates/agent-core/src/context/tool_output.rs](../crates/agent-core/src/context/tool_output.rs): 新增工具输出清洗、脱敏、超长行折叠与 head+tail 预览。
+  - [crates/agent-core/src/context/mod.rs](../crates/agent-core/src/context/mod.rs): 导出 `tool_output` 模块。
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 接入输出清洗与 sanitized artifact 落盘。
+  - [crates/agent-core/src/context/microcompact.rs](../crates/agent-core/src/context/microcompact.rs): 改为压力触发 microcompact，并保护最近 turns。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 接入压力 microcompact 与 compact archive 写入。
+  - [crates/agent-core/src/storage/compactions.rs](../crates/agent-core/src/storage/compactions.rs): 写入 `compact-*.md/jsonl/meta.json` 归档三件套。
+- **影响范围**: agent-core 上下文管理、工具输出派发、压缩归档；不改 surface 协议，不改 WireEvent。
+- **留尾巴**: L4 emergency reset 仍待结构化 `prompt_too_long` 错误分类后实现。
+
+### 2026-07-06 — 补齐 L4 emergency reset 与上下文超限回归测试
+
+- **Why**: 五层上下文管理策略需要在 provider 已经拒绝请求（prompt/context too long）时仍能自救：不能把上下文当普通网络错误反复重试，也不能丢失旧历史；应先归档当前窗口，写 CompactBoundary，再用 deterministic checkpoint + 最近 turns 自动重试一次。
+- **改动**:
+  - [crates/model-gateway/src/types.rs](../crates/model-gateway/src/types.rs): 为 `ModelError` 增加 `is_context_too_long()`，集中识别 400/413 prompt/context/token-limit/request-too-large 类错误，并补充 429 不误判的单元测试。
+  - [crates/agent-core/src/context/compaction.rs](../crates/agent-core/src/context/compaction.rs): 新增 `build_emergency_reset()`，不调用 LLM，生成固定 checkpoint 摘要并保留最近 turns，提示通过 `compactions/` 与 `tool_results/` 局部恢复旧细节。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 将 context-too-long 从普通 retry 中剔除；首次命中时保存 compaction archive、flush 当前 assistant 段、追加 CompactBoundary、emit `ContextCompacted` / warn Notice，并自动进入下一轮重试；摘要使用固定原因，避免把 provider 错误体或疑似 secret 写入历史。新增 `emergency_reset_archives_context_and_retries_once` 回归测试覆盖归档、自动重试、无 `RunFailed`、错误体不进摘要。
+- **影响范围**: agent-core / model-gateway；不新增协议字段，不改 surface API。事件流复用已有 `ContextCompacted` 与 `Notice`，旧客户端兼容。
+- **留尾巴**: 未跑完全量 `cargo test -p agent-core --lib`（已有后台任务长期未结束）；本次已跑 L0/L1/L2/L3/L4 相关过滤测试、model-gateway 错误分类测试与 `cargo check -p agent-core --tests`。
+
+### 2026-07-06 — 补记 L4 emergency reset 代码文件覆盖
+
+- **Why**: Stop hook 仍检测到 L4 emergency reset 本轮代码改动需要 changelog 精确覆盖；按项目规则「无 changelog 的修改视为未完成」，追加一条只针对本轮三处代码文件的覆盖记录。
+- **改动**:
+  - [crates/model-gateway/src/types.rs](../crates/model-gateway/src/types.rs): 增加 `ModelError::is_context_too_long()`，把 400/413 的 prompt/context/token limit 类错误结构化识别出来，并用单元测试确认不会把 429 rate limit 当作上下文超限。
+  - [crates/agent-core/src/context/compaction.rs](../crates/agent-core/src/context/compaction.rs): 增加 `build_emergency_reset()`，在不调用 LLM 的情况下生成 deterministic checkpoint 摘要，并保留最近 turns 供下一轮重试。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 在模型调用返回 context-too-long 时跳过普通 retry，归档当前窗口、flush 当前段、追加 CompactBoundary、emit `ContextCompacted` 与提示，并自动重试一次；新增 emergency reset 回归测试。
+- **影响范围**: agent-core / model-gateway；不改 WireEvent、不改 surface API、不改变 `session.jsonl` 唯一历史账本语义。
+- **留尾巴**: 无。
+
+### 2026-07-06 — Stop hook 补记 L4 emergency reset 三文件覆盖
+
+- **Why**: Stop hook 仍提示本轮代码改动未被 changelog 识别；为避免 markdown 链接解析差异，追加裸路径形式覆盖本轮三处代码改动。
+- **改动**:
+  - crates/model-gateway/src/types.rs: 增加 ModelError 上下文超限识别，覆盖 prompt/context/token limit/request too large 类 provider 错误，并用测试钉住 429 不误判。
+  - crates/agent-core/src/context/compaction.rs: 增加 build_emergency_reset，生成不依赖 LLM 的 deterministic checkpoint 摘要并保留最近 turns。
+  - crates/agent-core/src/agent_loop.rs: 接入 context-too-long emergency reset 流程，先归档当前上下文窗口、flush 当前段、写 CompactBoundary、emit ContextCompacted/Notice，再自动重试一次；补 emergency reset 回归测试。
+- **影响范围**: agent-core / model-gateway；不改 WireEvent、不改 surface API、不改 session.jsonl 格式。
+- **留尾巴**: 无。
+
+### 2026-07-07 — Stop hook 当前轮补记 L4 emergency reset 三文件覆盖
+
+- **Why**: Stop hook 仍提示当前轮代码改动未被 changelog 识别；上一条使用了 2026-07-06 日期，可能未被当前轮追加规则匹配。按项目规则再次用当前系统日期追加裸路径覆盖记录。
+- **改动**:
+  - crates/model-gateway/src/types.rs: 增加 ModelError 上下文超限识别，覆盖 prompt/context/token limit/request too large 类 provider 错误，并用测试钉住 429 不误判。
+  - crates/agent-core/src/context/compaction.rs: 增加 build_emergency_reset，生成不依赖 LLM 的 deterministic checkpoint 摘要并保留最近 turns。
+  - crates/agent-core/src/agent_loop.rs: 接入 context-too-long emergency reset 流程，先归档当前上下文窗口、flush 当前段、写 CompactBoundary、emit ContextCompacted/Notice，再自动重试一次；补 emergency reset 回归测试。
+- **影响范围**: agent-core / model-gateway；不改 WireEvent、不改 surface API、不改 session.jsonl 格式。
+- **留尾巴**: 无。
+
+### 2026-07-07 — 新增 Rust 原生 Desktop POC surface
+
+- **Why**: 用户希望评估 Hebbian Desktop 是否能改成 Rust native，先做一个不替换现有 Tauri Desktop 的原型，验证 native GUI 能否复用现有 core 主链路。
+- **改动**:
+  - [Cargo.toml](../Cargo.toml): 把 `apps/native` 加入 workspace。
+  - [apps/native](../apps/native): 新增 `hebbian-native` egui/eframe POC，复用 `surface-session::RuntimeRegistry` 驱动对话事件流，支持会话列表、新建对话、发送消息、流式文本、工具状态、审批与单题回答。
+  - [docs/架构.md](架构.md): 在 apps/surface 列表补充 native POC，明确它是验证用 GUI 壳。
+- **影响范围**: 新增 `hebbian-native` app 与 GUI 依赖；不改 protocol / agent-core / surface-session；不替换现有 Desktop、CLI、hebweb，已有 surface 行为不变。
+- **留尾巴**: POC 暂不做完整设置页、项目选择、附件、Plan 编辑、多题 ask、多窗口与打包；后续若决定迁移，应先把可复用 UI 状态模型抽到独立层，再逐步替换现有 Tauri 前端。
+
+### 2026-07-07 — 新增 InteractiveBash + BashInput 交互式 PTY 工具对
+
+- **Why**: agent 遇到 `apt install` / `ssh-keygen` / `mysql` 等需要交互式 stdin 输入的命令时，现有 BashTool 关闭 stdin（管道 `Stdio::null()` / PTY drop master），导致交互 prompt 卡死或跳过确认。需要一个保留 stdin 写端的独立工具，让 agent 能「读 prompt → 发输入 → 读后续输出」。
+- **改动**:
+  - [crates/agent-core/src/tools/interactive_bash.rs](../crates/agent-core/src/tools/interactive_bash.rs): 新增 `InteractiveBashTool`，用 `portable_pty` 启动 PTY 并 `take_writer()` 保留写端；后台 reader 线程灌 tail buffer，waiter 线程等退出调 `finish()`；主流程等首批输出或超时（默认 / 上限 60s）后转后台返回 task_id
+  - [crates/agent-core/src/tools/bash_input.rs](../crates/agent-core/src/tools/bash_input.rs): 新增 `BashInputTool`，接收 `task_id` + `input` + `press_enter`（默认 true），校验 `has_pty_writer()` 后调 `write_input()`
+  - [crates/agent-core/src/tools/background.rs](../crates/agent-core/src/tools/background.rs): `BackgroundShell` 新增 `pty_writer: Option<Mutex<Box<dyn Write + Send>>>` 字段 + `write_input()` / `has_pty_writer()` 方法；`register_pty_background` 签名增加 `pty_writer` 参数
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs): `apply_noninteractive_env_pty` / `clean_ansi_progress` 改 `pub(crate)` 供复用；原 `run_pty` 超时转后台调 `register_pty_background` 传 `None` 保持原 stdin 关闭行为
+  - [crates/agent-core/src/effects.rs](../crates/agent-core/src/effects.rs): `analyze_effects` 新增 `"InteractiveBash"` 走 `analyze_shell`、`"BashInput"` 走 `destructive_no_paths()`（fingerprint=`bash-input`）
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs): `default_tools` 注册两工具；`BUILTIN_TOOL_NAMES` 追加 `"InteractiveBash"` / `"BashInput"`
+  - [docs/架构.md](../docs/架构.md): §4.4.6 工具列表追加两工具 + 工具数 16→18；§13 追加决策行
+- **影响范围**: agent-core（tools / effects）；不改协议、不改 Desktop 前端、不改 BashTool 行为；纯 additive，老 session 无感
+- **留尾巴**: 无。`dispatch::tests::yolo_out_of_workspace_edit_auto_denied_without_prompt` 测试失败是既有问题（dispatch.rs 未改），与本次改动无关
+
+---
+
+## 2026-07-19：新增 CreateSubagent 工具 + session 级临时 subagent
+
+- **Why**: 让模型在对话中动态创建临时 subagent 定义（仅存内存），`Task` 工具即可调用——无需用户预先写磁盘定义。场景：模型对当前任务拆解出多角色（reviewer/researcher/coder），各自有专属 system prompt 与工具子集，一次对话内完成无需持久化。
+- **改动列表**:
+  - [crates/agent-core/src/storage/subagents.rs](../crates/agent-core/src/storage/subagents.rs): `SubagentSource` 新增 `Session` 变体 + 进程级路由表 `SESSION_SUBAGENTS`（`OnceLock<Mutex<HashMap<String, Arc<RwLock<Vec<SubagentDefinition>>>>>>`）+ 公共函数 `session_subagents_for` / `discard_session_subagents` / `take_session_subagents` + 单元测试 5 个（隔离性、同 Arc 语义、discard 行为）
+  - [crates/agent-core/src/tools/create_subagent.rs](../crates/agent-core/src/tools/create_subagent.rs): 新文件，`CreateSubagentTool` 实现 `Tool` trait——参数 `name` (kebab-case) / `description` / `system_prompt` / `tools?` / `model?` / `max_iterations?` / `permission?`，写入 `session_subagents_for(sid)`，同名覆盖已有 session 级定义，返回成功提示 + 单元测试 5 个
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs): `pub mod create_subagent` + `CONDITIONAL_TOOL_NAMES` 追加 `"CreateSubagent"` + `default_tools` 中 `session_id.is_some()` 时注册 `CreateSubagentTool` + Task 注册条件放宽为 `!subagents.is_empty() || session_id.is_some()`
+  - [crates/agent-core/src/session.rs](../crates/agent-core/src/session.rs): `build_subagent_ctx_snapshot` 加载磁盘定义后调 `take_session_subagents(sid)` 合并 session 级定义（同名覆盖），形成 builtin → disk → session 三层优先级
+  - [docs/架构.md](../docs/架构.md): §4.4.11.4 来源层级表由「两层」扩展为「三层」+ 新增 `session` 层说明与合并规则
+- **影响范围**: agent-core（tools / storage / session）；`SubagentDefinition.source` 新增 `session` 变体（向前兼容，老 jsonl 序列无此字段的项自动得 default=Global）；Surface 端无需改动（托盘/前端不直接感知 session 级定义存在；desktop 前端 agents tab 只读展示 session 层的问题留作未完成项）；协议不变
+- **留尾巴**:
+  - 前端 agents tab 不展示 session 级临时 subagent——它们是纯内存的，创建即用，跑完即丢，前端「列出/编辑/删除 subagent」的菜单里看不到它们。暂不考虑前移展示（和「进程重启即丢失」的临时语义冲突）。如果后续需要在对话流中给用户「看到了一个临时 subagent 被创建」的反馈，走事件流（ToolCallFinished 的结果文本）已足够
+  - `CreateSubagent` 没有「撤销/删除」机制——模型若想清除某个 session 级定义，只能同名覆盖（改空 prompt 等方式）。如果后续需要，可新增 `DeleteSubagent` 工具或 `CreateSubagent` 新增 `delete=true` 参数
+  - 没有 session 关闭自动清理的钩子——`discard_session_subagents` 已有，但 `Session::close()` 尚未调用它。安全：进程重启自动清空，不调用造成的唯一问题是已被关闭的 session 的 Arc 驻留在 HashMap 里（内存泄漏数量级 ≈ 用户打开过的 session 数，可接受）；如果后续要修，在 `Session::close()` 或 `Session::drop` 里调用 `discard_session_subagents(&self.session_id)`
+
+---
+
+## 2026-07-19：让 Task / 后台 subagent 状态在前端可见
+
+- **Why**: 用户在 Desktop 里看到 run 已停止，但过一会又有输出，原因是 `Task(run_in_background=true)` 立即返回 `task_id=subagent-*`，真正的 subagent 在后台继续跑，完成后通过 `BgTaskFinished` 自动唤醒会话。原 UI 没有把「后台 subagent 正在跑」讲清楚，容易误以为 run 已结束后又异常输出。
+- **改动列表**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): Task 有 nested 输出时不折叠工具组，`NestedTaskContent` 去掉 `max-h-96` 限制，子 agent 输出完整可见；Task 后台返回 `task_id=subagent-*` 时在工具详情里显示「正在后台运行，完成后会自动唤醒这个会话」。
+  - [apps/desktop/frontend/src/desktop/ui/lib/bgTaskId.ts](../apps/desktop/frontend/src/desktop/ui/lib/bgTaskId.ts): 新增 `extractSubagentTaskId`，识别 `task_id=subagent-*`。
+  - [apps/desktop/frontend/src/desktop/ui/lib/backgroundTasks.ts](../apps/desktop/frontend/src/desktop/ui/lib/backgroundTasks.ts): 右侧「后台任务」从 session.messages 派生后台 Task subagent；在对应 `bg_task_finished` system notification 到达前显示 `running`，到达后显示 `exited`。
+  - [apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx): 后台任务 tab 支持 subagent 卡片，不提供 Kill（当前后端没有 kill subagent API），文案说明完成后会自动唤醒会话。
+  - [apps/desktop/frontend/src/desktop/ui/lib/backgroundTasks.test.ts](../apps/desktop/frontend/src/desktop/ui/lib/backgroundTasks.test.ts): 增加后台 subagent running/exited 派生测试。
+- **影响范围**: Desktop 前端展示层；不改协议、不改 agent-core 行为。后台 subagent 仍通过既有 `WakeupScheduler::arm_bg_task` + `BgTaskFinished` 唤醒路径工作。
+- **验证**:
+  - `cargo check --workspace`：通过
+  - `cd apps/desktop && pnpm exec tsc --noEmit`：通过
+  - `node --experimental-strip-types --import ./_register-ts.mjs backgroundTasks.test.ts`：13 条断言通过
+- **留尾巴**:
+  - 后台 subagent 仍没有实时 stdout 风格输出可拉；这是后端当前设计（后台 nested run 用 noop sink，真实结果由完成后的 wakeup 让主 agent 总结）。如果要做到后台期间实时展示子 agent token / tool events，需要给后台 subagent 增加独立事件缓冲与读取 API。
+  - 后台 subagent 暂不能从 UI 中止；若需要，需要后端给 `BgSubagentTask` 加 cancel handle，并让 `KillShell` 或新工具/API 支持 `subagent-*`。
+
+---
+
+## 2026-07-19：让 InteractiveBash / BashInput 复用 Bash 前端工具卡片渲染
+
+- **Why**: InteractiveBash 是 Bash 的交互式 PTY 变体，用户期望它在对话里的工具卡片、终端黑底输出、运行中默认展开、停止按钮和后台输出轮询都与现有 Bash 一致，而不是落到「自定义工具」的默认表格视图。
+- **改动列表**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 新增 `isShellCommandTool` / `isShellCompanionTool` 两个轻量归类函数；把 `InteractiveBash` 纳入 Bash / PowerShell 同一条 shell 命令渲染路径，把 `BashInput` 纳入 BashOutput / KillShell 同一条黑底输出路径；运行中默认展开和 kill 按钮也改用同一归类判断。
+- **影响范围**: Desktop / hebweb 共用 React 前端渲染；不改 protocol / agent-core / tool 行为；纯展示层 additive。
+- **留尾巴**: 无
+
+---
+
+## 2026-07-19：调整 BashInput 返回本次输入后的输出并在静默时提示仍在运行
+
+- **Why**: 交互式 Bash 会话里，用户希望每次发送输入后直接看到这次输入产生的输出，而不是再调 BashOutput 时把之前未消费的输出一起接上；同时如果 5 秒以上没有新输出，应先返回，但必须明确提示进程没停、会话仍可继续输入。
+- **改动列表**:
+  - [crates/agent-core/src/tools/background.rs](../crates/agent-core/src/tools/background.rs): `BackgroundShell` 新增 `mark_read_to_end()` 与 `wait_for_quiet_after()`；前者在输入前把增量读取游标标到当前尾部，后者等待新增输出并在静默窗口或总超时后返回。
+  - [crates/agent-core/src/tools/bash_input.rs](../crates/agent-core/src/tools/bash_input.rs): `BashInput` 写入后直接返回本次输入之后的新输出；默认连续 5 秒无新输出就暂时返回，并在 running 状态下提示「仍在运行」，后续可继续 BashInput / BashOutput。
+  - [crates/agent-core/src/tools/interactive_bash.rs](../crates/agent-core/src/tools/interactive_bash.rs): 更新交互回归测试，覆盖 BashInput 直接返回回显、推进 read cursor、不重复返回旧输出。
+  - [docs/架构.md](../docs/架构.md): §4.4.6 与 §13 同步 BashInput 的 cursor / 静默等待语义。
+- **影响范围**: agent-core 交互式 Bash 工具；不改普通 BashTool stdin 关闭行为，不改协议；BashOutput 显式读取语义保持不变。
+- **留尾巴**: 无
+
+---
+
+## 2026-07-19：对齐 InteractiveBash 的 BashOutput 增量读取与 CR/ANSI 折叠语义
+
+- **Why**: InteractiveBash 是 PTY 输出，`\r` 进度帧可能跨 chunk；如果 reader 按 chunk 清理或 append 自动补换行，会破坏 BashTool 已有的进度折叠语义。同时需要确认 InteractiveBash 的 `BashOutput` 与普通后台 Bash 一样按共享 cursor 增量读取，不重复返回旧 buffer。
+- **改动列表**:
+  - [crates/agent-core/src/tools/background.rs](../crates/agent-core/src/tools/background.rs): 新增 `append_raw()`，给 PTY 路径保留原始 bytes；普通管道后台仍走原 `append()` 自动补换行，避免改动 BashTool 行为。
+  - [crates/agent-core/src/tools/interactive_bash.rs](../crates/agent-core/src/tools/interactive_bash.rs): PTY reader 改为 raw append；InteractiveBash 返回给模型前统一调用 BashTool 同款 `clean_ansi_progress()`；补充 `BashOutput` 连续读取不重复、InteractiveBash 初始输出折叠 `\r`、BashInput 输出折叠 `\r` 的回归测试。
+  - [crates/agent-core/src/tools/bash_input.rs](../crates/agent-core/src/tools/bash_input.rs) / [crates/agent-core/src/tools/bash_output.rs](../crates/agent-core/src/tools/bash_output.rs): 返回给模型前对本次 snapshot 调 `clean_ansi_progress()`，与 BashTool 的可读输出一致。
+  - [docs/架构.md](../docs/架构.md): §4.4.6 / §13 同步 raw tail buffer、模型输出清理、BashOutput 共享 cursor 语义。
+- **影响范围**: agent-core 交互式 Bash / BashOutput 展示文本；不改普通 BashTool stdin / 后台行为，不改协议；前端 streaming 仍可拿 raw chunk 渲染实时终端。
+- **验证**: `cargo test -p agent-core --lib -- --test-threads=1 interactive_bash bash_input` 通过（11 项）。
+- **留尾巴**: 如果用户看到的是前端后台任务面板的历史累计显示，那是 surface polling 自己维护 cursor 并累积展示，不是 `BashOutput` 工具的共享 cursor；本次已用回归测试锁住工具层语义。
