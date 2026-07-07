@@ -108,9 +108,13 @@ fn approval_decision_label(d: &ApprovalDecision) -> &'static str {
 use common::{runtime as cancellation, CancelFlag};
 use model_gateway::types::{ModelError, ToolArtifact, ToolCall, ToolResult, TranscriptEntry};
 
+use crate::context::tool_output::{
+    artifact_marker, head_tail_preview, sanitize_tool_output, PreviewPolicy,
+};
+
 const MAX_TOOL_RESULT_INLINE: usize = 6_000;
-/// 落 artifact 路径时给模型看的头部预览字节上限。
-const ARTIFACT_HEAD_PREVIEW_BYTES: usize = 2_000;
+/// 落 artifact 路径时给模型看的 head+tail 预览字符上限。
+const ARTIFACT_PREVIEW_CHARS: usize = 2_000;
 
 /// `ask` 工具的输入。两种形态二选一：
 ///
@@ -1105,7 +1109,9 @@ impl ToolDispatcher {
                 } else {
                     materialize_tool_output(
                         raw,
+                        &call.name,
                         &call.id,
+                        is_error,
                         session_id_for_hooks.as_deref(),
                         data_dir_for_artifacts.as_deref(),
                     )
@@ -2429,60 +2435,63 @@ fn finish_ask_with_error(
     )
 }
 
-/// 工具输出超阈值时落 artifact（架构 §4.4.9 / §4.12.11 Phase 2）：
-/// - 小于 `MAX_TOOL_RESULT_INLINE` → 原样返回，`artifact` = None
-/// - 大于阈值且 `data_dir + session_id` 可用 → 全量写到
-///   `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt`，inline 改为
-///   「头部 ~2 KB 预览 + 工件路径指针」。模型看到指针后可以用 Read 翻页
-///   （Read 默认 limit=2000 行，自带分块）
-/// - 大于阈值但没 data_dir（CLI 单跑 / 单测）→ 回落到旧的截断路径
+/// 工具输出进入 transcript 前统一清洗；超阈值时落 artifact（架构 §4.7 / Step 9 L0/L1）：
+/// - 所有输出先折叠进度条 / 清 ANSI-control / 脱敏 / 折叠超长行。
+/// - 清洗后小于 `MAX_TOOL_RESULT_INLINE` → 直接内联 sanitized text，`artifact` = None。
+/// - 清洗后大于阈值且 `data_dir + session_id` 可用 → sanitized full text 写入
+///   `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt`，inline 改为 head+tail 预览 + artifact 指针。
+/// - 大于阈值但没 data_dir（CLI 单跑 / 单测）→ 返回 sanitized text，调用方继续走截断路径。
 fn materialize_tool_output(
     raw: String,
+    tool_name: &str,
     call_id: &str,
+    is_error: bool,
     session_id: Option<&str>,
     data_dir: Option<&Path>,
 ) -> (String, Option<ToolArtifact>) {
-    if raw.len() <= MAX_TOOL_RESULT_INLINE {
-        return (raw, None);
+    let original_bytes = raw.len() as u64;
+    let sanitized = sanitize_tool_output(&raw);
+    let sanitized_bytes = sanitized.text.len() as u64;
+    let line_count = sanitized.text.lines().count() as u32;
+
+    if sanitized.text.len() <= MAX_TOOL_RESULT_INLINE {
+        return (sanitized.text, None);
     }
     let (Some(sid), Some(dd)) = (session_id, data_dir) else {
-        return (raw, None); // 调用方继续走 truncate_tool_result
+        return (sanitized.text, None); // 调用方继续走 truncate_tool_result
     };
 
-    let path = match crate::storage::tool_results::save_tool_result(dd, sid, call_id, &raw) {
+    let path = match crate::storage::tool_results::save_tool_result(dd, sid, call_id, &sanitized.text)
+    {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(call_id, error = %e, "materialize: save_tool_result failed; fallback truncate");
-            return (raw, None);
+            return (sanitized.text, None);
         }
     };
 
-    let total_bytes = raw.len() as u64;
-    let line_count = raw.lines().count() as u32;
-    let head = head_preview_bytes(&raw, ARTIFACT_HEAD_PREVIEW_BYTES);
-    let inline = format!(
-        "{head}\n…\n[输出 {total_bytes} 字节 / {line_count} 行，完整内容已落盘到：{path}\n用 Read 按 offset/limit 翻页读取。]",
-        path = path.display(),
+    let artifact_path = path.display().to_string();
+    let preview_policy = PreviewPolicy::new(ARTIFACT_PREVIEW_CHARS, is_error, &sanitized.text);
+    let preview = head_tail_preview(&sanitized.text, preview_policy);
+    let inline = artifact_marker(
+        tool_name,
+        call_id,
+        original_bytes,
+        sanitized_bytes,
+        line_count,
+        &artifact_path,
+        &preview,
+        &preview.text,
     );
+
     (
         inline,
         Some(ToolArtifact {
             path,
-            bytes: total_bytes,
+            bytes: sanitized_bytes,
             line_count: Some(line_count),
         }),
     )
-}
-
-fn head_preview_bytes(s: &str, limit: usize) -> String {
-    if s.len() <= limit {
-        return s.to_string();
-    }
-    let mut end = limit;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    s[..end].to_string()
 }
 
 fn truncate_tool_result(raw: String) -> (String, bool) {
@@ -4094,45 +4103,73 @@ mod tests {
         );
     }
 
-    /// 架构 §4.4.9：超阈值输出落 artifact + inline 换成「头部预览 + 工件指针」。
+    /// 架构 §4.7：超阈值输出落 artifact + inline 换成 head+tail 预览 + 工件指针。
     #[test]
-    fn materialize_above_threshold_writes_artifact_and_pointer() {
+    fn materialize_above_threshold_writes_sanitized_artifact_and_head_tail_pointer() {
         let tmp = tempfile::tempdir().unwrap();
         let data_dir = tmp.path();
         let sid = "20260512-test1";
         std::fs::create_dir_all(data_dir.join("sessions").join(sid)).unwrap();
-        // 7 KB > MAX_TOOL_RESULT_INLINE(6 KB)
-        let raw = "x".repeat(7_000);
-        let (inline, artifact) =
-            materialize_tool_output(raw.clone(), "call_abc", Some(sid), Some(data_dir));
+        let raw = format!(
+            "\u{1b}[31mHEAD\u{1b}[0m token={}\n{}\nTAIL error: boom",
+            "a".repeat(900),
+            "middle\n".repeat(1200)
+        );
+        assert!(raw.len() > MAX_TOOL_RESULT_INLINE);
+        let (inline, artifact) = materialize_tool_output(
+            raw.clone(),
+            "Bash",
+            "call_abc",
+            true,
+            Some(sid),
+            Some(data_dir),
+        );
         let a = artifact.expect("artifact should be produced");
         assert!(a.path.ends_with("call_abc.txt"));
-        assert_eq!(a.bytes, 7_000);
+        assert!(a.bytes < raw.len() as u64, "sanitized artifact should be smaller after redaction");
         let on_disk = std::fs::read_to_string(&a.path).unwrap();
-        assert_eq!(on_disk, raw);
-        assert!(inline.starts_with("xxxxxxx"), "head preview at start");
-        assert!(inline.contains("已落盘到"));
+        assert!(on_disk.contains("HEAD"));
+        assert!(on_disk.contains("TAIL error: boom"));
+        assert!(on_disk.contains("[REDACTED:secret_assignment]"));
+        assert!(!on_disk.contains(&"a".repeat(100)));
+        assert!(!on_disk.contains("\u{1b}[31m"));
+        assert!(inline.contains("[工具输出过长，已保存完整内容]"));
+        assert!(inline.contains("Tool: Bash"));
+        assert!(inline.contains("BEGIN HEAD"));
+        assert!(inline.contains("BEGIN TAIL"));
+        assert!(inline.contains("Full output:"));
         assert!(inline.contains("call_abc.txt"));
         assert!(inline.len() < raw.len(), "inline shrunk");
     }
 
     #[test]
-    fn materialize_under_threshold_passes_through() {
+    fn materialize_under_threshold_sanitizes_without_artifact() {
         let tmp = tempfile::tempdir().unwrap();
-        let raw = "small".to_string();
-        let (inline, artifact) =
-            materialize_tool_output(raw.clone(), "c1", Some("sid"), Some(tmp.path()));
+        let raw = "\u{1b}[31msmall\u{1b}[0m token=abcdefghijklmnopqrstuvwxyz".to_string();
+        let (inline, artifact) = materialize_tool_output(
+            raw.clone(),
+            "Bash",
+            "c1",
+            false,
+            Some("sid"),
+            Some(tmp.path()),
+        );
         assert!(artifact.is_none());
-        assert_eq!(inline, raw);
+        assert_eq!(inline, "small [REDACTED:secret_assignment]");
+        assert!(!inline.contains("\u{1b}[31m"));
+        assert!(!inline.contains("abcdefghijklmnopqrstuvwxyz"));
     }
 
     #[test]
-    fn materialize_without_data_dir_passes_through() {
-        let raw = "y".repeat(7_000);
-        let (inline, artifact) = materialize_tool_output(raw.clone(), "c1", None, None);
-        // 没 data_dir → 不落盘，inline 保持原样（交给后续 truncate 收尾）
+    fn materialize_without_data_dir_sanitizes_then_leaves_truncation_to_caller() {
+        let raw = format!("\u{1b}[31mHEAD\u{1b}[0m token={}\n{}", "a".repeat(900), "y".repeat(7_000));
+        let (inline, artifact) = materialize_tool_output(raw, "Bash", "c1", false, None, None);
+        // 没 data_dir → 不落盘；但仍先清洗，再交给后续 truncate 收尾。
         assert!(artifact.is_none());
-        assert_eq!(inline, raw);
+        assert!(inline.contains("HEAD"));
+        assert!(inline.contains("[REDACTED:secret_assignment]"));
+        assert!(!inline.contains("\u{1b}[31m"));
+        assert!(!inline.contains(&"a".repeat(100)));
     }
 
     /// 历史审批重放（手动跑：`cargo test -p agent-core --lib replay_historical -- --ignored --nocapture`）。

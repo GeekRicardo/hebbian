@@ -1,17 +1,25 @@
-//! Microcompact：工具结果大输出 shadow。
+//! Pressure Microcompact：上下文有压力时把老工具结果 shadow。
 //!
-//! 每轮模型请求**之前**扫描 transcript，把单条 token 超限的工具结果替换成占位符，
-//! 原文通过 [`crate::storage::tool_results::save_tool_result`] 落盘
+//! 每轮模型请求**之前**估算当前上下文压力。低于 50% 不改历史；达到压力线后，
+//! 只把最近 turns 之外、可再生的大工具结果替换成占位符，原文落到
 //! `~/.hebbian/sessions/<sid>/tool_results/<call_id>.txt`，agent 按需用 Grep/Read 检索。
-//!
-//! 触发条件：单条可压缩工具结果 token 数 > `max_tokens_per_result`（默认 10,000）。
-//! 不看累积数量——超限即压，小输出永远保留。
 
-use crate::context::budget::estimate_tokens;
+use crate::context::{
+    budget::{calibrated_transcript_tokens, estimate_tokens},
+    tool_output::{head_tail_preview, sanitize_tool_output, PreviewPolicy},
+};
+use crate::definition::CompactionPolicy;
 use model_gateway::types::{ToolResult, TranscriptEntry};
 
-/// 进入压缩白名单的工具名称。这些工具的大输出"看过即过"，不值得占 context。
+/// 进入压缩白名单的工具名称。这些工具的大输出“看过即过”，不值得长期占 context。
 const COMPACTABLE_TOOLS: &[&str] = &["Bash", "Read", "Grep", "Glob", "Edit", "Fetch", "WebSearch"];
+
+/// L2 压力线：低于 50% 不改 transcript。
+const DEFAULT_MIN_PRESSURE: f64 = 0.50;
+/// L2 单条候选的下限：避免把很多小结果压成噪声 marker。
+const DEFAULT_MIN_RESULT_TOKENS: usize = 2_000;
+/// 占位符预览上限。L2 marker 保留少量 head/tail，避免完全失去局部线索。
+const SHADOW_PREVIEW_CHARS: usize = 800;
 
 /// 占位符前缀，用于幂等检测。
 pub const SHADOWED_PLACEHOLDER_PREFIX: &str = "[结果已被压缩";
@@ -19,14 +27,20 @@ pub const SHADOWED_PLACEHOLDER_PREFIX: &str = "[结果已被压缩";
 /// Microcompact 配置。
 #[derive(Debug, Clone, Copy)]
 pub struct MicrocompactPolicy {
-    /// 单条可压缩工具结果超过此 token 数时 shadow（架构 §4.7.3）。
-    pub max_tokens_per_result: usize,
+    /// 上下文压力低于此比例时不做 microcompact。
+    pub min_pressure: f64,
+    /// 单条可压缩工具结果至少超过此 token 数才成为候选。
+    pub min_tokens_per_result: usize,
+    /// 保护最近 N 个完整 user-started turns。
+    pub recent_turns_to_keep: usize,
 }
 
 impl Default for MicrocompactPolicy {
     fn default() -> Self {
         Self {
-            max_tokens_per_result: 10_000,
+            min_pressure: DEFAULT_MIN_PRESSURE,
+            min_tokens_per_result: DEFAULT_MIN_RESULT_TOKENS,
+            recent_turns_to_keep: 3,
         }
     }
 }
@@ -37,7 +51,8 @@ pub struct MicrocompactReport {
     pub shadowed_count: usize,
     pub kept_count: usize,
     pub total_compactable: usize,
-    /// 被压缩的工具结果原文备份：`(call_id, original_content)`。
+    pub pressure: f64,
+    /// 被压缩的工具结果备份：`(call_id, sanitized_content)`。
     /// agent_loop 拿到后落盘到 `tool_results/<call_id>.txt`。
     pub shadowed_artifacts: Vec<(String, String)>,
 }
@@ -50,20 +65,52 @@ fn is_already_shadowed(content: &str) -> bool {
     content.starts_with(SHADOWED_PLACEHOLDER_PREFIX)
 }
 
-/// 对 entries 就地做一次 microcompact。
-///
-/// 扫描所有 `ToolResults`，单条可压缩结果 token 数超过 `max_tokens_per_result` 即 shadow。
-/// 幂等——已是占位符的不重复替换。
+/// 兼容单测与旧调用：只做单条阈值 microcompact，不按压力判断，也不保护 suffix。
 pub fn microcompact(
     entries: &mut [TranscriptEntry],
     policy: &MicrocompactPolicy,
 ) -> MicrocompactReport {
+    let mut policy = *policy;
+    policy.recent_turns_to_keep = 0;
+    microcompact_entries(entries, 1.0, &policy)
+}
+
+/// 按当前上下文压力做 L2 microcompact。
+pub fn microcompact_with_pressure(
+    system: Option<&str>,
+    entries: &mut [TranscriptEntry],
+    compaction_policy: &CompactionPolicy,
+    last_real: u64,
+    last_estimated: u64,
+    policy: &MicrocompactPolicy,
+) -> MicrocompactReport {
+    let estimated = calibrated_transcript_tokens(system, entries, last_real, last_estimated);
+    let pressure = if compaction_policy.token_budget == 0 {
+        1.0
+    } else {
+        estimated as f64 / compaction_policy.token_budget as f64
+    };
+    if pressure < policy.min_pressure {
+        return MicrocompactReport {
+            pressure,
+            ..Default::default()
+        };
+    }
+    microcompact_entries(entries, pressure, policy)
+}
+
+fn microcompact_entries(
+    entries: &mut [TranscriptEntry],
+    pressure: f64,
+    policy: &MicrocompactPolicy,
+) -> MicrocompactReport {
+    let protected_from = protected_suffix_start(entries, policy.recent_turns_to_keep);
     let mut shadowed = 0usize;
     let mut kept = 0usize;
     let mut total = 0usize;
     let mut artifacts: Vec<(String, String)> = Vec::new();
 
-    for entry in entries.iter_mut() {
+    for (entry_index, entry) in entries.iter_mut().enumerate() {
         let TranscriptEntry::ToolResults(results) = entry else {
             continue;
         };
@@ -73,19 +120,34 @@ pub fn microcompact(
             }
             total += 1;
             if is_already_shadowed(&r.content) {
-                // 已压缩，算作 shadowed（不重复落 artifacts）
                 shadowed += 1;
                 continue;
             }
-            if estimate_tokens(&r.content) <= policy.max_tokens_per_result {
+            if entry_index >= protected_from {
                 kept += 1;
                 continue;
             }
-            // 超限：shadow
-            artifacts.push((r.call_id.clone(), r.content.clone()));
+            let token_estimate = estimate_tokens(&r.content);
+            if token_estimate < policy.min_tokens_per_result {
+                kept += 1;
+                continue;
+            }
+
+            let sanitized = sanitize_tool_output(&r.content);
+            let artifact_content = sanitized.text;
+            let original_bytes = r.content.len();
+            let sanitized_bytes = artifact_content.len();
+            let line_count = artifact_content.lines().count();
+            let preview = head_tail_preview(
+                &artifact_content,
+                PreviewPolicy::new(SHADOW_PREVIEW_CHARS, false, &artifact_content),
+            );
+            artifacts.push((r.call_id.clone(), artifact_content));
             let placeholder = format!(
-                "[结果已被压缩。原始内容可通过 Read 工具按路径检索：tool_results/{}.txt]",
-                r.call_id
+                "[结果已被压缩。Tool: {tool}; Call ID: {call_id}; Original: {original_bytes} bytes; Sanitized: {sanitized_bytes} bytes / {line_count} lines; Full output: tool_results/{call_id}.txt]\n\n{preview}\n\nNeed details? Use Grep on the artifact first, then Read with offset/limit.",
+                tool = r.name,
+                call_id = r.call_id,
+                preview = preview.text,
             );
             *r = ToolResult {
                 call_id: r.call_id.clone(),
@@ -102,14 +164,32 @@ pub fn microcompact(
         shadowed_count: shadowed,
         kept_count: kept,
         total_compactable: total,
+        pressure,
         shadowed_artifacts: artifacts,
     }
+}
+
+fn protected_suffix_start(entries: &[TranscriptEntry], recent_turns_to_keep: usize) -> usize {
+    if recent_turns_to_keep == 0 {
+        return entries.len();
+    }
+    let mut seen_turns = 0usize;
+    for (idx, entry) in entries.iter().enumerate().rev() {
+        if matches!(entry, TranscriptEntry::User(_)) {
+            seen_turns += 1;
+            if seen_turns == recent_turns_to_keep {
+                return idx;
+            }
+        }
+    }
+    0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use model_gateway::types::ToolResult;
+    use crate::definition::{CompactionPolicy, CompactionStrategy};
+    use model_gateway::types::{ToolResult, UserEntry};
 
     fn tr(name: &str, content: &str) -> ToolResult {
         ToolResult {
@@ -201,5 +281,84 @@ mod tests {
         let r2 = microcompact(&mut entries, &MicrocompactPolicy::default());
         assert_eq!(r1.shadowed_artifacts.len(), 1);
         assert_eq!(r2.shadowed_artifacts.len(), 0); // 第二次不再重复落 artifacts
+    }
+
+    #[test]
+    fn pressure_below_threshold_does_not_touch_history() {
+        let big = large_content(11_000);
+        let mut entries = vec![TranscriptEntry::ToolResults(vec![tr("Bash", &big)])];
+        let policy = CompactionPolicy {
+            token_budget: 1_000_000,
+            keep_recent_turns: 8,
+            strategy: CompactionStrategy::Structural,
+        };
+
+        let report = microcompact_with_pressure(
+            None,
+            &mut entries,
+            &policy,
+            0,
+            0,
+            &MicrocompactPolicy::default(),
+        );
+
+        assert_eq!(report.shadowed_count, 0);
+        assert_eq!(report.total_compactable, 0);
+        if let TranscriptEntry::ToolResults(results) = &entries[0] {
+            assert_eq!(results[0].content, big);
+        }
+    }
+
+    #[test]
+    fn pressure_microcompact_protects_recent_turns() {
+        let old_big = "old line\n".repeat(4_000);
+        let recent_big = "recent line\n".repeat(4_000);
+        let mut entries = vec![
+            TranscriptEntry::User(UserEntry::text("old turn")),
+            TranscriptEntry::ToolResults(vec![tr("Bash", &old_big)]),
+            TranscriptEntry::User(UserEntry::text("recent turn")),
+            TranscriptEntry::ToolResults(vec![tr("Bash", &recent_big)]),
+        ];
+        let policy = CompactionPolicy {
+            token_budget: 20_000,
+            keep_recent_turns: 8,
+            strategy: CompactionStrategy::Structural,
+        };
+        let micro_policy = MicrocompactPolicy {
+            min_pressure: 0.50,
+            min_tokens_per_result: 2_000,
+            recent_turns_to_keep: 1,
+        };
+
+        let report = microcompact_with_pressure(None, &mut entries, &policy, 0, 0, &micro_policy);
+
+        assert_eq!(report.shadowed_count, 1);
+        assert_eq!(report.kept_count, 1);
+        if let TranscriptEntry::ToolResults(results) = &entries[1] {
+            assert!(results[0].content.starts_with(SHADOWED_PLACEHOLDER_PREFIX));
+            assert!(results[0].content.contains("BEGIN HEAD"));
+            assert!(results[0].content.contains("Full output: tool_results/c-Bash.txt"));
+        } else {
+            panic!("old result should remain a tool result entry");
+        }
+        if let TranscriptEntry::ToolResults(results) = &entries[3] {
+            assert_eq!(results[0].content, recent_big);
+        } else {
+            panic!("recent result should remain a tool result entry");
+        }
+    }
+
+    #[test]
+    fn shadowed_artifact_is_sanitized() {
+        let raw = format!("\u{1b}[31mHEAD\u{1b}[0m token={}\n{}", "a".repeat(900), large_content(3_000));
+        let mut entries = vec![TranscriptEntry::ToolResults(vec![tr("Bash", &raw)])];
+        let report = microcompact(&mut entries, &MicrocompactPolicy::default());
+
+        assert_eq!(report.shadowed_artifacts.len(), 1);
+        let artifact = &report.shadowed_artifacts[0].1;
+        assert!(artifact.contains("HEAD"));
+        assert!(artifact.contains("[REDACTED:secret_assignment]"));
+        assert!(!artifact.contains("\u{1b}[31m"));
+        assert!(!artifact.contains(&"a".repeat(100)));
     }
 }

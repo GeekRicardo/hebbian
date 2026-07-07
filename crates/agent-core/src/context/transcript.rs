@@ -77,13 +77,15 @@ impl Transcript {
 
         // 所有已支持的 API（Anthropic / OpenAI 兼容）都要求 messages 最后一条必须是
         // user message；assistant prefill 路径只有极少数特殊场景用到且需要明确 opt-in。
-        // from_session 重建历史后末尾可能是 assistant（截断续跑、boundary 占位等），
-        // 统一在这里注入"继续"兜底，让所有重用 from_session 的路径都是合法状态。
-        // continue_run 逻辑不再特判——transcript 末尾已经保证是 user。
-        if matches!(
+        // 判断必须看原始历史最后一条有效对话角色，而不是过滤后的 transcript 末尾：
+        // 空 assistant、reasoning-only assistant、未完成 tool_call 会在重建时被跳过，
+        // 但它们仍代表上一轮模型已经占据了最后发言权，续跑时必须补一条用户态「继续」。
+        let rebuilt_tail_needs_user = matches!(
             t.entries.last(),
             Some(TranscriptEntry::Assistant(_)) | Some(TranscriptEntry::ToolResults(_))
-        ) {
+        );
+        let raw_tail_needs_user = last_model_facing_role(&messages[start..]) == Some(Role::Assistant);
+        if rebuilt_tail_needs_user || raw_tail_needs_user {
             t.entries.push(TranscriptEntry::User(UserEntry {
                 text: "继续".to_string(),
                 attachments: Vec::new(),
@@ -130,6 +132,14 @@ impl Transcript {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+}
+
+fn last_model_facing_role(messages: &[Message]) -> Option<Role> {
+    messages
+        .iter()
+        .rev()
+        .find(|msg| msg.subagent_call_id.is_none() && matches!(msg.role, Role::User | Role::Assistant))
+        .map(|msg| msg.role)
 }
 
 /// 把 tool_call 的 input 归一成 object：
@@ -293,7 +303,7 @@ fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart
             &mut tool_calls,
             &mut tool_results,
         );
-    } else if !text.is_empty() || !reasoning.is_empty() {
+    } else if !text.is_empty() {
         // 加载兜底（架构 §4.3.3）：纯文本段（无 tool_call）才可能是漏出的残骸，清洗后入桶。
         entries.push(TranscriptEntry::Assistant(AssistantEntry {
             text: sanitize_tool_xml_leak(&text).text,
@@ -345,7 +355,7 @@ mod tests {
 
     /// 回归：历史以 CompactBoundary 结尾时，`from_session` 注入「已收到前情概要」
     /// 占位 assistant 后，必须再补一条"继续" user，否则 API 400。
-    /// 本测试锁定「from_session 末尾永远是 user」这个不变式。
+    /// 本测试锁定「最后一条有效对话是 assistant 时自动补继续」这个不变式。
     #[test]
     fn from_session_always_ends_with_user() {
         // case 1: boundary 在末尾——会产生占位 assistant，必须被补 user
@@ -466,6 +476,41 @@ mod tests {
     }
 
     #[test]
+    fn from_session_injects_continue_after_empty_assistant_message() {
+        let empty_assistant = assistant(Vec::new(), Vec::new());
+        let t = Transcript::from_session(None, &[user_msg("u1", "上一轮问题"), empty_assistant]);
+
+        assert!(matches!(t.entries.last(), Some(TranscriptEntry::User(_))));
+        match t.entries.last().unwrap() {
+            TranscriptEntry::User(u) => assert_eq!(u.text, "继续"),
+            other => panic!("expected injected '继续' user, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_session_does_not_inject_continue_after_user_message_even_if_assistant_was_skipped() {
+        let empty_assistant = assistant(Vec::new(), Vec::new());
+        let t = Transcript::from_session(
+            None,
+            &[
+                user_msg("u1", "上一轮问题"),
+                empty_assistant,
+                user_msg("u2", "用户已经补充了新输入"),
+            ],
+        );
+
+        let user_texts: Vec<&str> = t
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                TranscriptEntry::User(u) => Some(u.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(user_texts, vec!["上一轮问题", "用户已经补充了新输入"]);
+    }
+
+    #[test]
     fn skips_unfinished_part_tool_calls_when_rebuilding_transcript() {
         let msg = assistant(
             vec![
@@ -572,6 +617,59 @@ mod tests {
             saw_clean_tail,
             "末尾 Text 应被清洗为「现在调度器：周期性运行优化。」"
         );
+    }
+
+    #[test]
+    fn from_session_skips_reasoning_only_assistant_parts() {
+        let msg = assistant(
+            vec![MessagePart::Reasoning {
+                text: "这段只有思考，没有正文。".to_string(),
+                duration_ms: Some(1200),
+            }],
+            Vec::new(),
+        );
+
+        let transcript = Transcript::from_session(None, &[msg]);
+
+        assert!(
+            !transcript
+                .entries
+                .iter()
+                .any(|entry| matches!(entry, TranscriptEntry::Assistant(_))),
+            "reasoning-only assistant 不应进入模型 transcript: {:?}",
+            transcript.entries
+        );
+        match transcript.entries.as_slice() {
+            [TranscriptEntry::User(user)] => assert_eq!(user.text, "继续"),
+            other => panic!("reasoning-only assistant 后应只补继续 user: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_session_keeps_reasoning_when_text_exists() {
+        let msg = assistant(
+            vec![
+                MessagePart::Reasoning {
+                    text: "先思考。".to_string(),
+                    duration_ms: None,
+                },
+                MessagePart::Text {
+                    text: "结论".to_string(),
+                },
+            ],
+            Vec::new(),
+        );
+
+        let transcript = Transcript::from_session(None, &[msg]);
+
+        match transcript.entries.as_slice() {
+            [TranscriptEntry::Assistant(entry), TranscriptEntry::User(user)] => {
+                assert_eq!(entry.text, "结论");
+                assert_eq!(entry.reasoning, "先思考。");
+                assert_eq!(user.text, "继续");
+            }
+            other => panic!("unexpected transcript entries: {other:?}"),
+        }
     }
 
     /// 复现真实 session 202606180734-87c643bd 的 400（依赖本机 ~/.hebbian，故 ignore）：

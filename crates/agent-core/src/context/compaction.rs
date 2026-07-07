@@ -73,6 +73,55 @@ pub fn compact_structural(
     }
 }
 
+/// L4 emergency reset：不调用 LLM，基于当前 transcript 生成 deterministic checkpoint，
+/// 再拼上最近 turns，供 prompt-too-long 后立即重试。旧窗口必须由调用方先归档。
+pub fn build_emergency_reset(
+    system: Option<&str>,
+    entries: Vec<TranscriptEntry>,
+    policy: &CompactionPolicy,
+    reason: &str,
+) -> CompactionResult {
+    let before_tokens = budget::estimate_transcript_tokens(system, &entries);
+    let start = recent_turn_start(&entries, policy.keep_recent_turns.max(3));
+    let recent: Vec<TranscriptEntry> = entries.iter().skip(start).cloned().collect();
+    let summary = format!(
+        "L4 emergency reset triggered: {reason}\n\n旧上下文已归档到本会话 compactions/ 目录。继续任务时优先依据最近对话和工具 artifact；需要旧细节时先 Grep compactions/ 或 tool_results/，再 Read 局部 offset/limit。"
+    );
+    let mut replacement = vec![
+        TranscriptEntry::User(UserEntry::text(format!("[前情概要]\n{summary}"))),
+        TranscriptEntry::Assistant(AssistantEntry {
+            text: "已收到前情概要，将基于最近上下文继续。".to_string(),
+            reasoning: String::new(),
+            reasoning_signature: String::new(),
+            tool_calls: Vec::new(),
+        }),
+    ];
+    replacement.extend(recent);
+    let after_tokens = budget::estimate_transcript_tokens(system, &replacement);
+    CompactionResult {
+        entries: replacement,
+        before_tokens,
+        after_tokens,
+        summary,
+    }
+}
+
+fn recent_turn_start(entries: &[TranscriptEntry], keep_recent_turns: usize) -> usize {
+    if keep_recent_turns == 0 {
+        return entries.len();
+    }
+    let mut seen = 0usize;
+    for (idx, entry) in entries.iter().enumerate().rev() {
+        if matches!(entry, TranscriptEntry::User(_)) {
+            seen += 1;
+            if seen == keep_recent_turns {
+                return idx;
+            }
+        }
+    }
+    0
+}
+
 /// 检查是否需要压缩。
 ///
 /// 用 [`budget::calibrated_transcript_tokens`] 而非裸估算判断阈值：本地估算对

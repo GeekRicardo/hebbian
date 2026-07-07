@@ -467,13 +467,30 @@ impl Session {
     /// 没有可用 subagent（数据目录未设 / 列表为空）时返回 None——ToolDispatcher 拿到
     /// None 时 Task 工具走兜底错误，但实际上 default_tools 条件注入会让 Task 工具根本
     /// 没被注册，模型连选择项都看不到，所以"None + 模型硬调 Task"路径理论上不可达。
+    ///
+    /// 合并优先级（架构 §4.4.11.4）：session 级临时定义 > 磁盘定义 > 内置定义（同名覆盖）。
     fn build_subagent_ctx_snapshot(&self) -> Option<Arc<crate::subagent::SubagentCtx>> {
         let data_dir = self.data_dir.as_ref()?;
-        let subagents: Vec<_> =
+
+        // 1. 加载磁盘 + 内置定义（已按同名磁盘覆盖内置策略合并），仅保留 enabled
+        let mut subagents: Vec<_> =
             crate::storage::subagents::load_for_workdir(data_dir, Some(self.workspace.workdir()))
                 .into_iter()
                 .filter(|d| d.enabled)
                 .collect();
+
+        // 2. 合并 session 级临时定义（架构 §4.4.11.4 session 层）：同名覆盖已有的磁盘/内置定义
+        if let Some(sid) = &self.session_id {
+            let session_defs = crate::storage::subagents::take_session_subagents(sid);
+            for sess_def in session_defs {
+                if let Some(existing) = subagents.iter_mut().find(|d| d.name == sess_def.name) {
+                    *existing = sess_def;
+                } else {
+                    subagents.push(sess_def);
+                }
+            }
+        }
+
         if subagents.is_empty() {
             return None;
         }

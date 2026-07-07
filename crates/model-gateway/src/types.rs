@@ -323,3 +323,64 @@ pub enum ModelError {
     #[error("{0}")]
     Other(String),
 }
+
+impl ModelError {
+    /// Provider 返回的上下文超限错误。不同厂商错误体没有统一字段，统一在 gateway
+    /// 类型层集中识别，agent-core 只依赖这个结构化判断，不在业务路径散落字符串匹配。
+    pub fn is_context_too_long(&self) -> bool {
+        let body = match self {
+            ModelError::Http { status, body } if *status == 400 || *status == 413 => body,
+            ModelError::Other(body) => body,
+            _ => return false,
+        };
+        let body = body.to_ascii_lowercase();
+        [
+            "prompt_too_long",
+            "context_length_exceeded",
+            "context length",
+            "maximum context",
+            "max context",
+            "context window",
+            "input tokens",
+            "too many tokens",
+            "token limit",
+            "request too large",
+        ]
+        .iter()
+        .any(|needle| body.contains(needle))
+    }
+}
+
+#[cfg(test)]
+mod model_error_tests {
+    use super::ModelError;
+
+    #[test]
+    fn detects_provider_context_too_long_errors() {
+        let anthropic = ModelError::Http {
+            status: 400,
+            body: "prompt_too_long: input tokens exceed context window".to_string(),
+        };
+        let openai = ModelError::Http {
+            status: 400,
+            body: "context_length_exceeded: maximum context length is 128000".to_string(),
+        };
+        let payload = ModelError::Http {
+            status: 413,
+            body: "request too large".to_string(),
+        };
+
+        assert!(anthropic.is_context_too_long());
+        assert!(openai.is_context_too_long());
+        assert!(payload.is_context_too_long());
+    }
+
+    #[test]
+    fn does_not_treat_rate_limit_as_context_too_long() {
+        let rate_limited = ModelError::Http {
+            status: 429,
+            body: "too many requests".to_string(),
+        };
+        assert!(!rate_limited.is_context_too_long());
+    }
+}

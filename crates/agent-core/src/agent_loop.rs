@@ -11,8 +11,8 @@ use tracing::{debug, field::Empty, info, Instrument};
 use crate::{
     context::{
         budget,
-        compaction::{build_compaction_request, needs_compaction},
-        microcompact::{microcompact, MicrocompactPolicy},
+        compaction::{build_compaction_request, build_emergency_reset, needs_compaction},
+        microcompact::MicrocompactPolicy,
         tool_xml_leak::sanitize_tool_xml_leak,
         transcript::Transcript,
     },
@@ -51,7 +51,9 @@ const MAX_TOOL_XML_LEAK_RECOVERIES: u32 = 2;
 /// 单次 ModelStep 非正常退出后的自动重试上限（架构 §4.3）。指数退避，每次 emit toast。
 /// 与 model-gateway 的 `retry_request`（包初始 HTTP 发送的快速瞬时重试）正交：这一层
 /// 是「整轮模型调用」的用户可见重试，覆盖 SSE 流内 error / 上游 overloaded 等场景。
-const MAX_MODEL_RETRIES: u32 = 5;
+/// 2026-07-05 从 5 提升至 20，配合指数退避（1s→2s→4s→...→60s 封顶），应对上游
+/// 长时间不稳定（如 novita.ai 502）场景，减少用户手动点击 Continue 的频率。
+const MAX_MODEL_RETRIES: u32 = 20;
 
 /// 第 `attempt`（从 1 起）次重试前的退避时长：1s / 2s / 4s / 8s / 16s 封顶。
 /// 一次模型请求完成后的统一记账，三件事一起做：
@@ -106,7 +108,8 @@ fn record_request_usage<F: Fn(EventPayload)>(
 }
 
 fn model_retry_delay(attempt: u32) -> std::time::Duration {
-    let secs = 1u64 << attempt.saturating_sub(1).min(4);
+    // 指数退避：1s / 2s / 4s / 8s / 16s / 32s / 60s（封顶）。
+    let secs = (1u64 << attempt.saturating_sub(1)).min(60);
     std::time::Duration::from_secs(secs)
 }
 
@@ -131,7 +134,8 @@ fn is_retryable_model_error(e: &ModelError) -> bool {
     match e {
         ModelError::Cancelled | ModelError::Suspended => false,
         ModelError::Json(_) => false,
-        ModelError::Http { status, .. } => *status == 429 || *status >= 500,
+        ModelError::Http { status, .. } if !e.is_context_too_long() => *status == 429 || *status >= 500,
+        ModelError::Http { .. } => false,
         ModelError::Request(_) | ModelError::Other(_) => true,
     }
 }
@@ -169,6 +173,38 @@ fn continue_for_outcome(
             ContinueKind::NetworkError,
             format!("这次请求没成功（{e}），点「继续」重试"),
         )),
+    }
+}
+
+fn append_compact_boundary(
+    data_dir: Option<&std::path::Path>,
+    session_id: Option<&str>,
+    summary: String,
+    before_tokens: usize,
+    after_tokens: usize,
+    warn_label: &str,
+) {
+    if let (Some(dd), Some(sid)) = (data_dir, session_id) {
+        use crate::storage::sessions::{self as sess_store, Message, MessageMeta, Role};
+        let marker = Message {
+            id: sess_store::new_id(),
+            role: Role::Marker,
+            content: summary.clone(),
+            attachments: Vec::new(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            created_at: chrono::Utc::now().timestamp_millis(),
+            meta: Some(MessageMeta::CompactBoundary {
+                summary,
+                before_tokens,
+                after_tokens,
+            }),
+            subagent_call_id: None,
+            run_duration_ms: None,
+        };
+        if let Err(e) = sess_store::append_message(dd, sid, marker) {
+            tracing::warn!(error = %e, warn_label, "写 compact_boundary marker 失败，忽略");
+        }
     }
 }
 
@@ -633,6 +669,7 @@ pub async fn run_loop(
     // 是否要在 surface 弹 toast + 写 pending_continue（架构 §4.3）。
     let mut last_finish = FinishReason::Stop;
 
+    let mut emergency_reset_attempted = false;
     let result: Result<AssistantOutput, ModelError> = loop {
         if cancellation::is_cancelled(&cancel) {
             // Stop 时如果有排队待注入的 user message，先 drain 进 transcript + 落盘再 cancel——
@@ -678,10 +715,17 @@ pub async fn run_loop(
         // 插队的 `Goal set` 已落盘 → 落 set marker（若 run 跑时设了 goal）。
         maybe_emit_pending_set_marker(data_dir.as_deref(), session_id.as_deref());
 
-        // Microcompact：每轮模型请求前先把超阈值的老 tool_result 压缩为占位符。
-        // 不消耗模型调用，只改 transcript entries，幂等。
-        let mc_report = microcompact(&mut transcript.entries, &MicrocompactPolicy::default());
-        // 把被压缩的原文落 txt（架构 §4.7 / Step 9）：data_dir + session_id 都给定时
+        // Microcompact：每轮模型请求前按上下文压力把老 tool_result 压缩为占位符。
+        // 低于 50% 不动历史；达到压力线后保护最近 turns，只压老的大工具输出。
+        let mc_report = crate::context::microcompact::microcompact_with_pressure(
+            transcript.system.as_deref(),
+            &mut transcript.entries,
+            compaction_policy,
+            calib_real,
+            calib_estimated,
+            &MicrocompactPolicy::default(),
+        );
+        // 把被压缩的 sanitized 全文落 txt（架构 §4.7 / Step 9）：data_dir + session_id 都给定时
         // 才落，否则只是 in-memory 占位符。占位符里写了 call_id，LLM 可用 Read
         // `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt` 按需检索原始内容。
         if !mc_report.shadowed_artifacts.is_empty() {
@@ -726,12 +770,13 @@ pub async fn run_loop(
             );
             let _enter = compaction_span.enter();
 
-            // L2 自动压缩：与手动 /compact 同一个 compact_with_llm 函数——调一次 LLM
-            // 把整段历史浓缩成接力摘要。绝不用纯结构化裁剪（会把长对话砍到几十 token）。
+            // L3 自动压缩：调一次 LLM 把整段历史浓缩成接力摘要。压缩成功后会把
+            // 被替换窗口归档到 compactions/，session.jsonl 继续只追加 CompactBoundary marker。
             let compact_start = Instant::now();
+            let compact_window_entries = transcript.entries.clone();
             let (compact_before_tokens, compact_req) = build_compaction_request(
                 transcript.system.as_deref(),
-                transcript.entries.clone(),
+                compact_window_entries.clone(),
                 None,
             );
             let compact_req_snapshot = model_io_dump.as_ref().map(|_| compact_req.clone());
@@ -791,6 +836,19 @@ pub async fn run_loop(
                         before_tokens,
                         after_tokens, "context compacted (llm summary)"
                     );
+                    if let (Some(dd), Some(sid)) = (data_dir.as_ref(), session_id.as_deref()) {
+                        if let Err(e) = crate::storage::compactions::save_compaction_archive(
+                            dd,
+                            sid,
+                            &compact_window_entries,
+                            before_tokens,
+                            after_tokens,
+                            &summary,
+                        ) {
+                            tracing::warn!(error = %e, "L3 压缩：写 compaction archive 失败，继续写 boundary");
+                        }
+                    }
+
                     transcript.entries = compaction_result.entries;
                     drop(_enter);
 
@@ -800,30 +858,14 @@ pub async fn run_loop(
 
                     // 写 compact_boundary marker 到 session.jsonl，前端渲染压缩分隔线 +
                     // 可展开的摘要（与手动 /compact 落的 marker 同形态）。
-                    if let (Some(dd), Some(sid)) = (data_dir.as_ref(), session_id.as_deref()) {
-                        use crate::storage::sessions::{
-                            self as sess_store, Message, MessageMeta, Role,
-                        };
-                        let marker = Message {
-                            id: sess_store::new_id(),
-                            role: Role::Marker,
-                            content: summary.clone(),
-                            attachments: Vec::new(),
-                            tool_calls: Vec::new(),
-                            parts: Vec::new(),
-                            created_at: chrono::Utc::now().timestamp_millis(),
-                            meta: Some(MessageMeta::CompactBoundary {
-                                summary,
-                                before_tokens,
-                                after_tokens,
-                            }),
-                            subagent_call_id: None,
-                            run_duration_ms: None,
-                        };
-                        if let Err(e) = sess_store::append_message(dd, sid, marker) {
-                            tracing::warn!(error = %e, "L2 压缩：写 compact_boundary marker 失败，忽略");
-                        }
-                    }
+                    append_compact_boundary(
+                        data_dir.as_deref(),
+                        session_id.as_deref(),
+                        summary,
+                        before_tokens,
+                        after_tokens,
+                        "L3 压缩",
+                    );
 
                     emit(EventPayload::ContextCompacted {
                         before_tokens,
@@ -1084,6 +1126,59 @@ pub async fn run_loop(
         let response = match response_result {
             Ok(response) => response,
             Err(e) => {
+                if e.is_context_too_long() && !emergency_reset_attempted {
+                    emergency_reset_attempted = true;
+                    let emergency_window_entries = transcript.entries.clone();
+                    let emergency = build_emergency_reset(
+                        transcript.system.as_deref(),
+                        emergency_window_entries.clone(),
+                        compaction_policy,
+                        "provider reported context too long",
+                    );
+                    let before_tokens = emergency.before_tokens;
+                    let after_tokens = emergency.after_tokens;
+                    let summary = emergency.summary.clone();
+                    if let (Some(dd), Some(sid)) = (data_dir.as_ref(), session_id.as_deref()) {
+                        if let Err(save_err) = crate::storage::compactions::save_compaction_archive(
+                            dd,
+                            sid,
+                            &emergency_window_entries,
+                            before_tokens,
+                            after_tokens,
+                            &summary,
+                        ) {
+                            tracing::warn!(error = %save_err, "L4 emergency reset：写 compaction archive 失败，继续 reset");
+                        }
+                    }
+                    transcript.entries = emergency.entries;
+                    if let Some(p) = persister.as_ref() {
+                        p.flush_segment().await;
+                    }
+                    append_compact_boundary(
+                        data_dir.as_deref(),
+                        session_id.as_deref(),
+                        summary,
+                        before_tokens,
+                        after_tokens,
+                        "L4 emergency reset",
+                    );
+                    emit(EventPayload::ContextCompacted {
+                        before_tokens,
+                        after_tokens,
+                    });
+                    emit(EventPayload::Notice {
+                        level: LogLevel::Warn,
+                        message: "模型上下文超限，已执行 emergency reset 并自动重试".to_string(),
+                        dedup_key: Some("context-too-long-emergency-reset".to_string()),
+                    });
+                    turn_span.record(attr::STOP_REASON, "context_too_long_reset");
+                    emit(EventPayload::TurnFinished {
+                        turn_id: turn_id.clone(),
+                        turn: turn_index,
+                        stop_reason: StopReason::Failed,
+                    });
+                    continue;
+                }
                 turn_span.record(attr::STOP_REASON, "failed");
                 emit(EventPayload::TurnFinished {
                     turn_id: turn_id.clone(),
@@ -1346,13 +1441,10 @@ pub async fn run_loop(
                                     // 熔断1：判不可能 → 清目标、正常出 turn。
                                 }
                                 crate::goal::GoalVerdict::NotYet(reason) => {
-                                    // 用户在 turn 末尾 cancel 会被 judge 归一成 NotYet——这里先拦掉，
-                                    // 避免虚增计数 / 注入无用 feedback / 多发 GoalProgress。
+                                    // 用户在 turn 末尾 cancel 可能发生在 judge 调用前、调用中或返回后。
+                                    // cancel 必须保持 RunCancelled 语义，不能被后置裁决归一成正常完成。
                                     if cancellation::is_cancelled(&cancel) {
-                                        break Ok(AssistantOutput {
-                                            text: leak.text,
-                                            attachments: all_attachments,
-                                        });
+                                        break Err(ModelError::Cancelled);
                                     }
                                     goal_iterations += 1;
                                     // 落盘更新 iterations + last_reason（跨重启可见）。
@@ -1765,16 +1857,16 @@ mod tests {
         assert_eq!(kind, ContinueKind::NetworkError);
     }
 
-    struct StubTool;
+    struct MediumStubTool;
 
     #[async_trait]
-    impl crate::tools::Tool for StubTool {
+    impl crate::tools::Tool for MediumStubTool {
         fn name(&self) -> &str {
             "Stub"
         }
 
         fn description(&self) -> &str {
-            "stub tool"
+            "medium stub tool"
         }
 
         fn parameters_schema(&self) -> Value {
@@ -1782,7 +1874,7 @@ mod tests {
         }
 
         async fn execute(&self, _input: Value) -> AppResult<String> {
-            Ok("工具结果".repeat(12_000))
+            Ok("x".repeat(5_900))
         }
     }
 
@@ -1844,6 +1936,47 @@ mod tests {
             Ok(ModelResponse::Done {
                 finish: model_gateway::types::FinishReason::Stop,
                 text: "完成".to_string(),
+                reasoning: String::new(),
+                attachments: Vec::new(),
+                usage: Usage::default(),
+                reasoning_signature: String::new(),
+            })
+        }
+    }
+
+    struct GoalJudgeCancelClient {
+        stream_calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ModelClient for GoalJudgeCancelClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        fn supports_streaming_tools(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            cancel.store(true, Ordering::SeqCst);
+            Err(ModelError::Cancelled)
+        }
+
+        async fn stream(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+            _on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            self.stream_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
+                text: "完成但目标仍需裁决".to_string(),
                 reasoning: String::new(),
                 attachments: Vec::new(),
                 usage: Usage::default(),
@@ -2085,6 +2218,62 @@ mod tests {
         calls: AtomicUsize,
     }
 
+    struct EmergencyResetClient {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ModelClient for EmergencyResetClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        fn supports_streaming_tools(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            unreachable!("test uses streaming")
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            _cancel: CancelFlag,
+            _on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            match self.calls.fetch_add(1, Ordering::SeqCst) {
+                0 => Err(ModelError::Http {
+                    status: 400,
+                    body: "prompt_too_long: input tokens exceed context window; secret=sk-do-not-persist".to_string(),
+                }),
+                1 => {
+                    let first_user = req.entries.first().expect("reset should preserve a summary entry");
+                    assert!(
+                        matches!(first_user, TranscriptEntry::User(user) if user.text.contains("[前情概要]")
+                            && user.text.contains("L4 emergency reset triggered")
+                            && user.text.contains("provider reported context too long")
+                            && !user.text.contains("sk-do-not-persist")),
+                        "retry request should start with sanitized emergency summary"
+                    );
+                    Ok(ModelResponse::Done {
+                        finish: model_gateway::types::FinishReason::Stop,
+                        text: "reset 后继续".to_string(),
+                        reasoning: String::new(),
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                        reasoning_signature: String::new(),
+                    })
+                }
+                _ => unreachable!("unexpected extra model call"),
+            }
+        }
+    }
+
     #[async_trait]
     impl ModelClient for PendingInputAfterTurnFinishedClient {
         fn provider_id(&self) -> &str {
@@ -2209,12 +2398,12 @@ mod tests {
         );
         let persister_handle = persister.handle();
         let mut policy = CompactionPolicy::default();
-        policy.token_budget = 10_500;
+        policy.token_budget = 10_100;
 
         let result = run_loop(
             LoopParams {
                 client: &client,
-                registry: Arc::new(ToolRegistry::new(vec![Box::new(StubTool)])),
+                registry: Arc::new(ToolRegistry::new(vec![Box::new(MediumStubTool)])),
                 hitl: Arc::new(HitlGate::default()),
                 hooks: Arc::new(HookManager::empty()),
                 transcript: &mut transcript,
@@ -2280,6 +2469,245 @@ mod tests {
             before_idx < boundary_idx && boundary_idx < after_idx,
             "压缩 marker 必须切开同一 run 的前后输出，实际顺序: before={before_idx}, boundary={boundary_idx}, after={after_idx}"
         );
+    }
+
+    #[tokio::test]
+    async fn emergency_reset_archives_context_and_retries_once() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let session = crate::storage::sessions::create(
+            data_dir.path(),
+            "test".into(),
+            "test-model".into(),
+            None,
+            None,
+        )
+        .unwrap();
+        let session_id = session.id.clone();
+        crate::storage::sessions::append_message(
+            data_dir.path(),
+            &session_id,
+            crate::storage::sessions::Message {
+                id: crate::storage::sessions::new_id(),
+                role: crate::storage::sessions::Role::User,
+                content: "请继续这个长会话".to_string(),
+                attachments: Vec::new(),
+                tool_calls: Vec::new(),
+                parts: Vec::new(),
+                created_at: chrono::Utc::now().timestamp_millis(),
+                meta: None,
+                subagent_call_id: None,
+                run_duration_ms: None,
+            },
+        )
+        .unwrap();
+
+        let mut transcript = Transcript::new(None);
+        for idx in 0..4 {
+            transcript.push_user(format!("历史用户消息 {idx} {}", "x".repeat(2_000)), Vec::new());
+            transcript.push_assistant(format!("历史助手消息 {idx}"), Vec::new());
+        }
+        transcript.push_user("请继续这个长会话".to_string(), Vec::new());
+
+        let client = EmergencyResetClient {
+            calls: AtomicUsize::new(0),
+        };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_for_sink = Arc::clone(&events);
+        let state = Arc::new(RunState::new(RunId::new()));
+        let workspace = Workspace::new(data_dir.path().to_path_buf(), Vec::new());
+        let persister = crate::run_persister::RunPersister::new(
+            data_dir.path().to_path_buf(),
+            session_id.clone(),
+        );
+        let persister_handle = persister.handle();
+
+        let result = run_loop(
+            LoopParams {
+                client: &client,
+                registry: Arc::new(ToolRegistry::new(Vec::new())),
+                hitl: Arc::new(HitlGate::default()),
+                hooks: Arc::new(HookManager::empty()),
+                transcript: &mut transcript,
+                enabled_tools: &[],
+                compaction_policy: &CompactionPolicy::default(),
+                workspace,
+                stream: true,
+                cancel: Arc::new(AtomicBool::new(false)),
+                state,
+                agent: AgentRef::new("test"),
+                parent: None,
+                model_io_dump: None,
+                pending_inputs: None,
+                consumed_pending_inputs: None,
+                pending_inputs_accepting: None,
+                run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
+                model_id: Some("test-model".to_string()),
+                judge_client: None,
+                force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                data_dir: Some(data_dir.path().to_path_buf()),
+                session_id: Some(session_id.clone()),
+                phase: None,
+                resume_from: None,
+                edits_worktree: None,
+                max_tool_iterations: None,
+                system_rules: None,
+                subagent_ctx: None,
+                subagent_bypass: false,
+                persister: Some(persister),
+                call_tag: Default::default(),
+            },
+            Arc::new(move |event| {
+                persister_handle.observe(&event);
+                events_for_sink.lock().unwrap().push(event.payload);
+            }),
+        )
+        .await
+        .expect("emergency reset should retry and finish");
+
+        assert_eq!(result.text, "reset 后继续");
+        assert_eq!(client.calls.load(Ordering::SeqCst), 2);
+        assert!(matches!(
+            transcript.entries.first(),
+            Some(TranscriptEntry::User(user)) if user.text.contains("[前情概要]")
+                && user.text.contains("L4 emergency reset triggered")
+                && !user.text.contains("sk-do-not-persist")
+        ));
+
+        let events = events.lock().unwrap();
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, EventPayload::ContextCompacted { .. })));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, EventPayload::RunFailed { .. })));
+        assert!(events.iter().any(|event| {
+            matches!(event, EventPayload::Notice { message, .. } if message.contains("上下文超限"))
+        }));
+
+        let loaded = crate::storage::sessions::load(data_dir.path(), &session_id).unwrap();
+        assert!(loaded.messages.iter().any(|message| {
+            matches!(
+                message.meta,
+                Some(crate::storage::sessions::MessageMeta::CompactBoundary { .. })
+            ) && message.content.contains("provider reported context too long")
+                && !message.content.contains("sk-do-not-persist")
+        }));
+        let compactions_dir = data_dir.path().join("sessions").join(&session_id).join("compactions");
+        let meta_count = std::fs::read_dir(&compactions_dir)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .ok()
+                    .and_then(|entry| entry.file_name().into_string().ok())
+                    .is_some_and(|name| name.ends_with(".meta.json"))
+            })
+            .count();
+        assert_eq!(meta_count, 1);
+    }
+
+    #[tokio::test]
+    async fn goal_judge_cancel_ends_run_as_cancelled() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let session = crate::storage::sessions::create(
+            data_dir.path(),
+            "test".into(),
+            "test-model".into(),
+            None,
+            None,
+        )
+        .unwrap();
+        let session_id = session.id.clone();
+        crate::storage::sessions::append_message(
+            data_dir.path(),
+            &session_id,
+            crate::storage::sessions::Message {
+                id: crate::storage::sessions::new_id(),
+                role: crate::storage::sessions::Role::User,
+                content: "请完成目标".to_string(),
+                attachments: Vec::new(),
+                tool_calls: Vec::new(),
+                parts: Vec::new(),
+                created_at: chrono::Utc::now().timestamp_millis(),
+                meta: None,
+                subagent_call_id: None,
+                run_duration_ms: None,
+            },
+        )
+        .unwrap();
+        crate::storage::sessions::set_active_goal(
+            data_dir.path(),
+            &session_id,
+            Some(crate::storage::sessions::ActiveGoal {
+                condition: "必须通过 judge".to_string(),
+                created_at: chrono::Utc::now().timestamp_millis(),
+                iterations: 0,
+                last_reason: None,
+                pending_set_marker: false,
+            }),
+        )
+        .unwrap();
+
+        let client = Arc::new(GoalJudgeCancelClient {
+            stream_calls: AtomicUsize::new(0),
+        });
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut transcript = Transcript::new(None);
+        transcript.push_user("请完成目标".to_string(), Vec::new());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_for_sink = Arc::clone(&events);
+        let state = Arc::new(RunState::new(RunId::new()));
+        let workspace = Workspace::new(data_dir.path().to_path_buf(), Vec::new());
+
+        let result = run_loop(
+            LoopParams {
+                client: client.as_ref(),
+                registry: Arc::new(ToolRegistry::new(Vec::new())),
+                hitl: Arc::new(HitlGate::default()),
+                hooks: Arc::new(HookManager::empty()),
+                transcript: &mut transcript,
+                enabled_tools: &[],
+                compaction_policy: &CompactionPolicy::default(),
+                workspace,
+                stream: true,
+                cancel: cancel.clone(),
+                state,
+                agent: AgentRef::new("test"),
+                parent: None,
+                model_io_dump: None,
+                pending_inputs: None,
+                consumed_pending_inputs: None,
+                pending_inputs_accepting: None,
+                run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
+                model_id: Some("test-model".to_string()),
+                judge_client: Some(client.clone()),
+                force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                data_dir: Some(data_dir.path().to_path_buf()),
+                session_id: Some(session_id),
+                phase: None,
+                resume_from: None,
+                edits_worktree: None,
+                max_tool_iterations: None,
+                system_rules: None,
+                subagent_ctx: None,
+                subagent_bypass: false,
+                persister: None,
+                call_tag: Default::default(),
+            },
+            Arc::new(move |event| {
+                events_for_sink.lock().unwrap().push(event.payload);
+            }),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(ModelError::Cancelled)),
+            "goal judge cancel must propagate as run cancellation, got {result:?}"
+        );
+        let events = events.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(e, EventPayload::RunCancelled)));
+        assert!(!events.iter().any(|e| matches!(e, EventPayload::RunFinished { .. })));
+        assert_eq!(client.stream_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

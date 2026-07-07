@@ -146,6 +146,22 @@ impl Effects {
         }
     }
 
+    /// Destructive 但无路径——BashInput 等工具用：向运行中进程发输入可触发副作用，
+    /// 但不直接写文件系统，paths 为空。
+    fn destructive_no_paths() -> Self {
+        Self {
+            paths: Vec::new(),
+            command_fingerprint: None,
+            network: false,
+            domain: None,
+            risk: RiskLevel::High,
+            class: EffectClass::Destructive,
+            is_concurrent_safe: false,
+            segments: Vec::new(),
+            dangerous_kinds: Vec::new(),
+        }
+    }
+
     /// 是否命中任一危险复合模式（HitlGate 据此强制审批 + 拒绝 AllowAndRemember）。
     pub fn has_dangerous_pattern(&self) -> bool {
         !self.dangerous_kinds.is_empty()
@@ -159,7 +175,7 @@ pub fn analyze_effects(tool_name: &str, input: &Value) -> Effects {
     match tool_name {
         "Ask" | "ask" => Effects::needs_human_input(),
 
-        "Bash" | "PowerShell" => analyze_shell(input),
+        "Bash" | "PowerShell" | "InteractiveBash" => analyze_shell(input),
 
         "Read" => {
             let paths = file_path_paths(input, "file_path");
@@ -192,6 +208,14 @@ pub fn analyze_effects(tool_name: &str, input: &Value) -> Effects {
         }
 
         "Skill" | "TodoWrite" | "PlanMode" | "BashOutput" | "KillShell" => Effects::read_only(),
+
+        // BashInput 向运行中进程发送 stdin——可触发副作用（确认安装、执行命令等），
+        // 按 Destructive 走审批。fingerprint 固定为 "bash-input"，让用户能配 allow 规则。
+        "BashInput" => Effects {
+            paths: Vec::new(),
+            command_fingerprint: Some("bash-input".into()),
+            ..Effects::destructive_no_paths()
+        },
 
         // PreviewStyle 只改内置浏览器预览元素的内联样式（不碰用户文件 / 不跑命令 / 不联网）——
         // 免审批。否则旁支会话每改一个样式都要审批，而旁支跑时无 HITL observer 会直接挂死。
