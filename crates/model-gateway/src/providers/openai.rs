@@ -193,7 +193,9 @@ impl ModelClient for OpenAiClient {
                                 if clean_optional(delta.name.as_deref()).is_some() {
                                     tool_delta_with_name += 1;
                                 }
-                                if let Some(arguments) = nonempty_optional(delta.arguments.as_deref()) {
+                                if let Some(arguments) =
+                                    nonempty_optional(delta.arguments.as_deref())
+                                {
                                     tool_delta_argument_bytes += arguments.len();
                                 }
                                 emit_tool_call_delta(

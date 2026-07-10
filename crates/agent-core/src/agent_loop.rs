@@ -134,7 +134,9 @@ fn is_retryable_model_error(e: &ModelError) -> bool {
     match e {
         ModelError::Cancelled | ModelError::Suspended => false,
         ModelError::Json(_) => false,
-        ModelError::Http { status, .. } if !e.is_context_too_long() => *status == 429 || *status >= 500,
+        ModelError::Http { status, .. } if !e.is_context_too_long() => {
+            *status == 429 || *status >= 500
+        }
         ModelError::Http { .. } => false,
         ModelError::Request(_) | ModelError::Other(_) => true,
     }
@@ -384,9 +386,15 @@ fn drain_pending_inputs(
         // surface 端不再即写即落（双落防护）。
         if let Some(p) = persister {
             let meta = input.meta.map(|pm| match pm {
-                protocol::PendingMessageMeta::SystemNotification { kind, task_id, tool_use_id } => {
-                    crate::storage::sessions::MessageMeta::SystemNotification { kind, task_id, tool_use_id }
-                }
+                protocol::PendingMessageMeta::SystemNotification {
+                    kind,
+                    task_id,
+                    tool_use_id,
+                } => crate::storage::sessions::MessageMeta::SystemNotification {
+                    kind,
+                    task_id,
+                    tool_use_id,
+                },
             });
             p.append_user(input.content.clone(), input.attachments.clone(), meta);
         }
@@ -2503,7 +2511,10 @@ mod tests {
 
         let mut transcript = Transcript::new(None);
         for idx in 0..4 {
-            transcript.push_user(format!("历史用户消息 {idx} {}", "x".repeat(2_000)), Vec::new());
+            transcript.push_user(
+                format!("历史用户消息 {idx} {}", "x".repeat(2_000)),
+                Vec::new(),
+            );
             transcript.push_assistant(format!("历史助手消息 {idx}"), Vec::new());
         }
         transcript.push_user("请继续这个长会话".to_string(), Vec::new());
@@ -2589,10 +2600,16 @@ mod tests {
             matches!(
                 message.meta,
                 Some(crate::storage::sessions::MessageMeta::CompactBoundary { .. })
-            ) && message.content.contains("provider reported context too long")
+            ) && message
+                .content
+                .contains("provider reported context too long")
                 && !message.content.contains("sk-do-not-persist")
         }));
-        let compactions_dir = data_dir.path().join("sessions").join(&session_id).join("compactions");
+        let compactions_dir = data_dir
+            .path()
+            .join("sessions")
+            .join(&session_id)
+            .join("compactions");
         let meta_count = std::fs::read_dir(&compactions_dir)
             .unwrap()
             .filter(|entry| {
@@ -2705,8 +2722,12 @@ mod tests {
             "goal judge cancel must propagate as run cancellation, got {result:?}"
         );
         let events = events.lock().unwrap();
-        assert!(events.iter().any(|e| matches!(e, EventPayload::RunCancelled)));
-        assert!(!events.iter().any(|e| matches!(e, EventPayload::RunFinished { .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, EventPayload::RunCancelled)));
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, EventPayload::RunFinished { .. })));
         assert_eq!(client.stream_calls.load(Ordering::SeqCst), 1);
     }
 

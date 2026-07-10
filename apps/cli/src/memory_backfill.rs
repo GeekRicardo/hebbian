@@ -98,10 +98,7 @@ pub async fn run(args: BackfillArgs) -> Result<()> {
                 let model = Some(result.model);
                 if args.consolidate {
                     agent_core::memory_consolidate::consolidate_for_session(
-                        &data_dir,
-                        &meta.id,
-                        480.0,
-                        0.0,
+                        &data_dir, &meta.id, 480.0, 0.0,
                     )
                     .await;
                 }

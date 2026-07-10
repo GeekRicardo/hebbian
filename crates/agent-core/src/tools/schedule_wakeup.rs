@@ -78,35 +78,32 @@ impl Tool for ScheduleWakeupTool {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let max_fire_ms = now_ms + (MAX_DELAY_SECS as i64) * 1000;
 
-        let (fire_at_ms, source_label): (i64, String) =
-            if let Some(fire_at_str) = input["fire_at"].as_str() {
-                let parsed = chrono::DateTime::parse_from_rfc3339(fire_at_str)
+        let (fire_at_ms, source_label): (i64, String) = if let Some(fire_at_str) =
+            input["fire_at"].as_str()
+        {
+            let parsed = chrono::DateTime::parse_from_rfc3339(fire_at_str)
                     .map_err(|e| {
                         AppError::msg(format!(
                             "ScheduleWakeup: fire_at 格式无效（需要 ISO 8601，如 2026-07-06T10:00:00Z）：{e}"
                         ))
                     })?;
-                let parsed_ms = parsed.timestamp_millis();
-                if parsed_ms <= now_ms {
-                    return Err(AppError::msg(
-                        "ScheduleWakeup: fire_at 必须在未来",
-                    ));
-                }
-                if parsed_ms > max_fire_ms {
-                    return Err(AppError::msg(format!(
-                        "ScheduleWakeup: fire_at 不能超过当前时间 {} 天",
-                        MAX_DELAY_SECS / 86400,
-                    )));
-                }
-                (parsed_ms, "fire_at".into())
-            } else if let Some(raw_delay) = input["delay_secs"].as_u64() {
-                let delay = raw_delay.min(MAX_DELAY_SECS).max(1);
-                (now_ms + (delay as i64) * 1000, "delay_secs".into())
-            } else {
-                return Err(AppError::msg(
-                    "ScheduleWakeup: 需要 delay_secs 或 fire_at",
-                ));
-            };
+            let parsed_ms = parsed.timestamp_millis();
+            if parsed_ms <= now_ms {
+                return Err(AppError::msg("ScheduleWakeup: fire_at 必须在未来"));
+            }
+            if parsed_ms > max_fire_ms {
+                return Err(AppError::msg(format!(
+                    "ScheduleWakeup: fire_at 不能超过当前时间 {} 天",
+                    MAX_DELAY_SECS / 86400,
+                )));
+            }
+            (parsed_ms, "fire_at".into())
+        } else if let Some(raw_delay) = input["delay_secs"].as_u64() {
+            let delay = raw_delay.min(MAX_DELAY_SECS).max(1);
+            (now_ms + (delay as i64) * 1000, "delay_secs".into())
+        } else {
+            return Err(AppError::msg("ScheduleWakeup: 需要 delay_secs 或 fire_at"));
+        };
 
         *self.phase.lock().unwrap() = Some(RunPhase::AwaitingCron {
             fire_at_ms,

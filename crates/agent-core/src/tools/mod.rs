@@ -293,7 +293,9 @@ pub fn default_tools(
         tools.push(Box::new(task::TaskTool::new(subagents)));
     }
     if has_session {
-        tools.push(Box::new(create_subagent::CreateSubagentTool::new(sid_for_create)));
+        tools.push(Box::new(create_subagent::CreateSubagentTool::new(
+            sid_for_create,
+        )));
     }
     tools
 }

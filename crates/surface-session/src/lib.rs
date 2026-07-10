@@ -74,7 +74,13 @@ pub struct SurfaceHooks {
     >,
     pub on_question: Option<
         Arc<
-            dyn Fn(&PermissionRequestId, &str, &[QuestionOption], bool, &[AskQuestion]) -> Option<UserAnswer>
+            dyn Fn(
+                    &PermissionRequestId,
+                    &str,
+                    &[QuestionOption],
+                    bool,
+                    &[AskQuestion],
+                ) -> Option<UserAnswer>
                 + Send
                 + Sync,
         >,
@@ -685,14 +691,18 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, input: TurnInput) -> Result<
             workspace: workspace.clone(),
             client,
             enabled_tools,
-            initial_transcript: Transcript::from_session(prior.system_prompt.clone(), &prior.messages),
+            initial_transcript: Transcript::from_session(
+                prior.system_prompt.clone(),
+                &prior.messages,
+            ),
             recorder: None,
             model_io_dump,
             permission_store: runtime.permission_store.clone(),
             session_id: Some(session_id.clone()),
             run_mode,
             model_id: Some(prior.model.clone()),
-            force_automode: agent_core::run_mode::LiveForceAutomodeRegistry::global().get(session_id),
+            force_automode: agent_core::run_mode::LiveForceAutomodeRegistry::global()
+                .get(session_id),
             // surface 主对话：tag=Main（前端不额外标记，§4.11）。
             call_tag: model_gateway::types::ModelCallTag::Main,
             data_dir: Some(data_dir.to_path_buf()),
@@ -729,13 +739,14 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, input: TurnInput) -> Result<
             let _ = run_checkpoint::delete(data_dir, session_id);
             WakeupScheduler::global().discard_run(session_id, &ckpt.run_id);
             let cause = match &ckpt.phase {
-                agent_core::storage::run_checkpoint::RunPhase::AwaitingCron {
-                    reason, ..
-                } => ResumeCause::CronFired {
-                    original_reason: reason.clone(),
-                },
+                agent_core::storage::run_checkpoint::RunPhase::AwaitingCron { reason, .. } => {
+                    ResumeCause::CronFired {
+                        original_reason: reason.clone(),
+                    }
+                }
                 agent_core::storage::run_checkpoint::RunPhase::AwaitingBackgroundTask {
-                    task_id, ..
+                    task_id,
+                    ..
                 } => ResumeCause::BgTaskFinished {
                     task_id: task_id.clone(),
                     exit_code: None,

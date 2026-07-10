@@ -337,7 +337,9 @@ mod tests {
         if let TranscriptEntry::ToolResults(results) = &entries[1] {
             assert!(results[0].content.starts_with(SHADOWED_PLACEHOLDER_PREFIX));
             assert!(results[0].content.contains("BEGIN HEAD"));
-            assert!(results[0].content.contains("Full output: tool_results/c-Bash.txt"));
+            assert!(results[0]
+                .content
+                .contains("Full output: tool_results/c-Bash.txt"));
         } else {
             panic!("old result should remain a tool result entry");
         }
@@ -350,7 +352,11 @@ mod tests {
 
     #[test]
     fn shadowed_artifact_is_sanitized() {
-        let raw = format!("\u{1b}[31mHEAD\u{1b}[0m token={}\n{}", "a".repeat(900), large_content(3_000));
+        let raw = format!(
+            "\u{1b}[31mHEAD\u{1b}[0m token={}\n{}",
+            "a".repeat(900),
+            large_content(3_000)
+        );
         let mut entries = vec![TranscriptEntry::ToolResults(vec![tr("Bash", &raw)])];
         let report = microcompact(&mut entries, &MicrocompactPolicy::default());
 

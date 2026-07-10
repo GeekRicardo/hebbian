@@ -2461,8 +2461,12 @@ fn materialize_tool_output(
         return (sanitized.text, None); // 调用方继续走 truncate_tool_result
     };
 
-    let path = match crate::storage::tool_results::save_tool_result(dd, sid, call_id, &sanitized.text)
-    {
+    let path = match crate::storage::tool_results::save_tool_result(
+        dd,
+        sid,
+        call_id,
+        &sanitized.text,
+    ) {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(call_id, error = %e, "materialize: save_tool_result failed; fallback truncate");
@@ -4126,7 +4130,10 @@ mod tests {
         );
         let a = artifact.expect("artifact should be produced");
         assert!(a.path.ends_with("call_abc.txt"));
-        assert!(a.bytes < raw.len() as u64, "sanitized artifact should be smaller after redaction");
+        assert!(
+            a.bytes < raw.len() as u64,
+            "sanitized artifact should be smaller after redaction"
+        );
         let on_disk = std::fs::read_to_string(&a.path).unwrap();
         assert!(on_disk.contains("HEAD"));
         assert!(on_disk.contains("TAIL error: boom"));
@@ -4162,7 +4169,11 @@ mod tests {
 
     #[test]
     fn materialize_without_data_dir_sanitizes_then_leaves_truncation_to_caller() {
-        let raw = format!("\u{1b}[31mHEAD\u{1b}[0m token={}\n{}", "a".repeat(900), "y".repeat(7_000));
+        let raw = format!(
+            "\u{1b}[31mHEAD\u{1b}[0m token={}\n{}",
+            "a".repeat(900),
+            "y".repeat(7_000)
+        );
         let (inline, artifact) = materialize_tool_output(raw, "Bash", "c1", false, None, None);
         // 没 data_dir → 不落盘；但仍先清洗，再交给后续 truncate 收尾。
         assert!(artifact.is_none());

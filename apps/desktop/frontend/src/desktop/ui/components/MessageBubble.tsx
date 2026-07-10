@@ -1445,6 +1445,7 @@ function ToolCallDetail({
   const [bgTaskState, setBgTaskState] = useState<string | null>(null);
   const [bgOutput, setBgOutput] = useState<string>("");
   const [killedLocally, setKilledLocally] = useState(false);
+  const [promotedLocally, setPromotedLocally] = useState(false);
 
   // elapsed / timeout 倒计时（默认 60s，与 Rust DEFAULT_TIMEOUT_SECS 一致）
   const timeoutSecs =
@@ -1531,36 +1532,50 @@ function ToolCallDetail({
   // 最终用于 kill 的 task_id
   const effectiveTaskId = taskIdFromResult || matchedTaskId;
 
-  // Kill 处理函数：有 task_id 精确杀，没有走 interrupt 取消整轮 run
+  // Kill 处理函数：必须精确到 task_id，不能 fallback 到 cancelStreaming，
+  // 否则会取消整轮 agent loop，而不是只结束 Bash 工具。
   const handleKill = async () => {
     if (!sessionId) return;
-    if (effectiveTaskId) {
-      // 精确 kill（后台任务 / 已匹配到 task_id 的前台）
-      try {
-        await api.killBackgroundTask(sessionId, effectiveTaskId);
-        setKilledLocally(true);
-        setBgTaskState("killed");
-        toast.success(`已终止任务 ${effectiveTaskId}`);
-      } catch (err) {
-        toast.error(`终止失败: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    } else {
-      // 前台命令，还没有 task_id → 取消整轮 run
-      try {
-        useStore.getState().cancelStreaming();
-        setKilledLocally(true);
-        toast.success("已终止当前命令");
-      } catch (err) {
-        toast.error(`终止失败: ${err instanceof Error ? err.message : String(err)}`);
-      }
+    if (!effectiveTaskId) {
+      toast.info("命令刚启动，还没准备好停止，请稍后再试");
+      return;
+    }
+    try {
+      await api.killBackgroundTask(sessionId, effectiveTaskId);
+      setKilledLocally(true);
+      setBgTaskState("killed");
+      toast.success(`已终止任务 ${effectiveTaskId}`);
+    } catch (err) {
+      toast.error(`终止失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const handlePromote = async () => {
+    if (!sessionId) return;
+    if (!effectiveTaskId) {
+      toast.info("命令刚启动，还没准备好转后台，请稍后再试");
+      return;
+    }
+    try {
+      await api.promoteBackgroundTask(sessionId, effectiveTaskId);
+      setPromotedLocally(true);
+      setBgTaskState("running");
+      toast.success("已转到后台继续运行");
+    } catch (err) {
+      toast.error(`转后台失败: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
   const isBgTaskRunning = bgTaskState === "running";
   const isRunning = call.status === "running";
-  // 所有 running 的 shell 命令都显示按钮。
-  // 有 task_id 时精确 kill，没有时走 interrupt 取消整轮 run。
-  const canKill = sessionId && !killedLocally && (isRunning || isBgTaskRunning) && isShellCommandTool(name);
+  const isForegroundShellRunning = isRunning && isShellCommandTool(name) && !taskIdFromResult;
+  const canKill = !!sessionId && !killedLocally && (isRunning || isBgTaskRunning) && isShellCommandTool(name);
+  const canPromote =
+    !!sessionId &&
+    !killedLocally &&
+    !promotedLocally &&
+    isForegroundShellRunning &&
+    elapsed >= 60;
 
   if (subagentTaskIdFromResult) {
     const subagentName = call.subagentType || "子代理";
@@ -1612,12 +1627,21 @@ function ToolCallDetail({
           <ToolPre dark>{body}</ToolPre>
         </ExpandButton>
         <ToolPre dark>{body}</ToolPre>
-        {/* 终止按钮 + 倒计时 */}
+        {/* 控制按钮 + 倒计时 */}
         {canKill && (
           <div className="absolute top-2 right-10 flex items-center gap-2">
             <span className="tabular-nums text-[11px] text-muted-foreground/70 font-mono whitespace-nowrap select-none">
               {elapsed}s / {timeoutSecs}s
             </span>
+            {canPromote && (
+              <button
+                onClick={handlePromote}
+                className="flex items-center gap-1 rounded-md bg-amber-500/10 px-2 py-1 text-xs text-amber-600 hover:bg-amber-500/20 transition-colors"
+                title="转到后台继续运行"
+              >
+                后台
+              </button>
+            )}
             <button
               onClick={handleKill}
               className="flex items-center gap-1 rounded-md bg-red-500/10 px-2 py-1 text-xs text-red-500 hover:bg-red-500/20 transition-colors"

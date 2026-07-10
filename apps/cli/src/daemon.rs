@@ -236,10 +236,12 @@ fn translate_wire_event(event: &WireEvent, usage: &mut UsageTotals) -> Option<Da
             from: from.clone(),
             to: to.clone(),
         }),
-        WireEvent::SessionTitleChanged { session_id, title } => Some(DaemonEvent::SessionTitleChanged {
-            session_id: session_id.clone(),
-            title: title.clone(),
-        }),
+        WireEvent::SessionTitleChanged { session_id, title } => {
+            Some(DaemonEvent::SessionTitleChanged {
+                session_id: session_id.clone(),
+                title: title.clone(),
+            })
+        }
         WireEvent::SessionTitleGenerationFailed { session_id, reason } => {
             Some(DaemonEvent::SessionTitleGenerationFailed {
                 session_id: session_id.clone(),
@@ -664,21 +666,15 @@ pub async fn run_once(args: RunOnceArgs) -> Result<i32> {
         .await?;
     runtime.state.set_run_mode(prepared.run_mode);
     agent_core::run_mode::LiveRunModeRegistry::global().set(&session_id, prepared.run_mode);
-    surface_session::register_wakeup_resume_handler(
-        data_dir.clone(),
-        permission_store,
-        runtimes,
-    );
+    surface_session::register_wakeup_resume_handler(data_dir.clone(), permission_store, runtimes);
     spawn_event_pump(runtime.clone());
     emit_started(&session_id);
 
     let auto_resolve = Arc::new(AutoResolveStats::default());
     let (status_tx, status_rx) = oneshot::channel();
     let status_tx = Arc::new(std::sync::Mutex::new(Some(status_tx)));
-    let input = TurnInput::text(task).with_hooks(auto_resolve_hooks(
-        auto_resolve.clone(),
-        status_tx.clone(),
-    ));
+    let input = TurnInput::text(task)
+        .with_hooks(auto_resolve_hooks(auto_resolve.clone(), status_tx.clone()));
 
     let started = std::time::Instant::now();
     runtime

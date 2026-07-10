@@ -169,7 +169,16 @@ impl NativeApp {
         let tx = self.events_tx.clone();
         let session_id = session.id.clone();
         self.rt.spawn(async move {
-            if let Err(err) = send_message(data_dir, permission_store, runtimes, session_id, text, tx.clone()).await {
+            if let Err(err) = send_message(
+                data_dir,
+                permission_store,
+                runtimes,
+                session_id,
+                text,
+                tx.clone(),
+            )
+            .await
+            {
                 let _ = tx.send(UiEvent::Error(err.to_string()));
             }
         });
@@ -188,9 +197,14 @@ impl NativeApp {
         let tx = self.events_tx.clone();
         let session_id = session.id.clone();
         self.rt.spawn(async move {
-            match runtimes.ensure(&data_dir, permission_store, &session_id).await {
+            match runtimes
+                .ensure(&data_dir, permission_store, &session_id)
+                .await
+            {
                 Ok(runtime) => {
-                    runtime.state.resolve_approval(&pending.request_id, decision);
+                    runtime
+                        .state
+                        .resolve_approval(&pending.request_id, decision);
                 }
                 Err(err) => {
                     let _ = tx.send(UiEvent::Error(err.to_string()));
@@ -212,7 +226,10 @@ impl NativeApp {
         let tx = self.events_tx.clone();
         let session_id = session.id.clone();
         self.rt.spawn(async move {
-            match runtimes.ensure(&data_dir, permission_store, &session_id).await {
+            match runtimes
+                .ensure(&data_dir, permission_store, &session_id)
+                .await
+            {
                 Ok(runtime) => {
                     runtime.state.answer_question(&pending.request_id, answer);
                 }
@@ -238,7 +255,11 @@ impl NativeApp {
     fn apply_wire_event(&mut self, event: WireEvent) {
         match event {
             WireEvent::TextDelta { text, .. } => {
-                if let Some(last) = self.transcript.last_mut().filter(|line| line.starts_with("Hebbian：")) {
+                if let Some(last) = self
+                    .transcript
+                    .last_mut()
+                    .filter(|line| line.starts_with("Hebbian："))
+                {
                     last.push_str(&text);
                 } else {
                     self.transcript.push(format!("Hebbian：{text}"));
@@ -300,30 +321,32 @@ impl eframe::App for NativeApp {
         self.drain_events();
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
 
-        egui::SidePanel::left("sessions").resizable(true).show(ctx, |ui| {
-            ui.heading("Hebbian Native");
-            if ui.button("新建对话").clicked() {
-                if let Err(err) = self.create_session() {
-                    self.status = err.to_string();
-                }
-            }
-            if ui.button("刷新").clicked() {
-                self.reload_sessions();
-            }
-            ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                let items: Vec<_> = self.sessions.clone();
-                for session in items {
-                    let selected = self
-                        .active_session
-                        .as_ref()
-                        .is_some_and(|active| active.id == session.id);
-                    if ui.selectable_label(selected, session.title).clicked() {
-                        self.load_session(session.id);
+        egui::SidePanel::left("sessions")
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.heading("Hebbian Native");
+                if ui.button("新建对话").clicked() {
+                    if let Err(err) = self.create_session() {
+                        self.status = err.to_string();
                     }
                 }
+                if ui.button("刷新").clicked() {
+                    self.reload_sessions();
+                }
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let items: Vec<_> = self.sessions.clone();
+                    for session in items {
+                        let selected = self
+                            .active_session
+                            .as_ref()
+                            .is_some_and(|active| active.id == session.id);
+                        if ui.selectable_label(selected, session.title).clicked() {
+                            self.load_session(session.id);
+                        }
+                    }
+                });
             });
-        });
 
         egui::TopBottomPanel::bottom("input").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -338,7 +361,8 @@ impl eframe::App for NativeApp {
                         .hint_text("输入消息，回车发送")
                         .desired_width(f32::INFINITY),
                 );
-                let enter = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                let enter =
+                    response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
                 if ui.button("发送").clicked() || enter {
                     self.send_current_input();
                 }
@@ -380,7 +404,9 @@ impl eframe::App for NativeApp {
                     }
                     for option in pending.options {
                         if ui.button(&option.label).clicked() {
-                            self.answer_question(UserAnswer::Selected { label: option.label });
+                            self.answer_question(UserAnswer::Selected {
+                                label: option.label,
+                            });
                         }
                     }
                     if ui.button("取消").clicked() {
@@ -409,12 +435,17 @@ async fn send_message(
     text: String,
     tx: mpsc::UnboundedSender<UiEvent>,
 ) -> Result<()> {
-    let runtime = runtimes.ensure(&data_dir, permission_store, &session_id).await?;
+    let runtime = runtimes
+        .ensure(&data_dir, permission_store, &session_id)
+        .await?;
     let mut events = runtime.state.subscribe();
     let tx_for_events = tx.clone();
     tokio::spawn(async move {
         while let Ok(event) = events.recv().await {
-            let finished = matches!(event, WireEvent::RunFinished { .. } | WireEvent::Error { .. });
+            let finished = matches!(
+                event,
+                WireEvent::RunFinished { .. } | WireEvent::Error { .. }
+            );
             let _ = tx_for_events.send(UiEvent::Wire(event));
             if finished {
                 break;

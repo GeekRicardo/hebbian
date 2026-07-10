@@ -189,10 +189,11 @@ pub fn resolve_hitl_from_island(
         tauri::async_runtime::spawn(async move {
             use tauri::Manager;
             let hit = match app.try_state::<surface_session::RuntimeRegistry>() {
-                Some(registry) => registry
-                    .get(&session_id)
-                    .await
-                    .is_some_and(|runtime| runtime.state.resolve_approval(&request_id, decision.clone())),
+                Some(registry) => registry.get(&session_id).await.is_some_and(|runtime| {
+                    runtime
+                        .state
+                        .resolve_approval(&request_id, decision.clone())
+                }),
                 None => false,
             };
             if hit {
@@ -240,10 +241,9 @@ pub fn answer_question_from_island(
         tauri::async_runtime::spawn(async move {
             use tauri::Manager;
             let hit = match app.try_state::<surface_session::RuntimeRegistry>() {
-                Some(registry) => registry
-                    .get(&session_id)
-                    .await
-                    .is_some_and(|runtime| runtime.state.answer_question(&request_id, answer.clone())),
+                Some(registry) => registry.get(&session_id).await.is_some_and(|runtime| {
+                    runtime.state.answer_question(&request_id, answer.clone())
+                }),
                 None => false,
             };
             if hit {

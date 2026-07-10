@@ -210,8 +210,9 @@ impl BashTool {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
         let mut buffer = String::new();
         let mut user_cancelled = false;
+        let mut promoted_by_user = false;
         let exited = loop {
-            // 终态 / deadline / 用户取消都退出循环；中间每 ~200ms 抽一次增量。
+            // 终态 / deadline / 用户取消 / 用户切后台都退出循环；中间每 ~200ms 抽一次增量。
             let tick =
                 tokio::time::sleep_until(tokio::time::Instant::now() + Duration::from_millis(200));
             // 有 cancel flag 时监听取消信号；没有时用 pending() 永不触发。
@@ -227,6 +228,11 @@ impl BashTool {
                 _ = shell.wait_terminal() => {
                     drain_into(&shell, &ctx, &mut buffer, usize::MAX);
                     break true;
+                }
+                _ = shell.wait_background() => {
+                    drain_into(&shell, &ctx, &mut buffer, READ_CHUNK_BYTES);
+                    promoted_by_user = true;
+                    break false;
                 }
                 _ = tokio::time::sleep_until(deadline) => {
                     drain_into(&shell, &ctx, &mut buffer, READ_CHUNK_BYTES);
@@ -256,14 +262,20 @@ impl BashTool {
         }
 
         if !exited {
-            // 超时：进程仍在跑，转后台。
-            shell.promote_to_background();
-            // 与显式 run_in_background=true 同款自动 arm 通知：超时转后台后，task 终态
+            if !promoted_by_user {
+                // 超时：进程仍在跑，转后台。
+                shell.promote_to_background();
+            }
+            // 与显式 run_in_background=true 同款自动 arm 通知：超时/用户转后台后，task 终态
             // 也由 WakeupScheduler 主动通知，模型不需要 poll。
             arm_auto_notification(&ctx, &shell.task_id);
             // 转后台同样极简——已产出的 output 还要保留（模型需要它继续推理），
             // 但不再重复工具用法和通知机制说明。
-            let mut text = format!("[{}] {timeout}s 内未结束，已转后台", shell.task_id);
+            let mut text = if promoted_by_user {
+                format!("[{}] 已转后台", shell.task_id)
+            } else {
+                format!("[{}] {timeout}s 内未结束，已转后台", shell.task_id)
+            };
             if !buffer.is_empty() {
                 text.push_str("\n--- 已产出 ---\n");
                 text.push_str(&buffer);
@@ -809,6 +821,43 @@ mod tests {
         // KillShell
         let killed = kill.execute(json!({"task_id": task_id})).await.unwrap();
         assert!(killed.contains("killed"));
+    }
+
+    #[tokio::test]
+    async fn external_promote_returns_background_result() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shells = BgTaskRegistry::new();
+        let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None, None);
+
+        let run = tokio::spawn({
+            let t = t;
+            async move {
+                t.execute(json!({
+                    "command": "sleep 30",
+                    "timeout_secs": 30,
+                    "pty": false,
+                }))
+                .await
+                .unwrap()
+            }
+        });
+
+        let task_id = loop {
+            if let Some(shell) = shells.list().into_iter().find(|s| !s.is_background()) {
+                break shell.task_id.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+
+        let shell = shells.get(&task_id).unwrap();
+        shell.promote_to_background();
+        let out = tokio::time::timeout(Duration::from_secs(2), run)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(out.contains("已转后台"), "{out}");
+        assert!(shells.get(&task_id).unwrap().is_background());
+        shells.kill(&task_id).await;
     }
 
     #[tokio::test]

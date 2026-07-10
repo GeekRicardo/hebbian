@@ -437,6 +437,10 @@ export const api = {
   killBackgroundTask: (sessionId: string, taskId: string) =>
     invoke<string>("kill_background_task", { sessionId, taskId }),
 
+  /** 把仍在前台等待的 Bash 切到后台继续运行。 */
+  promoteBackgroundTask: (sessionId: string, taskId: string) =>
+    invoke<string>("promote_background_task", { sessionId, taskId }),
+
   /**
    * polling 某个后台 task 的最新输出 + 状态。前端每个展开的卡片维护自己的
    * cursor（上一次返回的 total_bytes），传回后只拿增量；同一 task 多个监听

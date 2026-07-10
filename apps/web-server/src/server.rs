@@ -415,6 +415,7 @@ async fn dispatch_invoke(
         "discover_rules_files" => cmd_discover_rules_files(args).await.map(Some),
         "list_background_tasks" => cmd_list_background_tasks_local(args).await.map(Some),
         "kill_background_task" => cmd_kill_background_task_local(args).await.map(Some),
+        "promote_background_task" => cmd_promote_background_task_local(args).await.map(Some),
         "read_background_task_output" => {
             cmd_read_background_task_output_local(args).await.map(Some)
         }
@@ -2631,12 +2632,11 @@ async fn cmd_list_background_tasks_local(args: Value) -> Result<Value> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `sessionId`"))?;
     let shells_registry = agent_core::tools::background::registry_for_session(sid);
-    // 只暴露真后台任务（语义同 desktop 端 list_background_tasks）：
-    // 前台命令跑完会被 BashTool 直接 unregister，is_background=false 的瞬时残留 surface 不展示。
+    // 返回注册表里的所有 shell，包含仍在前台等待的 Bash。
+    // 前端后台任务列表会按 is_background 过滤；Bash 工具卡片用前台条目定位 task_id。
     let shells: Vec<Value> = shells_registry
         .list()
         .into_iter()
-        .filter(|s| s.is_background())
         .map(|s| {
             json!({
                 "task_id": s.task_id,
@@ -2645,6 +2645,7 @@ async fn cmd_list_background_tasks_local(args: Value) -> Result<Value> {
                 "cwd": s.cwd,
                 "elapsed_secs": s.started_at.elapsed().as_secs(),
                 "log_path": s.log_path().map(|p| p.display().to_string()),
+                "is_background": s.is_background(),
             })
         })
         .collect();
@@ -2670,6 +2671,26 @@ async fn cmd_kill_background_task_local(args: Value) -> Result<Value> {
         Some(state) => Ok(Value::String(state.label().to_string())),
         None => Err(anyhow!("未找到 task_id={task_id}（可能已被清理）")),
     }
+}
+
+async fn cmd_promote_background_task_local(args: Value) -> Result<Value> {
+    let sid = args
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let task_id = args
+        .get("taskId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `taskId`"))?;
+    let shells = agent_core::tools::background::registry_for_session(sid);
+    let Some(shell) = shells.get(task_id) else {
+        return Err(anyhow!("未找到 task_id={task_id}（可能已被清理）"));
+    };
+    if shell.state().is_terminal() {
+        return Ok(Value::String(shell.state().label().to_string()));
+    }
+    shell.promote_to_background();
+    Ok(Value::String("running".to_string()))
 }
 
 /// 读某个后台 task 的增量输出（语义同 desktop `read_background_task_output`）：

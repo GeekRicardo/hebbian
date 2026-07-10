@@ -17,7 +17,79 @@ use std::collections::{HashMap, HashSet};
 
 use crate::storage::memory::{self, MemoryL0, MemoryScope};
 
-/// 注入档位：激活强度决定给模型看多细（架构 §4.14 L0/L1/L2）。
+const GENERIC_TERMS: &[&str] = &[
+    "session",
+    "run",
+    "turn",
+    "tool",
+    "bash",
+    "context",
+    "desktop",
+    "hebweb",
+    "cli",
+    "agent",
+    "goal",
+    "permission",
+    "judge",
+    "changelog",
+    "架构",
+    "会话",
+    "系统",
+    "问题",
+    "修复",
+    "实现",
+    "验证",
+    "用户",
+    "消息",
+    "前端",
+    "后端",
+    "代码",
+    "文件",
+    "项目",
+];
+
+const SPECIFIC_TERMS: &[&str] = &[
+    "memory",
+    "recall",
+    "terminal",
+    "xterm",
+    "iterm",
+    "pty",
+    "scroll",
+    "compaction",
+    "codex",
+    "mimicode",
+    "automode",
+    "openclaw",
+    "hermes",
+    "sidecar",
+    "partial",
+    "model_io",
+    "schedulewakeup",
+    "chatview",
+    "memoryl0",
+    "记忆",
+    "联想",
+    "抽取",
+    "注入",
+    "终端",
+    "滚动",
+    "上下文",
+    "压缩",
+    "侧边栏",
+    "评测",
+    "深睡",
+    "建边",
+];
+
+#[derive(Debug, Clone)]
+struct MemorySignals {
+    tokens: HashSet<String>,
+    specific: HashSet<String>,
+    generic: HashSet<String>,
+    tags: HashSet<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecallLevel {
     /// 弱激活：只进清单（id + summary 一行）。
@@ -55,10 +127,10 @@ pub struct RecallParams {
 impl Default for RecallParams {
     fn default() -> Self {
         Self {
-            spread_decay: 0.5,
-            l2_threshold: 0.75,
-            l1_threshold: 0.4,
-            max_inject: 12,
+            spread_decay: 0.35,
+            l2_threshold: 0.55,
+            l1_threshold: 0.32,
+            max_inject: 5,
         }
     }
 }
@@ -103,25 +175,40 @@ pub fn activate(
         return Activation::default();
     }
 
-    // ── 第1级：倒排表种子激活 ──
-    // 现场建倒排：token → [(mem_idx, weight)]。记忆侧 token 来自 summary+tags+category。
+    // ── 第1级：高锚点种子激活 ──
+    // 泛词只做弱特征；必须有具体 tag / 强领域词 / 文件符号类 token，才允许成为种子。
     let by_id: HashMap<&str, usize> = mems
         .iter()
         .enumerate()
         .map(|(i, m)| (m.id.as_str(), i))
         .collect();
+    let query_specific = specific_tokens(&query_tokens);
+    let query_generic = generic_tokens(&query_tokens);
+    let mut memory_signals = Vec::with_capacity(mems.len());
     let mut seed_strength: HashMap<usize, f32> = HashMap::new();
     for (i, m) in mems.iter().enumerate() {
-        let mtokens = memory_tokens(m);
-        if mtokens.is_empty() {
+        let signals = memory_signals_for(m);
+        if signals.tokens.is_empty() {
+            memory_signals.push(signals);
             continue;
         }
-        // 命中分 = query 与记忆 token 交集大小 / query token 数（占比，[0,1]）。
-        let hits = query_tokens.iter().filter(|t| mtokens.contains(*t)).count();
-        if hits > 0 {
-            let score = (hits as f32 / query_tokens.len() as f32).min(1.0);
-            seed_strength.insert(i, score);
+        let specific_hits = query_specific.intersection(&signals.specific).count();
+        let tag_hits = query_tokens.intersection(&signals.tags).count();
+        let strong_overlap = query_specific
+            .intersection(&signals.tokens)
+            .filter(|t| !is_generic(t))
+            .count();
+        let generic_hits = query_generic.intersection(&signals.generic).count();
+        let mut score = 0.0;
+        score += (specific_hits as f32 * 0.18).min(0.54);
+        score += (tag_hits as f32 * 0.14).min(0.42);
+        score += (strong_overlap as f32 * 0.10).min(0.30);
+        score += (generic_hits as f32 * 0.025).min(0.08);
+        let has_strong_signal = specific_hits > 0 || tag_hits > 0 || strong_overlap >= 2;
+        if has_strong_signal && score >= 0.18 {
+            seed_strength.insert(i, score.min(1.0));
         }
+        memory_signals.push(signals);
     }
     if seed_strength.is_empty() {
         // gate：零命中 → 不联想（挡掉绝大多数轮次）。
@@ -145,14 +232,25 @@ pub fn activate(
             .or_default()
             .push((l.from.as_str(), l.weight));
     }
-    // 一跳扩散：邻居强度 = 种子强度 × 边权 × 衰减。多种子点亮同一邻居取 max。
+    // 一跳扩散：邻居强度 = 种子强度 × 边权 × 衰减。邻居也必须和当前 query 有具体主题交集，避免图把泛相关拖进来。
     let mut strength: HashMap<usize, f32> = seed_strength.clone();
     for (&si, &sval) in &seed_strength {
         let sid = mems[si].id.as_str();
         if let Some(neighbors) = adj.get(sid) {
             for &(nid, w) in neighbors {
                 if let Some(&ni) = by_id.get(nid) {
+                    let neighbor = &memory_signals[ni];
+                    let same_topic = !query_specific.is_empty()
+                        && !query_specific.is_disjoint(&neighbor.specific);
+                    let tag_topic = !query_tokens.is_disjoint(&neighbor.tags);
+                    let strong_link = w >= 0.85 && sval >= 0.30;
+                    if !same_topic && !tag_topic && !strong_link {
+                        continue;
+                    }
                     let spread = sval * w * params.spread_decay;
+                    if spread < 0.10 {
+                        continue;
+                    }
                     let e = strength.entry(ni).or_insert(0.0);
                     if spread > *e {
                         *e = spread;
@@ -218,14 +316,43 @@ pub fn topic_drifted(
     ratio < threshold
 }
 
-/// 一条记忆的 token 集：summary + tags + category 合并分词。
-fn memory_tokens(m: &MemoryL0) -> HashSet<String> {
-    let mut s = tokenize(&m.summary);
+/// 一条记忆的信号集：summary + tags + category 合并分词，同时拆出具体/泛信号。
+fn memory_signals_for(m: &MemoryL0) -> MemorySignals {
+    let mut tokens = tokenize(&m.summary);
+    let mut tags = HashSet::new();
     for t in &m.tags {
-        s.extend(tokenize(t));
+        let tt = tokenize(t);
+        tags.extend(tt.iter().cloned());
+        tokens.extend(tt);
     }
-    s.extend(tokenize(&m.category));
-    s
+    tokens.extend(tokenize(&m.category));
+    let specific = specific_tokens(&tokens);
+    let generic = generic_tokens(&tokens);
+    MemorySignals {
+        tokens,
+        specific,
+        generic,
+        tags,
+    }
+}
+
+fn specific_tokens(tokens: &HashSet<String>) -> HashSet<String> {
+    tokens.iter().filter(|t| is_specific(t)).cloned().collect()
+}
+
+fn generic_tokens(tokens: &HashSet<String>) -> HashSet<String> {
+    tokens.iter().filter(|t| is_generic(t)).cloned().collect()
+}
+
+fn is_generic(t: &str) -> bool {
+    GENERIC_TERMS.iter().any(|g| t == *g)
+}
+
+fn is_specific(t: &str) -> bool {
+    if SPECIFIC_TERMS.iter().any(|s| t == *s) {
+        return true;
+    }
+    t.contains('/') || t.contains('.') || t.contains('_') || t.contains('-') || t.len() >= 8
 }
 
 /// 中英文混合分词（够召回不求精，不引外部分词器）：
@@ -397,6 +524,69 @@ mod tests {
         assert!(
             b.strength < 1.0 && b.strength > 0.0,
             "B 强度被边权×衰减压低"
+        );
+    }
+
+    /// gate：只有泛词重合时不激活，避免把「系统 / 问题 / 修复」这类词当强相关。
+    #[test]
+    fn activate_generic_overlap_does_not_recall() {
+        use crate::storage::memory::{write, MemoryKind};
+        let dd = std::env::temp_dir().join(format!("heb-recall-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dd).unwrap();
+        write(
+            &dd,
+            None,
+            MemoryScope::Global,
+            "generic-ui-bug",
+            MemoryKind::Stable,
+            "bug",
+            &["ui".into(), "context".into()],
+            "系统问题修复后需要验证",
+            "正文",
+        )
+        .unwrap();
+        let act = activate(
+            &dd,
+            None,
+            "这个系统问题继续修复一下",
+            &RecallParams::default(),
+        );
+        assert!(
+            act.activated.is_empty(),
+            "只有系统/问题/修复这类泛词重合时不应注入记忆"
+        );
+    }
+
+    /// 具体主题 + tag 命中才召回，且默认少量注入，避免记忆块污染当前 user message。
+    #[test]
+    fn activate_specific_topic_recall_is_capped() {
+        use crate::storage::memory::{write, MemoryKind};
+        let dd = std::env::temp_dir().join(format!("heb-recall-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dd).unwrap();
+        for i in 0..8 {
+            write(
+                &dd,
+                None,
+                MemoryScope::Global,
+                &format!("memory-recall-{i}"),
+                MemoryKind::Stable,
+                "memory",
+                &["memory".into(), "recall".into()],
+                &format!("记忆 recall 门控策略 {i}"),
+                "正文",
+            )
+            .unwrap();
+        }
+        let act = activate(
+            &dd,
+            None,
+            "记忆 recall 为什么没有联想",
+            &RecallParams::default(),
+        );
+        assert!(!act.activated.is_empty(), "具体 memory/recall 主题应召回");
+        assert!(
+            act.activated.len() <= RecallParams::default().max_inject,
+            "默认最多注入少量记忆"
         );
     }
 

@@ -466,16 +466,18 @@ static SESSION_SUBAGENTS: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<String, Arc<RwLock<Vec<SubagentDefinition>>>>>,
 > = std::sync::OnceLock::new();
 
-fn session_subagents_map(
-) -> &'static std::sync::Mutex<std::collections::HashMap<String, Arc<RwLock<Vec<SubagentDefinition>>>>>
-{
+fn session_subagents_map() -> &'static std::sync::Mutex<
+    std::collections::HashMap<String, Arc<RwLock<Vec<SubagentDefinition>>>>,
+> {
     SESSION_SUBAGENTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 /// 按 session_id 取（或首次创建）该 session 的临时 subagent 列表句柄。
 /// 同一 session 多次调用返回同一份 Arc；不同 session 互不可见。
 pub fn session_subagents_for(session_id: &str) -> Arc<RwLock<Vec<SubagentDefinition>>> {
-    let mut map = session_subagents_map().lock().expect("session subagents mutex");
+    let mut map = session_subagents_map()
+        .lock()
+        .expect("session subagents mutex");
     map.entry(session_id.to_string())
         .or_insert_with(|| Arc::new(RwLock::new(Vec::new())))
         .clone()
@@ -491,7 +493,9 @@ pub fn discard_session_subagents(session_id: &str) {
 /// 读取并克隆某 session 的全部临时 subagent 定义（供 `build_subagent_ctx_snapshot` 合并用）。
 /// session_id 不存在或列表为空时返回空 Vec。
 pub fn take_session_subagents(session_id: &str) -> Vec<SubagentDefinition> {
-    let map = session_subagents_map().lock().expect("session subagents mutex");
+    let map = session_subagents_map()
+        .lock()
+        .expect("session subagents mutex");
     match map.get(session_id) {
         Some(lock) => lock.read().expect("session subagents rwlock").clone(),
         None => Vec::new(),

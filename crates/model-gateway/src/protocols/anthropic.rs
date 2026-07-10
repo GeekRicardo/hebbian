@@ -1125,7 +1125,10 @@ mod tests {
         assert_eq!(system.len(), 2);
         assert_eq!(system[0]["text"], CLAUDE_CODE_BANNER);
         let date_text = system[1]["text"].as_str().unwrap();
-        assert!(date_text.starts_with("Today's date is "), "date block: {date_text}");
+        assert!(
+            date_text.starts_with("Today's date is "),
+            "date block: {date_text}"
+        );
         assert!(date_text.ends_with("."), "date block: {date_text}");
     }
 
@@ -1323,7 +1326,10 @@ mod tests {
         let system = body["system"].as_array().unwrap();
         assert_eq!(system.len(), 3);
         assert_eq!(system[0]["text"], CLAUDE_CODE_BANNER);
-        assert!(system[1]["text"].as_str().unwrap().starts_with("Today's date is "));
+        assert!(system[1]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Today's date is "));
         assert_eq!(system[2]["text"], "Be terse.");
         assert!(
             !system.iter().any(|b| b["text"]

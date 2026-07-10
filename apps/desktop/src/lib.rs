@@ -42,8 +42,8 @@ use model_gateway::{
     discovery::FetchedModel,
     health::ProviderModelTestResult,
 };
-use surface_session::{RuntimeRegistry, TurnInput};
 use std::path::PathBuf;
+use surface_session::{RuntimeRegistry, TurnInput};
 use tauri::{
     ipc::Channel, AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
@@ -1433,10 +1433,11 @@ async fn approve_permission(
     // （兼容尚未迁移的进程内旁支）。
     if let Some(session_id) = hitl.remote_session_of(&request_id) {
         if let Ok(registry) = runtimes(&app) {
-            let hit = registry
-                .get(&session_id)
-                .await
-                .is_some_and(|runtime| runtime.state.resolve_approval(&request_id, decision.clone()));
+            let hit = registry.get(&session_id).await.is_some_and(|runtime| {
+                runtime
+                    .state
+                    .resolve_approval(&request_id, decision.clone())
+            });
             if hit {
                 hitl.forget_remote(&request_id);
                 return Ok(());
@@ -2268,6 +2269,23 @@ async fn kill_background_task(session_id: String, task_id: String) -> AppResult<
     }
 }
 
+/// 把仍在前台等待的 Bash 标记为后台任务。
+/// BashTool 看到该标记后会结束本次工具调用并把 task_id 回灌给 agent loop。
+#[tauri::command]
+fn promote_background_task(session_id: String, task_id: String) -> AppResult<String> {
+    let shells = agent_core::tools::background::registry_for_session(&session_id);
+    let Some(shell) = shells.get(&task_id) else {
+        return Err(AppError::msg(format!(
+            "未找到 task_id={task_id}（可能已被清理）"
+        )));
+    };
+    if shell.state().is_terminal() {
+        return Ok(shell.state().label().to_string());
+    }
+    shell.promote_to_background();
+    Ok("running".to_string())
+}
+
 /// 架构 §4.12.9：BackgroundTaskPanel 调它轮询当前 session 的后台情况。
 /// session-scoped——跨 session 的 bg shell 互不可见。
 #[tauri::command]
@@ -2597,10 +2615,11 @@ async fn approve_path_access(
     // gate 本身优先按 request_id → session_id 映射戳共享 runtime。
     if let Some(sid) = hitl.remote_session_of(&request_id) {
         if let Ok(registry) = runtimes(&app) {
-            let hit = registry
-                .get(&sid)
-                .await
-                .is_some_and(|runtime| runtime.state.resolve_approval(&request_id, decision.clone()));
+            let hit = registry.get(&sid).await.is_some_and(|runtime| {
+                runtime
+                    .state
+                    .resolve_approval(&request_id, decision.clone())
+            });
             if hit {
                 hitl.forget_remote(&request_id);
                 return Ok(());
@@ -3092,6 +3111,7 @@ pub fn run() {
             list_background_tasks,
             read_background_task_output,
             kill_background_task,
+            promote_background_task,
             get_settings,
             save_settings,
             get_mcp_config,

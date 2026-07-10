@@ -113,7 +113,10 @@ fn render_markdown(entries: &[TranscriptEntry]) -> String {
                 out.push_str(&format!("## entry-{idx} user\n\n{}\n\n", user.text));
             }
             TranscriptEntry::Assistant(assistant) => {
-                out.push_str(&format!("## entry-{idx} assistant\n\n{}\n\n", assistant.text));
+                out.push_str(&format!(
+                    "## entry-{idx} assistant\n\n{}\n\n",
+                    assistant.text
+                ));
                 if !assistant.tool_calls.is_empty() {
                     out.push_str("Tool calls:\n");
                     for call in &assistant.tool_calls {

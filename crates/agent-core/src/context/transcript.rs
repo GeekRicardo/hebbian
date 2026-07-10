@@ -84,7 +84,8 @@ impl Transcript {
             t.entries.last(),
             Some(TranscriptEntry::Assistant(_)) | Some(TranscriptEntry::ToolResults(_))
         );
-        let raw_tail_needs_user = last_model_facing_role(&messages[start..]) == Some(Role::Assistant);
+        let raw_tail_needs_user =
+            last_model_facing_role(&messages[start..]) == Some(Role::Assistant);
         if rebuilt_tail_needs_user || raw_tail_needs_user {
             t.entries.push(TranscriptEntry::User(UserEntry {
                 text: "继续".to_string(),
@@ -138,7 +139,9 @@ fn last_model_facing_role(messages: &[Message]) -> Option<Role> {
     messages
         .iter()
         .rev()
-        .find(|msg| msg.subagent_call_id.is_none() && matches!(msg.role, Role::User | Role::Assistant))
+        .find(|msg| {
+            msg.subagent_call_id.is_none() && matches!(msg.role, Role::User | Role::Assistant)
+        })
         .map(|msg| msg.role)
 }
 

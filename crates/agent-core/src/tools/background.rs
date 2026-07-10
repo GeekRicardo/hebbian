@@ -163,6 +163,18 @@ impl BackgroundShell {
     /// run_in_background=true。
     pub fn promote_to_background(&self) {
         self.is_background.store(true, Ordering::Relaxed);
+        self.notify.notify_waiters();
+    }
+
+    /// 等待外部把前台任务切成后台任务。BashTool 前台等待期间用它把
+    /// surface 的“转后台”按钮转换成一次正常工具返回，而不是取消整轮 run。
+    pub async fn wait_background(&self) {
+        loop {
+            if self.is_background() || self.state().is_terminal() {
+                return;
+            }
+            self.notify.notified().await;
+        }
     }
 
     pub fn state(&self) -> ShellState {

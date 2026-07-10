@@ -11578,3 +11578,29 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: agent-core 交互式 Bash / BashOutput 展示文本；不改普通 BashTool stdin / 后台行为，不改协议；前端 streaming 仍可拿 raw chunk 渲染实时终端。
 - **验证**: `cargo test -p agent-core --lib -- --test-threads=1 interactive_bash bash_input` 通过（11 项）。
 - **留尾巴**: 如果用户看到的是前端后台任务面板的历史累计显示，那是 surface polling 自己维护 cursor 并累积展示，不是 `BashOutput` 工具的共享 cursor；本次已用回归测试锁住工具层语义。
+
+---
+
+## 2026-07-07：修复 Bash 前台中断误取消整轮 run，并新增前台转后台按钮
+
+- **Why**: 用户在 Bash 工具卡点「终止」时，只想结束这条命令并让 agent loop 继续处理工具结果；现有前端在没拿到前台 task_id 时 fallback 到取消整轮 run，导致 agent-loop 直接断掉。同时默认 60s 前台等待后才自动转后台，长命令需要一个手动提前转后台入口。
+- **改动列表**:
+  - [crates/agent-core/src/tools/background.rs](../crates/agent-core/src/tools/background.rs): `promote_to_background` 唤醒等待方，并新增等待前台任务被外部切后台的能力。
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs): 前台 Bash 等待时监听外部切后台信号，返回 `task_id` 给 agent loop；新增回归测试覆盖外部 promote。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs) / [apps/web-server/src/server.rs](../apps/web-server/src/server.rs): 新增 `promote_background_task` 同步命令；hebweb 的后台任务列表补齐前台 Bash 条目与 `is_background` 字段，和 Desktop 对齐。
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts) / [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): Bash 工具卡「终止」不再 fallback 到取消整轮 run；前台 Bash 运行超过默认 60s 后在终止按钮左侧显示「后台」按钮。
+- **影响范围**: agent-core Bash 工具生命周期、Desktop/hebweb 同步命令、Desktop 前端 Bash 工具卡；不改 WireEvent 协议，不破坏旧 session。
+- **留尾巴**: 无
+
+---
+
+## 2026-07-07：产品化低噪音长期记忆召回门控
+
+- **Why**: 离线评测证明原先按 summary/tags/category 泛词命中的召回容易把 `ui/context/bug/session` 等弱相关记忆注入当前 user message；用户希望先实现一版真实可用、可试用的低噪音记忆系统。
+- **改动列表**:
+  - [crates/agent-core/src/memory_recall.rs](../crates/agent-core/src/memory_recall.rs): 将前台激活器从“任意 token 命中即种子”改为“具体 tag / 强领域词 / 文件符号类 token 命中才成种子”，泛词只做弱加分；扩散时要求同主题或高权重强边，降低图串场。
+  - [crates/agent-core/src/memory_recall.rs](../crates/agent-core/src/memory_recall.rs): 默认注入上限从 12 降到 5，并调低 L1/L2 阈值，让少量高置信记忆能带概览/详情，低置信轮次空注入。
+  - [crates/agent-core/src/memory_recall.rs](../crates/agent-core/src/memory_recall.rs): 增加回归测试，覆盖泛词不召回、具体主题召回且上限受控、强边仍能联想。
+- **影响范围**: 仅 agent-core 本地记忆召回策略；不改记忆文件格式、不改协议、不改 surface、不进 system prompt，仍通过 user message SEMI 段 `<memory-index>` 注入。
+- **验证**: `cargo test -p agent-core --lib memory_recall -- --nocapture` 通过（10 项）；`cargo check -p agent-core --tests` 通过。
+- **留尾巴**: 这版仍是本地启发式门控；下一步若要更丝滑，需要接入 LLM 精排、召回命中强化/误召降权、tag 归一与真实会话 A/B 验证。

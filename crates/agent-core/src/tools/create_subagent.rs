@@ -55,7 +55,9 @@ fn validate_kebab_case(name: &str) -> AppResult<()> {
     if name.is_empty() {
         return Err(AppError::msg("name 不能为空"));
     }
-    let valid = name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    let valid = name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         && !name.starts_with('-')
         && !name.ends_with('-');
     if !valid {
@@ -288,7 +290,10 @@ mod tests {
         let defs = crate::storage::subagents::take_session_subagents(&sid);
         assert_eq!(defs.len(), 1);
         let d = &defs[0];
-        assert_eq!(d.tools.as_deref(), Some(&["Read".to_string(), "Grep".to_string(), "Bash".to_string()][..]));
+        assert_eq!(
+            d.tools.as_deref(),
+            Some(&["Read".to_string(), "Grep".to_string(), "Bash".to_string()][..])
+        );
         assert_eq!(d.model.as_deref(), Some("gpt-4o"));
         assert_eq!(d.max_iterations, Some(30));
         assert_eq!(d.permission, Some(SubagentPermission::Bypass));

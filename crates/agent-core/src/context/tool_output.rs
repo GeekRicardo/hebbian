@@ -209,8 +209,10 @@ fn take_last_chars(s: &str, n: usize) -> String {
 fn ansi_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\)|P[^\x1B]*(?:\x1B\\))")
-            .expect("valid ansi regex")
+        Regex::new(
+            r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\)|P[^\x1B]*(?:\x1B\\))",
+        )
+        .expect("valid ansi regex")
     })
 }
 
@@ -218,14 +220,39 @@ fn secret_regexes() -> &'static [(Regex, &'static str)] {
     static RES: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
     RES.get_or_init(|| {
         vec![
-            (Regex::new(r"(?i)Bearer\s+[A-Za-z0-9._~+/=-]{12,}").unwrap(), "bearer"),
-            (Regex::new(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}").unwrap(), "jwt"),
-            (Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----").unwrap(), "private_key"),
+            (
+                Regex::new(r"(?i)Bearer\s+[A-Za-z0-9._~+/=-]{12,}").unwrap(),
+                "bearer",
+            ),
+            (
+                Regex::new(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}").unwrap(),
+                "jwt",
+            ),
+            (
+                Regex::new(
+                    r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+                )
+                .unwrap(),
+                "private_key",
+            ),
             (Regex::new(r"AKIA[0-9A-Z]{16}").unwrap(), "aws_access_key"),
-            (Regex::new(r"gh[pousr]_[A-Za-z0-9_]{20,}").unwrap(), "github_token"),
-            (Regex::new(r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}").unwrap(), "api_key"),
-            (Regex::new(r"xox[baprs]-[A-Za-z0-9-]{20,}").unwrap(), "slack_token"),
-            (Regex::new(r#"(?i)(token|api[_-]?key|password|secret)\s*[:=]\s*[^\s'"]{8,}"#).unwrap(), "secret_assignment"),
+            (
+                Regex::new(r"gh[pousr]_[A-Za-z0-9_]{20,}").unwrap(),
+                "github_token",
+            ),
+            (
+                Regex::new(r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}").unwrap(),
+                "api_key",
+            ),
+            (
+                Regex::new(r"xox[baprs]-[A-Za-z0-9-]{20,}").unwrap(),
+                "slack_token",
+            ),
+            (
+                Regex::new(r#"(?i)(token|api[_-]?key|password|secret)\s*[:=]\s*[^\s'"]{8,}"#)
+                    .unwrap(),
+                "secret_assignment",
+            ),
         ]
     })
     .as_slice()
@@ -238,8 +265,9 @@ mod tests {
     #[test]
     fn folds_carriage_return_progress_to_last_frame() {
         let raw = String::from_utf8(vec![
-            b'p', b'u', b'l', b'l', b' ', b'1', b'%', b'\r', b'p', b'u', b'l', b'l', b' ', b'2', b'%', b'\r',
-            b'p', b'u', b'l', b'l', b' ', b'd', b'o', b'n', b'e', b'\n', b'n', b'e', b'x', b't',
+            b'p', b'u', b'l', b'l', b' ', b'1', b'%', b'\r', b'p', b'u', b'l', b'l', b' ', b'2',
+            b'%', b'\r', b'p', b'u', b'l', b'l', b' ', b'd', b'o', b'n', b'e', b'\n', b'n', b'e',
+            b'x', b't',
         ])
         .unwrap();
         let got = sanitize_tool_output(&raw);
