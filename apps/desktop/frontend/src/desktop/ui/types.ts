@@ -34,6 +34,8 @@ export interface Provider {
   judge_model?: string | null;
   /** 注入 Claude Code 客户端特征（banner / billing header / metadata / context_management）。 */
   claude_code_compat?: boolean;
+  /** OpenAI 兼容 provider 的 Codex 模式：优先走 Responses，并启用远端自动压缩。 */
+  openai_codex_mode?: boolean;
 }
 
 export interface ProvidersFile {

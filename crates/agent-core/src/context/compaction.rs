@@ -171,6 +171,7 @@ pub fn build_compaction_request(
         tools: Vec::new(),
         max_tokens: 4096,
         reasoning: None,
+            compact_prompt_cache_key: None,
         meta: model_gateway::types::ModelCallMeta {
             tag: model_gateway::types::ModelCallTag::Compaction,
             ..Default::default()
@@ -201,6 +202,18 @@ where
     F: Fn(usize) + Send + Sync,
 {
     let system = req.system.clone();
+    if let Some(entries) = client
+        .compact_remote(req.clone(), before_tokens, cancel.clone(), &on_progress)
+        .await?
+    {
+        let after_tokens = budget::estimate_transcript_tokens(system.as_deref(), &entries);
+        return Ok(CompactionResult {
+            entries,
+            before_tokens,
+            after_tokens,
+            summary: "[remote compact]".to_string(),
+        });
+    }
     let streamed_text = Mutex::new(String::new());
     let on_stream = |event: ModelStreamEvent| {
         if let ModelStreamEvent::TextDelta { text } = event {

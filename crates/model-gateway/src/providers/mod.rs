@@ -308,6 +308,7 @@ mod tests {
             judge_provider_id: None,
             judge_model: None,
             claude_code_compat: false,
+            openai_codex_mode: false,
         };
 
         let http = reqwest::Client::new();

@@ -782,11 +782,14 @@ pub async fn run_loop(
             // 被替换窗口归档到 compactions/，session.jsonl 继续只追加 CompactBoundary marker。
             let compact_start = Instant::now();
             let compact_window_entries = transcript.entries.clone();
-            let (compact_before_tokens, compact_req) = build_compaction_request(
+            let (compact_before_tokens, mut compact_req) = build_compaction_request(
                 transcript.system.as_deref(),
                 compact_window_entries.clone(),
                 None,
             );
+            compact_req.compact_prompt_cache_key = session_id
+                .as_ref()
+                .map(|sid| format!("auto-compact:{sid}:{}", state.current_turn()));
             let compact_req_snapshot = model_io_dump.as_ref().map(|_| compact_req.clone());
             info!(
                 before_tokens = compact_before_tokens,
@@ -977,6 +980,7 @@ pub async fn run_loop(
             reasoning: None,
             // 主 chat：tag 由创建方显式传入（call_tag），主对话 = Main（前端不额外标记）；
             // 带 session/run/turn/assistant-msg-id，让 `[model]` 日志 + model_io 串起来。
+            compact_prompt_cache_key: None,
             meta: model_gateway::types::ModelCallMeta {
                 session_id: session_id.clone(),
                 run_id: Some(state.run_id.to_string()),

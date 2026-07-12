@@ -46,7 +46,7 @@ const OFFICIAL_BASE_URLS: Record<ProviderKind, string> = {
 };
 
 const CODEX_OAUTH_BASE_URL = "https://chatgpt.com/backend-api/codex";
-const CODEX_OAUTH_MODELS = ["gpt-5.4", "gpt-5.4-mini"];
+const CODEX_OAUTH_MODELS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4", "gpt-5.4-mini"];
 
 const SUPPORTED_AUTH_MODES: Record<ProviderKind, AuthMode[]> = {
   openai: ["api_key", "oauth_codex"],
@@ -215,6 +215,7 @@ export function ProvidersPane({ active }: { active: boolean }) {
       judge_provider_id: null,
       judge_model: null,
       claude_code_compat: false,
+      openai_codex_mode: false,
       ...overrides,
     };
   }
@@ -1047,6 +1048,24 @@ export function ProvidersPane({ active }: { active: boolean }) {
                       </div>
                     )}
                   </div>
+
+                  {current.kind === "openai" && current.auth_mode === "api_key" && (
+                    <div className="space-y-1.5">
+                      <label className="inline-flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={current.openai_codex_mode === true}
+                          onChange={(e) =>
+                            updateCurrent({ openai_codex_mode: e.target.checked })
+                          }
+                        />
+                        <span>Codex 模式</span>
+                        <span className="text-[11px] text-muted-foreground">
+                          优先走 Responses，并在上下文紧张时尝试远端自动压缩
+                        </span>
+                      </label>
+                    </div>
+                  )}
 
                   {current.kind === "anthropic" && (
                     <div className="space-y-1.5">

@@ -222,6 +222,7 @@ impl VisionBridgeClient {
                 effort: None,
                 long_context: None,
             }),
+            compact_prompt_cache_key: None,
             meta: model_gateway::types::ModelCallMeta {
                 tag: model_gateway::types::ModelCallTag::Vision,
                 ..Default::default()
@@ -422,6 +423,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -470,6 +472,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -518,6 +521,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -561,6 +565,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 

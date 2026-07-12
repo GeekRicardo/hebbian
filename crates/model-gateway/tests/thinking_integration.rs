@@ -115,6 +115,7 @@ impl StreamCollector {
                 self.tool_call_deltas.lock().unwrap().push(delta);
             }
             ModelStreamEvent::ReasoningSignature { .. } => {}
+            ModelStreamEvent::ReasoningDuration { .. } => {}
         }
     }
 
@@ -205,6 +206,7 @@ async fn all_providers_thinking_stream() {
                 tools: vec![],
                 max_tokens: 8192,
                 reasoning,
+                compact_prompt_cache_key: None,
                 meta: Default::default(),
             };
 
@@ -327,6 +329,7 @@ async fn tool_call_with_thinking() {
                 effort: Some(effort),
                 long_context: None,
             }),
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -411,6 +414,7 @@ fn effort_parameter_correctness() {
                 effort: Some(*effort),
                 long_context: None,
             }),
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
         let body = op::build_body(&req, false).unwrap();
@@ -434,6 +438,7 @@ fn effort_parameter_correctness() {
                 effort: Some(*effort),
                 long_context: None,
             }),
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
         let body = op::build_body(&req, false).unwrap();
@@ -458,6 +463,7 @@ fn effort_parameter_correctness() {
                 effort: Some(*effort),
                 long_context: None,
             }),
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
         let body = ap::build_body(&req, false, false, None, false).unwrap();
@@ -483,6 +489,7 @@ fn effort_parameter_correctness() {
                     effort: Some(*effort),
                     long_context: None,
                 }),
+                compact_prompt_cache_key: None,
                 meta: Default::default(),
             };
             let body = ap::build_body(&req, false, false, None, false).unwrap();
@@ -508,6 +515,7 @@ fn effort_parameter_correctness() {
                 effort: Some(*effort),
                 long_context: None,
             }),
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
         let body = ap::build_body(&req, false, false, None, false).unwrap();
@@ -621,6 +629,7 @@ async fn focused_deepseek_thinking() {
                 effort: Some(ReasoningEffort::High),
                 long_context: None,
             }),
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -722,6 +731,7 @@ async fn focused_claude_thinking() {
                     effort: Some(ReasoningEffort::Medium),
                     long_context: None,
                 }),
+                compact_prompt_cache_key: None,
                 meta: Default::default(),
             };
 
@@ -816,6 +826,7 @@ fn debug_claude_request_bodies() {
                 effort: Some(ReasoningEffort::Medium),
                 long_context: None,
             }),
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 

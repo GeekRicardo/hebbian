@@ -205,6 +205,9 @@ pub struct ModelRequest {
     /// 推理 / thinking 行为。`None` = 沿用模型默认（多数模型默认关闭）。
     /// 由 surface 层（[`ModelWithName`] 等 wrapper）按 session 配置注入。
     pub reasoning: Option<ReasoningConfig>,
+    /// 仅远端 compact 请求使用：当 provider 支持 `/responses/compact` 时，
+    /// 用它提示服务端把本次调用视为一次自动压缩。
+    pub compact_prompt_cache_key: Option<String>,
     /// 内部调用上下文（落盘 / 日志用，不发往 provider）。见 [`ModelCallMeta`]。
     pub meta: ModelCallMeta,
 }

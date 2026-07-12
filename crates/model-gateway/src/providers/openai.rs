@@ -10,8 +10,8 @@ use crate::{
     protocols::openai as proto,
     providers::apply_auth,
     types::{
-        has_image_generation_tool, ModelError, ModelRequest, ModelResponse, ModelStreamEvent,
-        ToolCall, ToolCallStreamDelta, Usage,
+        has_image_generation_tool, AssistantEntry, ModelError, ModelRequest, ModelResponse,
+        ModelStreamEvent, ToolCall, ToolCallStreamDelta, TranscriptEntry, Usage, UserEntry,
     },
 };
 use common::CancelFlag;
@@ -45,12 +45,21 @@ impl OpenAiClient {
         format!("{base}/responses")
     }
 
+    fn responses_compact_url(&self) -> String {
+        format!("{}/compact", self.responses_url())
+    }
+
     fn uses_codex_oauth(&self) -> bool {
         matches!(self.provider.auth_mode, AuthMode::OauthCodex)
     }
 
+    fn uses_openai_codex_mode(&self) -> bool {
+        self.provider.openai_codex_mode
+    }
+
     fn should_use_responses(&self, req: &ModelRequest) -> bool {
         self.uses_codex_oauth()
+            || self.uses_openai_codex_mode()
             || req
                 .tools
                 .iter()
@@ -66,6 +75,40 @@ impl ModelClient for OpenAiClient {
 
     fn supports_streaming_tools(&self) -> bool {
         true
+    }
+
+    async fn compact_remote(
+        &self,
+        req: ModelRequest,
+        _before_tokens: usize,
+        cancel: CancelFlag,
+        _on_progress: &(dyn Fn(usize) + Send + Sync),
+    ) -> Result<Option<Vec<TranscriptEntry>>, ModelError> {
+        if !(self.uses_codex_oauth() || self.uses_openai_codex_mode()) {
+            return Ok(None);
+        }
+
+        let body = proto::build_responses_body(&req, false, self.uses_codex_oauth());
+        let compact_body = proto::build_compact_responses_body(body);
+        let resp = super::retry_request(cancel, || {
+            let body = compact_body.clone();
+            async move {
+                let resp = apply_auth(self.http.post(self.responses_compact_url()), &self.provider)
+                    .json(&body)
+                    .send()
+                    .await?;
+                let status = resp.status().as_u16();
+                let text = resp.text().await?;
+                if status >= 400 {
+                    return Err(ModelError::Http { status, body: text });
+                }
+                let value: Value = serde_json::from_str(&text)?;
+                Ok(Some(parse_remote_compacted_entries(&value)))
+            }
+        })
+        .await?;
+
+        Ok(resp)
     }
 
     async fn complete(
@@ -955,6 +998,89 @@ fn parse_responses_frame(frame: &str) -> Result<ParsedResponsesFrame, ModelError
     }
 }
 
+fn parse_remote_compacted_entries(v: &Value) -> Vec<TranscriptEntry> {
+    let mut entries = Vec::new();
+    let Some(items) = v.get("output").and_then(Value::as_array) else {
+        return entries;
+    };
+
+    for item in items {
+        let Some(kind) = item.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        match kind {
+            "message" => {
+                let role = item.get("role").and_then(Value::as_str).unwrap_or("");
+                match role {
+                    "user" => {
+                        let text = item
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .map(|parts| extract_message_text(parts))
+                            .unwrap_or_default();
+                        if !text.is_empty() {
+                            entries.push(TranscriptEntry::User(UserEntry::text(text)));
+                        }
+                    }
+                    "assistant" => {
+                        let text = item
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .map(|parts| extract_message_text(parts))
+                            .unwrap_or_default();
+                        if !text.is_empty() {
+                            entries.push(TranscriptEntry::Assistant(AssistantEntry {
+                                text,
+                                reasoning: String::new(),
+                                reasoning_signature: String::new(),
+                                tool_calls: Vec::new(),
+                            }));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "compaction" => {
+                let text = item
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .or_else(|| item.get("text").and_then(Value::as_str))
+                    .or_else(|| item.get("encrypted_content").and_then(Value::as_str))
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if !text.is_empty() {
+                    entries.push(TranscriptEntry::User(UserEntry::text(format!("[前情概要]\n{text}"))));
+                    entries.push(TranscriptEntry::Assistant(AssistantEntry {
+                        text: "已收到前情概要，将基于此继续。".to_string(),
+                        reasoning: String::new(),
+                        reasoning_signature: String::new(),
+                        tool_calls: Vec::new(),
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    entries
+}
+
+fn extract_message_text(parts: &[Value]) -> String {
+    parts
+        .iter()
+        .filter_map(|part| match part.get("type").and_then(Value::as_str) {
+            Some("output_text") | Some("input_text") | Some("text") => {
+                part.get("text").and_then(Value::as_str)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1014,6 +1140,7 @@ mod tests {
             judge_provider_id: None,
             judge_model: None,
             claude_code_compat: false,
+            openai_codex_mode: false,
         })
         .unwrap();
         let req = ModelRequest {
@@ -1027,6 +1154,7 @@ mod tests {
             }],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 

@@ -9,8 +9,8 @@
 //!   [`AnthropicThinkingMode`]）。1M context 在 Opus/Sonnet 4.6+ 默认开启，
 //!   老 Sonnet 4 / Opus 4.5 等需要靠 `anthropic-beta: context-1m-2025-08-07`。
 //! - **OpenAI**：reasoning_effort 顶层字段，但枚举值随模型变化：
-//!   gpt-5.4 / 5.5 / codex-max 多一档 `xhigh`，o-series 只有 low/medium/high，
-//!   o1-mini 完全不支持。
+//!   gpt-5.4 / 5.5 / 5.6（sol / terra / luna）/ codex-max 多一档 `xhigh`，
+//!   o-series 只有 low/medium/high，o1-mini 完全不支持。
 
 use serde::{Deserialize, Serialize};
 
@@ -88,8 +88,8 @@ impl ReasoningEffort {
     }
 
     /// 用于 OpenAI `reasoning_effort`。按模型决定 Extra 是否能用 `xhigh`：
-    /// gpt-5.4 / 5.5 / codex-max 支持 xhigh，其它（o-series / gpt-5 / 5.1）
-    /// Extra 钳到 `high`。
+    /// gpt-5.4 / 5.5 / 5.6（sol / terra / luna）/ codex-max 支持 xhigh，
+    /// 其它（o-series / gpt-5 / 5.1）Extra 钳到 `high`。
     pub fn openai_effort_for_model(self, model: &str) -> &'static str {
         match self {
             Self::Low => "low",
@@ -293,10 +293,13 @@ pub fn openai_skips_reasoning(model: &str) -> bool {
 }
 
 /// 该 OpenAI 模型是否支持 `reasoning_effort=xhigh`。
-/// 当前已知支持 xhigh 的：gpt-5.4 系列、gpt-5.5 系列、gpt-5.1-codex-max。
+/// 当前已知支持 xhigh 的：gpt-5.4 / 5.5 / 5.6 系列、gpt-5.1-codex-max。
 pub fn openai_supports_xhigh(model: &str) -> bool {
     let m = normalize_model_id(model);
-    m.starts_with("gpt-5-4") || m.starts_with("gpt-5-5") || m.contains("gpt-5-1-codex-max")
+    m.starts_with("gpt-5-4")
+        || m.starts_with("gpt-5-5")
+        || m.starts_with("gpt-5-6")
+        || m.contains("gpt-5-1-codex-max")
 }
 
 /// 该 OpenAI 模型是否支持 reasoning_effort 控制（即配 reasoning UI 是否可见）。
@@ -417,6 +420,9 @@ mod tests {
         assert!(openai_supports_xhigh("gpt-5.4"));
         assert!(openai_supports_xhigh("gpt-5.4-mini"));
         assert!(openai_supports_xhigh("gpt-5.5"));
+        assert!(openai_supports_xhigh("gpt-5.6-sol"));
+        assert!(openai_supports_xhigh("gpt-5.6-terra"));
+        assert!(openai_supports_xhigh("gpt-5.6-luna"));
         assert!(openai_supports_xhigh("gpt-5.1-codex-max"));
         assert!(!openai_supports_xhigh("gpt-5"));
         assert!(!openai_supports_xhigh("gpt-5.1"));

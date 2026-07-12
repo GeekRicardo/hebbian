@@ -117,6 +117,18 @@ impl ModelClient for InstrumentedClient {
         self.inner.supports_streaming_tools()
     }
 
+    async fn compact_remote(
+        &self,
+        req: ModelRequest,
+        before_tokens: usize,
+        cancel: CancelFlag,
+        on_progress: &(dyn Fn(usize) + Send + Sync),
+    ) -> Result<Option<Vec<crate::types::TranscriptEntry>>, ModelError> {
+        self.inner
+            .compact_remote(req, before_tokens, cancel, on_progress)
+            .await
+    }
+
     async fn complete(
         &self,
         req: ModelRequest,

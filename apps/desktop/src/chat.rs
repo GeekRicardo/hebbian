@@ -874,6 +874,7 @@ pub async fn send_once(
         tools: Vec::new(),
         max_tokens: 4096,
         reasoning: None,
+            compact_prompt_cache_key: None,
         meta: Default::default(),
     };
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1144,6 +1145,7 @@ mod tests {
                     judge_provider_id: None,
                     judge_model: None,
                     claude_code_compat: false,
+            openai_codex_mode: false,
                 }],
                 default_provider_id: Some("openai".to_string()),
                 vision_provider_id: None,

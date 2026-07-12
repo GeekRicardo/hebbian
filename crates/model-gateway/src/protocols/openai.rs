@@ -299,6 +299,15 @@ pub fn build_responses_body(req: &ModelRequest, stream: bool, codex_oauth: bool)
         "stream": stream,
     });
 
+    if let Some(seed) = req
+        .compact_prompt_cache_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        body["prompt_cache_key"] = json!(seed);
+    }
+
     if req.max_tokens > 0 {
         body["max_output_tokens"] = json!(req.max_tokens);
     }
@@ -334,6 +343,30 @@ pub fn build_responses_body(req: &ModelRequest, stream: bool, codex_oauth: bool)
     }
 
     body
+}
+
+pub fn build_compact_responses_body(body: Value) -> Value {
+    let mut compact = serde_json::Map::new();
+    let Some(obj) = body.as_object() else {
+        return Value::Object(compact);
+    };
+
+    for key in [
+        "model",
+        "input",
+        "instructions",
+        "tools",
+        "parallel_tool_calls",
+        "reasoning",
+        "text",
+        "previous_response_id",
+        "prompt_cache_key",
+    ] {
+        if let Some(value) = obj.get(key) {
+            compact.insert(key.to_string(), value.clone());
+        }
+    }
+    Value::Object(compact)
 }
 
 fn should_force_image_generation(req: &ModelRequest) -> bool {
@@ -1023,6 +1056,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         }
     }
@@ -1073,6 +1107,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -1101,6 +1136,7 @@ mod responses_tests {
             }],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -1124,6 +1160,7 @@ mod responses_tests {
             }],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -1145,6 +1182,7 @@ mod responses_tests {
             }],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -1176,6 +1214,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -1219,6 +1258,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -1261,6 +1301,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -1332,6 +1373,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -1379,6 +1421,7 @@ mod responses_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -1499,6 +1542,7 @@ mod deepseek_compat_tests {
             tools: vec![],
             max_tokens,
             reasoning,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         }
     }
@@ -1661,6 +1705,7 @@ mod deepseek_compat_tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         }
     }

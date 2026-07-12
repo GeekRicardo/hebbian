@@ -938,6 +938,7 @@ mod tests {
                 tools: vec![],
                 max_tokens: 1024,
                 reasoning: None,
+            compact_prompt_cache_key: None,
                 meta: Default::default(),
             };
             let body = build_body(&req, false, false, None, false).unwrap();
@@ -982,6 +983,7 @@ mod tests {
             tools: vec![],
             max_tokens: 4096,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -1026,6 +1028,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();
@@ -1059,6 +1062,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();
@@ -1076,6 +1080,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();
@@ -1093,6 +1098,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -1115,6 +1121,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -1141,6 +1148,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 
@@ -1175,6 +1183,7 @@ mod tests {
                 effort: Some(ReasoningEffort::Extra),
                 long_context: None,
             }),
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();
@@ -1200,6 +1209,7 @@ mod tests {
                 effort: Some(ReasoningEffort::High),
                 long_context: None,
             }),
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();
@@ -1229,6 +1239,7 @@ mod tests {
                     effort: Some(e),
                     long_context: None,
                 }),
+                compact_prompt_cache_key: None,
                 meta: Default::default(),
             };
             build_body(&req, false, true, None, false).unwrap()
@@ -1281,7 +1292,8 @@ mod tests {
                 tools: vec![],
                 max_tokens: 8192,
                 reasoning: None,
-                meta: Default::default(),
+                compact_prompt_cache_key: None,
+            meta: Default::default(),
             };
             build_body(&req, false, true, None, true).unwrap()
         };
@@ -1318,6 +1330,7 @@ mod tests {
             }],
             max_tokens: 8192,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
         let body = build_body(&req, false, true, Some("acct-123"), false).unwrap();
@@ -1388,7 +1401,8 @@ mod tests {
                 tools: vec![],
                 max_tokens: 8192,
                 reasoning: None,
-                meta: Default::default(),
+                compact_prompt_cache_key: None,
+            meta: Default::default(),
             };
             let body = build_body(&req, false, true, Some("acct-123"), false).unwrap();
             assert!(
@@ -1439,6 +1453,7 @@ mod tests {
             tools: vec![],
             max_tokens,
             reasoning,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         }
     }
@@ -1548,6 +1563,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: Some(cfg),
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();
@@ -1570,6 +1586,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: Some(cfg),
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
         let body = build_body(&req, false, false, None, false).unwrap();

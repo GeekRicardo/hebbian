@@ -85,6 +85,11 @@ pub struct Provider {
     /// 模式也能注入。
     #[serde(default)]
     pub claude_code_compat: bool,
+    /// OpenAI 兼容 provider 的 Codex 模式：普通对话优先走 Responses API，
+    /// 自动压缩优先尝试远端 `/responses/compact`。
+    /// 默认 false，仅对 `kind=openai` 生效。
+    #[serde(default)]
+    pub openai_codex_mode: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

@@ -270,6 +270,7 @@ mod tests {
             tools: vec![],
             max_tokens: 4096,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
         let body = build_body(&req);
@@ -303,6 +304,7 @@ mod tests {
             tools: vec![],
             max_tokens: 4096,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         };
 

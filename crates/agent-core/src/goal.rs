@@ -76,6 +76,7 @@ pub async fn judge_goal(
         tools: Vec::new(),
         max_tokens: 400,
         reasoning: None,
+            compact_prompt_cache_key: None,
         meta: model_gateway::types::ModelCallMeta {
             tag: model_gateway::types::ModelCallTag::Goal,
             ..Default::default()

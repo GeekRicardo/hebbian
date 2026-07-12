@@ -420,6 +420,7 @@ mod tests {
             }],
             max_tokens: 4096,
             reasoning: None,
+            compact_prompt_cache_key: None,
             meta: Default::default(),
         }
     }

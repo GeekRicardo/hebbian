@@ -13,7 +13,13 @@ pub struct FetchedModel {
     pub context_length: Option<usize>,
 }
 
-const CODEX_OAUTH_MODELS: &[&str] = &["gpt-5.4", "gpt-5.4-mini"];
+const CODEX_OAUTH_MODELS: &[&str] = &[
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+];
 
 /// 从模型 JSON 对象中提取 context_length。
 /// 各家 provider 返回的字段名不统一，按优先级尝试多个候选字段。

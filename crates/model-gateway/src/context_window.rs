@@ -104,7 +104,7 @@ fn lookup_by_model_name(m: &str) -> Option<usize> {
     // OpenAI GPT 家族
     if m.starts_with("gpt-") || m.starts_with("o1-") || m.starts_with("o3-") || m.starts_with("o4-")
     {
-        if m.starts_with("gpt-5-5") || m.starts_with("gpt-5-4") {
+        if m.starts_with("gpt-5-6") || m.starts_with("gpt-5-5") || m.starts_with("gpt-5-4") {
             return Some(1_000_000);
         }
         if m.starts_with("gpt-5") {
@@ -160,6 +160,10 @@ mod tests {
     fn openai_tiers() {
         assert_eq!(
             context_window_for(ProviderKind::Openai, "gpt-5.5"),
+            1_000_000
+        );
+        assert_eq!(
+            context_window_for(ProviderKind::Openai, "gpt-5.6-sol"),
             1_000_000
         );
         assert_eq!(context_window_for(ProviderKind::Openai, "gpt-5.3"), 400_000);
@@ -268,6 +272,10 @@ mod tests {
             1_000_000
         );
         assert_eq!(
+            context_window_for(ProviderKind::Anthropic, "gpt-5.6-sol"),
+            1_000_000
+        );
+        assert_eq!(
             context_window_for(ProviderKind::Anthropic, "gpt-5.4"),
             1_000_000
         );
@@ -330,6 +338,7 @@ mod tests {
             judge_provider_id: None,
             judge_model: None,
             claude_code_compat: false,
+            openai_codex_mode: false,
         };
         provider
             .model_context_windows
