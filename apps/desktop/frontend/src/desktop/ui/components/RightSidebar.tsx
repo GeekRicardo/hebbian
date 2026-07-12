@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/desktop/ui/lib/utils";
 import { isEmbeddedPreview, isTauri } from "@/desktop/bridge/transport";
-import { useStore } from "@/desktop/ui/store/useStore";
+import { useStore, selectCurrentSessionStream } from "@/desktop/ui/store/useStore";
 import { Codicon } from "./Codicon";
 import { BackgroundTaskTab } from "./BackgroundTaskPanel";
 import { EditTreeTab } from "./EditTreePanel";
@@ -146,7 +146,8 @@ export function RightSidebar({
   const settingsOpen = useStore((s) => s.settingsOpen);
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
   const sessionWorkdir = useStore((s) => s.currentSession?.workdir ?? null);
-  const todos = useStore((s) => s.todos);
+  const currentStream = useStore(selectCurrentSessionStream);
+  const todos = currentStream.todos;
   const [modelIoOpen, setModelIoOpen] = useState(false);
   const closeModelIo = useCallback(() => setModelIoOpen(false), []);
 
@@ -219,13 +220,15 @@ export function RightSidebar({
   // plan 待审批（架构 §4.4.5）：HITL 决策搬进计划栏后，待审批 plan 出现时自动展开
   // sidebar + 切到计划 tab，确保用户看到决策入口。plan 审批是阻塞性的（agent 在等），
   // 比 todos 更需要露出，故无视 autoSwitchBlocked。
-  const pendingApprovalKind = useStore((s) => s.pendingApproval?.kind ?? null);
-  const pendingPlanId = useStore((s) =>
-    s.pendingApproval?.kind === "plan" ? s.pendingApproval.plan?.plan_id ?? null : null,
-  );
-  const pendingPlanSummary = useStore((s) =>
-    s.pendingApproval?.kind === "plan" ? s.pendingApproval.plan?.summary ?? "" : "",
-  );
+  const pendingApprovalKind = currentStream.pendingApproval?.kind ?? null;
+  const pendingPlanId =
+    currentStream.pendingApproval?.kind === "plan"
+      ? currentStream.pendingApproval.plan?.plan_id ?? null
+      : null;
+  const pendingPlanSummary =
+    currentStream.pendingApproval?.kind === "plan"
+      ? currentStream.pendingApproval.plan?.summary ?? ""
+      : "";
   const openPlan = useStore((s) => s.openPlan);
   const prevPendingPlanIdRef = useRef<string | null>(null);
   useEffect(() => {

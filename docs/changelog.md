@@ -11604,3 +11604,20 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 agent-core 本地记忆召回策略；不改记忆文件格式、不改协议、不改 surface、不进 system prompt，仍通过 user message SEMI 段 `<memory-index>` 注入。
 - **验证**: `cargo test -p agent-core --lib memory_recall -- --nocapture` 通过（10 项）；`cargo check -p agent-core --tests` 通过。
 - **留尾巴**: 这版仍是本地启发式门控；下一步若要更丝滑，需要接入 LLM 精排、召回命中强化/误召降权、tag 归一与真实会话 A/B 验证。
+
+---
+
+## 2026-07-10：收口前端会话运行态订阅，并修复 notification / ScheduleWakeup 的续跑显示错位
+
+- **Why**: 前端之前同时依赖 request 级 send 回调、session 级订阅和顶层运行态镜像，导致后端主动开始的新 run（notification / wakeup）会出现“后端已经在跑，前端没及时接上”的错位；同时 `ScheduleWakeup` 的挂起态误显示 Continue，把合法 Suspended 中间态渲染成了续作入口。
+- **改动列表**:
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 以 `sessionStreams[sessionId]` 作为当前运行态主源，提供 `selectCurrentSessionStream` / `selectCurrentInputQueue`；`sendUserMessage` 不再依赖 request 级 `onEvent` 推进 UI；system notification 在 idle 续跑路径也会即时挂进当前 slot，避免后端已续跑但前端还没出现锚点消息。
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): `sendMessage` 保留 Tauri channel 兼容协议，但前端不再把它当 request 级事件入口，统一改走 session 级长期订阅。
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx) / [apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx](../apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx) / [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx) / [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx) / [apps/desktop/frontend/src/desktop/ui/components/ContinueBar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx) / [apps/desktop/frontend/src/desktop/ui/components/EditorPane.tsx](../apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx): 组件直接订阅当前 session stream，减少多对话流式时的无关重渲；`ContinueBar` 在 suspended 时强制隐藏，不再把 ScheduleWakeup 的合法挂起态渲染成 Continue。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `inject_user_message` 注入活 run 时把 `meta` 带进 `TurnInput`，修复 system notification / wakeup 在 runtime inject 路径里退化成普通 user 的问题。
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): 任何新 run 起步（普通消息 / continue_run / wakeup resume）都先清掉旧的 `pending_continue`，避免上一轮异常残留泄漏到 ScheduleWakeup 的挂起态或新一轮 run。
+- **影响范围**: Desktop 前端运行态 / session 事件流消费 / wakeup 可视语义 / surface-session 的 pending_continue 生命周期；不改 WireEvent 协议，不改 agent-core 持久化格式。
+- **验证**:
+  - `cd apps/desktop && pnpm exec tsc --noEmit`
+  - `cargo check --workspace`
+- **留尾巴**: `liveTimeline` / wakeup 排序仍是运行中渲染辅助层；这次先修真相源、notification 锚点和 Continue 误显示，未重写其完整展示语义。

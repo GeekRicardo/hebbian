@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ClipboardList, Loader2, RotateCcw } from "lucide-react";
 import { api } from "@/desktop/bridge/tauri";
-import { useStore } from "@/desktop/ui/store/useStore";
+import { useStore, selectCurrentSessionStream } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
 import type { PlanMeta } from "@/desktop/ui/types";
 
@@ -14,7 +14,7 @@ import type { PlanMeta } from "@/desktop/ui/types";
  */
 export function PlanTab() {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
-  const activePlan = useStore((s) => s.activePlan);
+  const activePlan = useStore((s) => selectCurrentSessionStream(s).activePlan);
   const openPlan = useStore((s) => s.openPlan);
   const activeTabId = useStore((s) =>
     sessionId ? s.activeTabBySession[sessionId] ?? null : null,

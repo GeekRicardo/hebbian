@@ -544,8 +544,13 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, input: TurnInput) -> Result<
     // send 入口：先把上次中断残留的 partial 折叠进 jsonl 再读历史（同 chat::send_and_save）。
     let prior = sessions::load_with_partial_recovery(data_dir, session_id)?;
 
+    // 任何新 run 起步（普通用户消息 / continue_run / wakeup resume）都要清掉旧的
+    // pending_continue。它只属于上一轮非正常结束留下的续作入口；一旦用户或系统已经
+    // 启动了下一轮，再把旧 chip 留在 session 里只会让 surface 误以为当前挂起/新轮
+    // 仍可继续上一轮。
+    sessions::set_pending_continue(data_dir, session_id, None)?;
+
     if continue_run {
-        sessions::set_pending_continue(data_dir, session_id, None)?;
     } else {
         let user_msg = Message {
             id: sessions::new_id(),

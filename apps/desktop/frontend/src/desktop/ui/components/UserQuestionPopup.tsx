@@ -3,7 +3,7 @@ import { ChevronDown, CircleHelp, Send, X } from "lucide-react";
 import { toast } from "sonner";
 import type { AskQuestion, QuestionAnswerItem } from "@/desktop/ui/types";
 import { cn } from "@/desktop/ui/lib/utils";
-import { useStore } from "@/desktop/ui/store/useStore";
+import { useStore, selectCurrentSessionStream } from "@/desktop/ui/store/useStore";
 
 const OTHER_KEY = "__other__";
 
@@ -20,7 +20,7 @@ const emptySingleState = (): SingleState => ({
 });
 
 export function UserQuestionPopup() {
-  const pending = useStore((s) => s.pendingQuestion);
+  const pending = useStore((s) => selectCurrentSessionStream(s).pendingQuestion);
   const resolveQuestion = useStore((s) => s.resolveQuestion);
 
   const [singleState, setSingleState] = useState<SingleState>(() => emptySingleState());

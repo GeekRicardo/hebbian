@@ -4,7 +4,7 @@ import { toast } from "sonner";
 
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
-import { useStore } from "@/desktop/ui/store/useStore";
+import { useStore, selectCurrentSessionStream } from "@/desktop/ui/store/useStore";
 import { HoverHint } from "@/desktop/ui/components/HoverHint";
 import { COMPACT_TOOLBAR_BUTTON_CLASS } from "@/desktop/ui/lib/toolbarStyles";
 
@@ -64,7 +64,7 @@ interface Props {
  * compact 态只缩小视觉占位，不禁用交互。
  */
 export function RunModeChip({ sessionId, compact }: Props) {
-  const storeRunMode = useStore((s) => s.currentRunMode);
+  const storeRunMode = useStore((s) => selectCurrentSessionStream(s).currentRunMode);
   const setSessionRunMode = useStore((s) => s.setSessionRunMode);
   const mode = (storeRunMode ?? "Default") as RunMode;
   const [handsOff, setHandsOff] = useState(false);

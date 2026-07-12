@@ -1,4 +1,4 @@
-import { useStore } from "@/desktop/ui/store/useStore";
+import { useStore, selectCurrentSessionStream } from "@/desktop/ui/store/useStore";
 import { InputSuggestions } from "./InputSuggestions";
 
 /**
@@ -21,14 +21,15 @@ export function ContinueBar({
   onFocusInput?: () => void;
 }) {
   const pending = useStore((s) => s.currentSession?.pending_continue);
-  const streamingMessageId = useStore((s) => s.streamingMessageId);
+  const isStreaming = useStore((s) => !!selectCurrentSessionStream(s).streamingMessageId);
+  const isSuspended = useStore((s) => selectCurrentSessionStream(s).suspended !== null);
   const strategy = useStore(
     (s) => s.appSettings?.general.continue_strategy ?? "send_continue",
   );
   const sendUserMessage = useStore((s) => s.sendUserMessage);
 
-  // 正在跑就别显示——续作只在 run 停下后才有意义。
-  if (!pending || streamingMessageId) return null;
+  // 正在跑或已挂起都别显示——Continue 只属于上一轮真正结束后的续作入口。
+  if (!pending || isStreaming || isSuspended) return null;
 
   const handleClick = () => {
     // 乐观清掉续作入口，让 chip 立刻消失；这一轮若再次异常，agent_loop 会重新写入。

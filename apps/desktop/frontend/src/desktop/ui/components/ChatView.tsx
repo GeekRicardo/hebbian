@@ -16,7 +16,7 @@ import {
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
 import { UserQuestionPopup } from "./UserQuestionPopup";
 import { FindBar, findMatches, useFindController } from "./FindBar";
-import { useStore } from "@/desktop/ui/store/useStore";
+import { useStore, selectCurrentSessionStream } from "@/desktop/ui/store/useStore";
 import { usePerfRender } from "@/desktop/ui/store/perfMonitor";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { cn, hasSessionStarted, ipcConfirm } from "@/desktop/ui/lib/utils";
@@ -70,17 +70,12 @@ interface ChatViewProps {
 
 export function ChatView({ emptyState }: ChatViewProps = {}) {
   usePerfRender("ChatView");
+  const currentSession = useStore((s) => s.currentSession);
+  const currentStream = useStore(selectCurrentSessionStream);
   const {
-    currentSession,
     promptsFile,
     prompts,
     userAvatar,
-    streamingMessageId,
-    streamingText,
-    streamingParts,
-    liveTimeline,
-    pendingQuestion,
-    assistantInsertPos,
     sendUserMessage,
     cancelStreaming,
     forkSession,
@@ -96,11 +91,17 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     updateCurrentConfig,
     debugEnabled,
     appSettings,
-    modelRetry,
     undoCompaction,
     deleteTrailingMessage,
-    suspended,
   } = useStore();
+  const streamingMessageId = currentStream.streamingMessageId;
+  const streamingText = currentStream.streamingText;
+  const streamingParts = currentStream.streamingParts;
+  const liveTimeline = currentStream.liveTimeline;
+  const pendingQuestion = currentStream.pendingQuestion;
+  const assistantInsertPos = currentStream.assistantInsertPos;
+  const modelRetry = currentStream.modelRetry;
+  const suspended = currentStream.suspended;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   /**
@@ -627,7 +628,8 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
       if (isTerminalFocusTarget(document.activeElement)) return;
       // 弹窗打开时不干预
       const state = useStore.getState();
-      if (state.pendingApproval || state.pendingQuestion) return;
+      const currentStream = selectCurrentSessionStream(state);
+      if (currentStream.pendingApproval || currentStream.pendingQuestion) return;
       // 焦点已在输入类元素上时不干预（textarea / input / contentEditable / select）
       const el = document.activeElement;
       if (

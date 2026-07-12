@@ -7,6 +7,7 @@ import {
   useStore,
   selectCurrentEditorTabs,
   selectCurrentActiveTab,
+  selectCurrentSessionStream,
   type EditorTab,
 } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
@@ -563,7 +564,7 @@ function ToolbarButton({
  */
 function PlanBody({ planId }: { planId: string }) {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
-  const planComments = useStore((s) => s.planComments);
+  const planComments = useStore((s) => selectCurrentSessionStream(s).planComments);
   const replaceComments = useStore((s) => s.replaceSessionPlanComments);
   const appendComment = useStore((s) => s.appendSessionPlanComment);
 
@@ -789,9 +790,9 @@ function CommentRow({ comment }: { comment: PlanComment }) {
  * 反馈或点任一按钮即取消倒计时。
  */
 function PlanApprovalBar({ planId }: { planId: string }) {
-  const pending = useStore((s) => s.pendingApproval);
+  const pending = useStore((s) => selectCurrentSessionStream(s).pendingApproval);
   const resolveApproval = useStore((s) => s.resolveApproval);
-  const currentRunMode = useStore((s) => s.currentRunMode);
+  const currentRunMode = useStore((s) => selectCurrentSessionStream(s).currentRunMode);
 
   const isAuto = currentRunMode === "AutoMode" || currentRunMode === "auto";
   const planInfo = pending?.kind === "plan" ? pending.plan ?? null : null;

@@ -18,7 +18,7 @@ import { cn } from "@/desktop/ui/lib/utils";
  * - ✕ 放回输入框：移除并把内容追加回 ChatInput 草稿
  */
 export function InputQueuePanel() {
-  const queue = useStore((s) => s.currentInputQueue);
+  const queue = useStore((s) => s.selectCurrentInputQueue());
   const removeQueuedInput = useStore((s) => s.removeQueuedInput);
   const flushQueuedItem = useStore((s) => s.flushQueuedItem);
   const returnQueuedToComposer = useStore((s) => s.returnQueuedToComposer);

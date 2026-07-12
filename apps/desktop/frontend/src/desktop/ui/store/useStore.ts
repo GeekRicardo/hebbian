@@ -255,48 +255,26 @@ export type AutoJudgedNote = {
   reason?: string | null;
 };
 
-const EMPTY_MIRROR = {
-  streamingMessageId: null as string | null,
-  streamingText: "",
-  streamingParts: [] as StreamingAssistantPart[],
-  liveTimeline: [] as LiveTimelineItem[],
-  assistantInsertPos: 0,
-  activeRequestId: null as string | null,
-  pendingApproval: null as PendingApproval | null,
-  pendingApprovalQueue: [] as PendingApproval[],
-  pendingQuestion: null as PendingQuestion | null,
-  pendingQuestionQueue: [] as PendingQuestion[],
-  autoJudgedNotes: [] as AutoJudgedNote[],
-  currentRunMode: null as string | null,
-  /** AutoMode judge 评估中的审批：request_id → call_id，用于 resolve/judged 时清呼吸。 */
-  judgingRequests: {} as Record<string, JudgingEntry>,
-  suspended: null as SuspendedInfo | null,
-  todos: [] as TodoItem[],
-  activePlan: null as SessionStream["activePlan"],
-  planComments: {} as Record<string, PlanComment[]>,
-  modelRetry: null as SessionStream["modelRetry"],
-};
-
-function mirrorFromSlot(slot: SessionStream | undefined) {
-  if (!slot) return { ...EMPTY_MIRROR };
+function makeEmptySessionStream(): SessionStream {
   return {
-    streamingMessageId: slot.streamingMessageId,
-    streamingText: slot.streamingText,
-    streamingParts: slot.streamingParts,
-    liveTimeline: slot.liveTimeline,
-    assistantInsertPos: slot.assistantInsertPos,
-    activeRequestId: slot.requestId,
-    pendingApproval: slot.pendingApproval,
-    pendingApprovalQueue: slot.pendingApprovalQueue,
-    pendingQuestion: slot.pendingQuestion,
-    pendingQuestionQueue: slot.pendingQuestionQueue,
-    autoJudgedNotes: slot.autoJudgedNotes,
-    currentRunMode: slot.currentRunMode,
-    suspended: slot.suspended,
-    todos: slot.todos,
-    activePlan: slot.activePlan,
-    planComments: slot.planComments,
-    modelRetry: slot.modelRetry,
+    requestId: "",
+    streamingMessageId: null,
+    streamingText: "",
+    streamingParts: [],
+    liveTimeline: [],
+    assistantInsertPos: 0,
+    pendingApproval: null,
+    pendingApprovalQueue: [],
+    pendingQuestion: null,
+    pendingQuestionQueue: [],
+    autoJudgedNotes: [],
+    currentRunMode: null,
+    judgingRequests: {},
+    suspended: null,
+    todos: [],
+    activePlan: null,
+    planComments: {},
+    modelRetry: null,
   };
 }
 
@@ -393,9 +371,8 @@ function activePlanFromPath(
 }
 
 /**
- * 给指定 sessionId 的 slot 打一个 patch；slot 不存在则用 EMPTY_MIRROR + sensible
- * defaults 起一个新 slot（只放 todo / plan 这类 idempotent 状态，不掺 streaming）。
- * 若该 session 当前是 currentSession，同步刷顶层镜像字段。
+ * 给指定 sessionId 的 slot 打一个 patch；slot 不存在则用空运行态起一个新 slot
+ * （只放 todo / plan 这类 idempotent 状态，不掺 streaming）。
  */
 function patchSessionSlot(
   set: (
@@ -409,33 +386,9 @@ function patchSessionSlot(
 ) {
   set((state) => {
     const prev = state.sessionStreams[sessionId];
-    const base: SessionStream =
-      prev ??
-      ({
-        requestId: "",
-        streamingMessageId: null,
-        streamingText: "",
-        streamingParts: [],
-        liveTimeline: [],
-        assistantInsertPos: 0,
-        pendingApproval: null,
-        pendingApprovalQueue: [],
-        pendingQuestion: null,
-        pendingQuestionQueue: [],
-        autoJudgedNotes: [],
-        currentRunMode: null,
-        judgingRequests: {},
-        suspended: null,
-        todos: [],
-        activePlan: null,
-        planComments: {},
-        modelRetry: null,
-      } satisfies SessionStream);
-    const next = patch(base);
-    const isCurrent = state.currentSession?.id === sessionId;
+    const next = patch(prev ?? makeEmptySessionStream());
     return {
       sessionStreams: { ...state.sessionStreams, [sessionId]: next },
-      ...(isCurrent ? mirrorFromSlot(next) : {}),
     };
   });
   // 避免某些 closure 不复制 get 引用——保留参数兼容 zustand 旧 API。
@@ -477,6 +430,7 @@ function applyEditEvent(
   return null;
 }
 
+/** 当前对话运行态单一真源；无当前对话时返回共享空对象，避免无谓重渲染。 */
 function activeRequestForSession(state: AppState, sessionId: string): string | null {
   return state.sessionStreams[sessionId]?.requestId ?? null;
 }
@@ -582,38 +536,9 @@ interface AppState {
   sessions: SessionMeta[];
   currentSession: Session | null;
 
-  /**
-   * 每个 session 当前的流式 / HITL 软状态，按 sessionId 分槽。
-   * 切换会话时不动这里的内容，只是把全局镜像换成新会话槽的副本。
-   */
+  /** 每个 session 当前的流式 / HITL 软状态，按 sessionId 分槽。 */
   sessionStreams: Record<string, SessionStream>;
 
-  // streaming —— 全局字段是 sessionStreams[currentSession.id] 的镜像
-  streamingMessageId: string | null;
-  streamingText: string;
-  streamingParts: StreamingAssistantPart[];
-  /** 模型调用失败后的自动重试进度（架构 §4.3）。镜像自当前 slot。 */
-  modelRetry: { attempt: number; max: number; reason: string } | null;
-  /**
-   * Run 内时间线（架构 §4.2 + §4.12.5）：已完成 turn 快照 + streaming 期间
-   * 插队的 user message，按真实顺序。ChatView 据此把"插队 → 下个 turn 输出"
-   * 渲染成正确的因果次序。镜像自 currentSession 的 slot。
-   */
-  liveTimeline: LiveTimelineItem[];
-  assistantInsertPos: number;
-  activeRequestId: string | null;
-  /** 当前对话 AutoMode 判官累计标记（镜像自 currentSession 的 slot）。 */
-  autoJudgedNotes: AutoJudgedNote[];
-  /** 当前对话 RunMode 字符串。`null` 表示未收到过 RunModeChanged 事件。 */
-  currentRunMode: string | null;
-  /** 架构 §4.12：当前对话 Run 是否被挂起。 */
-  suspended: SuspendedInfo | null;
-  /** 当前对话的 todo 列表（镜像自 slot）。 */
-  todos: TodoItem[];
-  /** 当前对话的活跃 plan（镜像自 slot）。 */
-  activePlan: SessionStream["activePlan"];
-  /** 当前对话的 plan_id → 评论列表（镜像自 slot）。 */
-  planComments: Record<string, PlanComment[]>;
   /**
    * 架构 §4.13：每个 session 的 Edit 快照列表。
    * - 持久化真相源是后端 `~/.hebbian/sessions/<sid>/edits-worktree/.hebbian-edits.json`
@@ -699,13 +624,9 @@ interface AppState {
     comment: PlanComment,
   ) => void;
 
-  // HITL — 当前一轮 run 中悬挂的审批请求
-  pendingApproval: PendingApproval | null;
-  pendingApprovalQueue: PendingApproval[];
+  // HITL — 当前会话运行态里的审批请求
   resolveApproval: (decision: ApprovalDecisionPayload) => Promise<void>;
-  // HITL — 当前一轮 run 中悬挂的 agent 提问（ask 工具）
-  pendingQuestion: PendingQuestion | null;
-  pendingQuestionQueue: PendingQuestion[];
+  // HITL — 当前会话运行态里的 agent 提问（ask 工具）
   resolveQuestion: (answer: QuestionAnswerPayload) => Promise<void>;
 
   // 架构 §4.12.6：后端 WakeupScheduler 触发的 wakeup XML + 结构化 meta，
@@ -726,8 +647,8 @@ interface AppState {
   // 运行时输入队列：每个 session 一条 FIFO 队列，streaming 期间用户排进的
   // 后续 user message 暂存于此，当前 turn 跑完后自动按顺序消费。
   inputQueues: Record<string, QueuedInput[]>;
-  /** 当前 session 队列的镜像（按 currentSession.id 跟随）。 */
-  currentInputQueue: QueuedInput[];
+  /** 当前 session 的输入队列视图（按 currentSession.id 从 inputQueues 派生）。 */
+  selectCurrentInputQueue: () => QueuedInput[];
   /**
    * 入队一条新输入。
    * - position='tail'（默认）：append 队尾，常规排队。
@@ -973,11 +894,19 @@ function applyTheme(t: "light" | "dark") {
 const LOG_CAPACITY = 5000;
 
 const EMPTY_EDITOR_TABS: EditorTab[] = [];
+const EMPTY_INPUT_QUEUE: QueuedInput[] = [];
 
 /** 当前对话编辑区的 tab 列表（引用稳定：仅该对话的列表变化时才变）。 */
 export function selectCurrentEditorTabs(s: AppState): EditorTab[] {
   const sid = s.currentSession?.id;
   return (sid ? s.editorTabsBySession[sid] : undefined) ?? EMPTY_EDITOR_TABS;
+}
+
+export const EMPTY_SESSION_STREAM: SessionStream = makeEmptySessionStream();
+
+export function selectCurrentSessionStream(s: AppState): SessionStream {
+  const sid = s.currentSession?.id;
+  return (sid ? s.sessionStreams[sid] : undefined) ?? EMPTY_SESSION_STREAM;
 }
 
 /** 当前对话激活的 tab id。 */
@@ -1008,19 +937,6 @@ export const useStore = create<AppState>((set, get) => ({
   selectedProjectId: null,
   currentSession: null,
   sessionStreams: {},
-  streamingMessageId: null,
-  streamingText: "",
-  streamingParts: [],
-  modelRetry: null,
-  liveTimeline: [],
-  assistantInsertPos: 0,
-  activeRequestId: null,
-  autoJudgedNotes: [],
-  currentRunMode: null,
-  suspended: null,
-  todos: [],
-  activePlan: null,
-  planComments: {},
   runningSessions: new Set<string>(),
   unreadFinishedSessions: new Set<string>(),
   lastRunError: null,
@@ -1171,7 +1087,6 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   // ── Todo / Plan slot 写入器（架构 §4.4.5 / §4.4.6）──
-  // 共用 patchSlot：拿 slot snapshot → 写回 → 若是 currentSession 同步镜像
   replaceSessionStreamTodos(sessionId: string, todos: TodoItem[]) {
     patchSessionSlot(set, get, sessionId, (slot) => ({ ...slot, todos }));
   },
@@ -1181,7 +1096,7 @@ export const useStore = create<AppState>((set, get) => ({
   setSessionActivePlan(sessionId, plan) {
     patchSessionSlot(set, get, sessionId, (slot) => ({ ...slot, activePlan: plan }));
   },
-  /** 把 SuspendedInfo 落到 slot + top-level suspended（重启恢复用，架构 §4.12）。 */
+  /** 把 SuspendedInfo 落到指定 session 的运行态（重启恢复用，架构 §4.12）。 */
   setSessionSuspended(sessionId: string, info: SuspendedInfo) {
     patchSessionSlot(set, get, sessionId, (slot) => ({ ...slot, suspended: info }));
   },
@@ -1201,8 +1116,6 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
 
-  pendingApproval: null,
-  pendingApprovalQueue: [],
   async resolveApproval(decision: ApprovalDecisionPayload) {
     const cur = get().currentSession;
     if (!cur) return;
@@ -1217,7 +1130,6 @@ export const useStore = create<AppState>((set, get) => ({
     };
     set((state) => ({
       sessionStreams: { ...state.sessionStreams, [sessionId]: nextSlot },
-      ...mirrorFromSlot(nextSlot),
     }));
     console.info("[permission.approval] frontend submitting tool approval", {
       sessionId,
@@ -1265,11 +1177,9 @@ export const useStore = create<AppState>((set, get) => ({
             ? [live.pendingApproval, ...live.pendingApprovalQueue]
             : live.pendingApprovalQueue,
         };
-        const isForeground = state.currentSession?.id === sessionId;
         return {
           ...state,
           sessionStreams: { ...state.sessionStreams, [sessionId]: restored },
-          ...(isForeground ? mirrorFromSlot(restored) : {}),
         };
       });
       throw e;
@@ -1311,11 +1221,9 @@ export const useStore = create<AppState>((set, get) => ({
           // 渲染层的 wakeup projector 统一钉位（system_notification 钉到对应 tool_call
           // 的 assistant 段后），不再需要注入时特殊摆位。
           const updated = appendUserInjectedMessage(slot, result.message);
-          const isForeground = state.currentSession?.id === sessionId;
           return {
             ...state,
             sessionStreams: { ...state.sessionStreams, [sessionId]: updated },
-            ...(isForeground ? mirrorFromSlot(updated) : {}),
           };
         });
         if (result.injected) return;
@@ -1356,11 +1264,9 @@ export const useStore = create<AppState>((set, get) => ({
             const slot = state.sessionStreams[sessionId];
             if (!slot) return state;
             const updated = appendUserInjectedMessage(slot, result.message);
-            const isForeground = state.currentSession?.id === sessionId;
             return {
               ...state,
               sessionStreams: { ...state.sessionStreams, [sessionId]: updated },
-              ...(isForeground ? mirrorFromSlot(updated) : {}),
             };
           });
           return;
@@ -1377,7 +1283,10 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   inputQueues: {},
-  currentInputQueue: [],
+  selectCurrentInputQueue() {
+    const cur = get().currentSession;
+    return cur ? get().inputQueues[cur.id] ?? EMPTY_INPUT_QUEUE : EMPTY_INPUT_QUEUE;
+  },
   enqueueInput(content, attachments, position = "tail") {
     const cur = get().currentSession;
     if (!cur) return;
@@ -1395,10 +1304,8 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => {
       const list = state.inputQueues[sessionId] ?? [];
       const next = position === "head" ? [item, ...list] : [...list, item];
-      const isForeground = state.currentSession?.id === sessionId;
       return {
         inputQueues: { ...state.inputQueues, [sessionId]: next },
-        ...(isForeground ? { currentInputQueue: next } : {}),
       };
     });
   },
@@ -1410,14 +1317,12 @@ export const useStore = create<AppState>((set, get) => ({
       const list = state.inputQueues[sessionId] ?? [];
       const next = list.filter((it) => it.id !== id);
       if (next.length === list.length) return state;
-      const isForeground = state.currentSession?.id === sessionId;
       const queues = { ...state.inputQueues };
       if (next.length === 0) delete queues[sessionId];
       else queues[sessionId] = next;
       return {
         ...state,
         inputQueues: queues,
-        ...(isForeground ? { currentInputQueue: next } : {}),
       };
     });
   },
@@ -1451,11 +1356,9 @@ export const useStore = create<AppState>((set, get) => ({
         const slot = state.sessionStreams[sessionId];
         if (!slot) return state;
         const updated = appendUserInjectedMessage(slot, result.message);
-        const isForeground = state.currentSession?.id === sessionId;
         return {
           ...state,
           sessionStreams: { ...state.sessionStreams, [sessionId]: updated },
-          ...(isForeground ? mirrorFromSlot(updated) : {}),
         };
       });
     } catch (e) {
@@ -1464,11 +1367,9 @@ export const useStore = create<AppState>((set, get) => ({
         const cur = state.inputQueues[sessionId] ?? [];
         const insertAt = Math.min(originalIndex, cur.length);
         const next = [...cur.slice(0, insertAt), target, ...cur.slice(insertAt)];
-        const isForeground = state.currentSession?.id === sessionId;
         return {
           ...state,
           inputQueues: { ...state.inputQueues, [sessionId]: next },
-          ...(isForeground ? { currentInputQueue: next } : {}),
         };
       });
       throw e;
@@ -1514,7 +1415,6 @@ export const useStore = create<AppState>((set, get) => ({
     };
     set((state) => ({
       sessionStreams: { ...state.sessionStreams, [sessionId]: nextSlot },
-      ...mirrorFromSlot(nextSlot),
     }));
     try {
       const payload: { text?: string; labels?: string[]; items?: any[] } | undefined =
@@ -1539,11 +1439,9 @@ export const useStore = create<AppState>((set, get) => ({
             ? [live.pendingQuestion, ...live.pendingQuestionQueue]
             : live.pendingQuestionQueue,
         };
-        const isForeground = state.currentSession?.id === sessionId;
         return {
           ...state,
           sessionStreams: { ...state.sessionStreams, [sessionId]: restored },
-          ...(isForeground ? mirrorFromSlot(restored) : {}),
         };
       });
       throw e;
@@ -1735,12 +1633,10 @@ export const useStore = create<AppState>((set, get) => ({
         pendingWorkdir: sessionWorkdir,
         pendingAllowedPaths: sessionAllowedPaths,
         unreadFinishedSessions: removeFromSet(state.unreadFinishedSessions, id),
-        currentInputQueue: state.inputQueues[id] ?? [],
         pendingWakeups: rest,
         editorTabsBySession: pruned.editorTabsBySession,
         activeTabBySession: pruned.activeTabBySession,
         editorSelectionRef: null,
-        ...mirrorFromSlot(state.sessionStreams[id]),
       };
     });
     if (pendingWakeup) {
@@ -1828,15 +1724,12 @@ export const useStore = create<AppState>((set, get) => ({
       model: s.model,
       promptId: s.prompt_id ?? "",
     });
-    // 新建 session 几乎不可能有残留 slot，但保险起见还是从 slot 镜像（一般是空），
-    // 这样不会被旧 session 残留的 streamingMessageId / pendingApproval 串味。
+    // 新建 session 直接切过去；运行态由对应 slot/selector 惰性读取，不再复制镜像。
     set((state) => ({
       currentSession: s,
       pendingPromptId: s.prompt_id ?? "",
       pendingWorkdir: s.workdir ?? null,
       pendingAllowedPaths: s.allowed_paths ?? [],
-      currentInputQueue: state.inputQueues[s.id] ?? [],
-      ...mirrorFromSlot(state.sessionStreams[s.id]),
     }));
     await get().refreshSessions();
     ensureSessionEventSubscription(s.id, (sid, event) => get().handleSessionEngineEvent(sid, event));
@@ -1864,8 +1757,7 @@ export const useStore = create<AppState>((set, get) => ({
         unreadFinishedSessions: removeFromSet(state.unreadFinishedSessions, id),
       };
       if (wasCurrent) {
-        Object.assign(next, mirrorFromSlot(undefined));
-        next.currentInputQueue = [];
+        next.currentSession = null;
       }
       return next as AppState;
     });
@@ -1890,8 +1782,6 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => ({
       currentSession: s,
       pendingPromptId: s.prompt_id ?? "",
-      currentInputQueue: state.inputQueues[s.id] ?? [],
-      ...mirrorFromSlot(state.sessionStreams[s.id]),
     }));
   },
 
@@ -2106,7 +1996,6 @@ export const useStore = create<AppState>((set, get) => ({
           ...state.sessionStreams,
           [sessionId]: updated,
         },
-        ...(isForeground ? mirrorFromSlot(updated) : {}),
       };
     });
     if (tPerf) perfRecordEvent(e.type, performance.now() - tPerf);
@@ -2120,12 +2009,10 @@ export const useStore = create<AppState>((set, get) => ({
           requestId: "",
           streamingMessageId: null,
         };
-        const isForeground = state.currentSession?.id === sessionId;
         return {
           ...state,
           sessionStreams: { ...state.sessionStreams, [sessionId]: suspendedSlot },
           runningSessions: removeFromSet(state.runningSessions, sessionId),
-          ...(isForeground ? mirrorFromSlot(suspendedSlot) : {}),
         };
       });
       if (get().currentSession?.id === sessionId) {
@@ -2153,9 +2040,6 @@ export const useStore = create<AppState>((set, get) => ({
               currentSession: fresh,
               sessionStreams: rest,
               runningSessions: removeFromSet(state.runningSessions, sessionId),
-              ...mirrorFromSlot(undefined),
-              todos: fresh.todos ?? [],
-              activePlan: fresh.active_plan ? activePlanFromPath(fresh.active_plan) : null,
             };
           }
           return {
@@ -2179,7 +2063,6 @@ export const useStore = create<AppState>((set, get) => ({
             return {
               ...state,
               inputQueues: queues,
-              ...(isForeground ? { currentInputQueue: next } : {}),
             };
           });
           await get().sendUserMessage(head.content, head.attachments, null, {}, sessionId);
@@ -2205,11 +2088,9 @@ export const useStore = create<AppState>((set, get) => ({
         const queues = { ...state.inputQueues };
         if (next.length === 0) delete queues[sessionId];
         else queues[sessionId] = next;
-        const isForeground = state.currentSession?.id === sessionId;
         return {
           ...state,
           inputQueues: queues,
-          ...(isForeground ? { currentInputQueue: next } : {}),
         };
       });
     };
@@ -2232,7 +2113,7 @@ export const useStore = create<AppState>((set, get) => ({
       const priorSession =
         get().currentSession?.id === sessionId ? get().currentSession : null;
       const optimisticSystemNotification: Message | null =
-        options.skipOptimisticUser && meta?.type === "system_notification"
+        meta?.type === "system_notification"
           ? {
               id: `pending-user-${requestId}`,
               role: "user",
@@ -2268,6 +2149,10 @@ export const useStore = create<AppState>((set, get) => ({
       };
       set((state) => {
         const isForeground = state.currentSession?.id === sessionId;
+        const nextSlot =
+          optimisticSystemNotification && isForeground
+            ? appendUserInjectedMessage(initialSlot, optimisticSystemNotification)
+            : initialSlot;
         return {
           ...state,
           ...(isForeground && !options.skipOptimisticUser
@@ -2284,10 +2169,9 @@ export const useStore = create<AppState>((set, get) => ({
                 ),
               }
             : {}),
-          sessionStreams: { ...state.sessionStreams, [sessionId]: initialSlot },
+          sessionStreams: { ...state.sessionStreams, [sessionId]: nextSlot },
           runningSessions: new Set(state.runningSessions).add(sessionId),
           lastRunError: null,
-          ...(isForeground ? mirrorFromSlot(initialSlot) : {}),
         };
       });
       try {
@@ -2305,7 +2189,6 @@ export const useStore = create<AppState>((set, get) => ({
           baseSession.stream,
           [],
           requestId,
-          (e: EngineEvent) => get().handleSessionEngineEvent(sessionId, e),
           meta,
           options.continueRun,
         );
@@ -2320,7 +2203,7 @@ export const useStore = create<AppState>((set, get) => ({
             runningSessions: removeFromSet(state.runningSessions, sessionId),
           };
           if (stillForeground) {
-            Object.assign(next, mirrorFromSlot(undefined));
+            next.currentSession = null;
           } else {
             next.unreadFinishedSessions = new Set(state.unreadFinishedSessions).add(
               sessionId
@@ -2373,7 +2256,7 @@ export const useStore = create<AppState>((set, get) => ({
     const cur = get().currentSession;
     if (!cur) return;
     const slot = get().sessionStreams[cur.id];
-    const requestId = slot?.requestId ?? get().activeRequestId;
+    const requestId = slot?.requestId;
     if (!requestId) return;
 
     // 只发取消信号，**不在这里清掉 streamingParts / 也不 reload session**：
@@ -2679,7 +2562,6 @@ export const useStore = create<AppState>((set, get) => ({
     };
     set((state) => ({
       sessionStreams: { ...state.sessionStreams, [sessionId]: nextSlot },
-      ...mirrorFromSlot(nextSlot),
     }));
     console.info("[permission.approval] frontend submitting path approval", {
       sessionId,
@@ -2731,11 +2613,9 @@ export const useStore = create<AppState>((set, get) => ({
             ? [live.pendingApproval, ...live.pendingApprovalQueue]
             : live.pendingApprovalQueue,
         };
-        const isForeground = state.currentSession?.id === sessionId;
         return {
           ...state,
           sessionStreams: { ...state.sessionStreams, [sessionId]: restored },
-          ...(isForeground ? mirrorFromSlot(restored) : {}),
         };
       });
       throw e;

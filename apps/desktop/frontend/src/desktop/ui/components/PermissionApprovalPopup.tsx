@@ -11,7 +11,7 @@ import {
 import { toast } from "sonner";
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
-import { useStore } from "@/desktop/ui/store/useStore";
+import { useStore, selectCurrentSessionStream } from "@/desktop/ui/store/useStore";
 import {
   DiffViewer,
   FullscreenPortal,
@@ -195,7 +195,7 @@ function AutoJudgeReason({ reason }: { reason: string }) {
  *   按钮分 「仅此次 / 加入本对话 / 加入全局」
  */
 export function PermissionApprovalPopup() {
-  const pending = useStore((s) => s.pendingApproval);
+  const pending = useStore((s) => selectCurrentSessionStream(s).pendingApproval);
   const resolveApproval = useStore((s) => s.resolveApproval);
   const resolvePathAccess = useStore((s) => s.resolvePathAccess);
   const [feedbackOpen, setFeedbackOpen] = useState(false);

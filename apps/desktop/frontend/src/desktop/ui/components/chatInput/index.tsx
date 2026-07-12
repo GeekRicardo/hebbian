@@ -54,7 +54,11 @@ import {
   type SlashCommandMeta,
 } from "@/desktop/ui/lib/slashCommands";
 import { cn, pathLeaf } from "@/desktop/ui/lib/utils";
-import { useStore, type EditorSelectionRef } from "@/desktop/ui/store/useStore";
+import {
+  useStore,
+  selectCurrentSessionStream,
+  type EditorSelectionRef,
+} from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import type { MessageAttachment, SkillItem } from "@/desktop/ui/types";
 import { chatInputEditorConfig } from "./editorConfig";
@@ -119,7 +123,7 @@ function ChatInputInner({
   const compactCurrentSession = useStore((s) => s.compactCurrentSession);
   const enqueueInput = useStore((s) => s.enqueueInput);
   const flushQueuedItem = useStore((s) => s.flushQueuedItem);
-  const currentInputQueue = useStore((s) => s.currentInputQueue);
+  const currentInputQueue = useStore((s) => s.selectCurrentInputQueue());
   const composerDraft = useStore((s) => s.composerDraft);
   const clearComposerDraft = useStore((s) => s.clearComposerDraft);
   const tokenStats = useStore((s) => s.currentSession?.token_stats ?? null);
@@ -129,6 +133,7 @@ function ChatInputInner({
   const setPendingWorkdir = useStore((s) => s.setPendingWorkdir);
   const setPendingAllowedPaths = useStore((s) => s.setPendingAllowedPaths);
   const currentSession = useStore((s) => s.currentSession);
+  const currentStream = useStore(selectCurrentSessionStream);
   const editorSelectionRef = useStore((s) => s.editorSelectionRef);
   const setEditorSelectionRef = useStore((s) => s.setEditorSelectionRef);
   const projects = useStore((s) => s.projects);
@@ -136,7 +141,7 @@ function ChatInputInner({
   const providersFile = useStore((s) => s.providersFile);
   // PlanMode 时输入框边框变琥珀色标识——订阅 RunMode 单一真源，agent 自主进/出
   // PlanMode 时实时变色。
-  const isPlanMode = useStore((s) => s.currentRunMode) === "PlanMode";
+  const isPlanMode = currentStream.currentRunMode === "PlanMode";
 
   const activeWorkdir = pendingWorkdir;
   const activeAllowedPaths = pendingAllowedPaths;

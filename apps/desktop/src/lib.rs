@@ -1317,10 +1317,11 @@ async fn inject_user_message(
     // 供前端乐观渲染，run 结束 reload 时以 agent_core 落盘的为准。
     let injected = if let Some(session_id) = common::runtime::session_for_request(&request_id) {
         match runtimes(&app) {
-            Ok(registry) => registry
-                .get(&session_id)
-                .await
-                .is_some_and(|runtime| runtime.inject(TurnInput::new(content, attachments))),
+            Ok(registry) => registry.get(&session_id).await.is_some_and(|runtime| {
+                runtime.inject(
+                    TurnInput::new(content, attachments).with_meta(user_msg.meta.clone()),
+                )
+            }),
             Err(_) => false,
         }
     } else {

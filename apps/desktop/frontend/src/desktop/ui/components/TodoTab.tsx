@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Circle, ListTodo } from "lucide-react";
-import { useStore } from "@/desktop/ui/store/useStore";
+import { useStore, selectCurrentSessionStream } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
 import {
   isTaskListTool,
@@ -23,8 +23,9 @@ import type { Session, StreamingAssistantPart } from "@/desktop/ui/types";
  */
 export function TodoTab() {
   const currentSession = useStore((s) => s.currentSession);
-  const streamingParts = useStore((s) => s.streamingParts);
-  const todos = useStore((s) => s.todos);
+  const sessionStream = useStore(selectCurrentSessionStream);
+  const streamingParts = sessionStream.streamingParts;
+  const todos = sessionStream.todos;
 
   const fallbackBlocks = useMemo(
     () => extractTodoBlocks(currentSession ?? undefined, streamingParts),

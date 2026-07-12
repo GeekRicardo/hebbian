@@ -9,7 +9,7 @@ import {
   Square,
   Terminal,
 } from "lucide-react";
-import { useStore } from "@/desktop/ui/store/useStore";
+import { useStore, selectCurrentSessionStream } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
 import { focusToolCall } from "@/desktop/ui/lib/focusToolCall";
@@ -48,7 +48,7 @@ const EMPTY_MESSAGES: Message[] = [];
 
 export function BackgroundTaskTab() {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
-  const suspended = useStore((s) => s.suspended);
+  const suspended = useStore((s) => selectCurrentSessionStream(s).suspended);
   const messagesRaw = useStore((s) => s.currentSession?.messages);
   const messages = messagesRaw ?? EMPTY_MESSAGES;
   const [report, setReport] = useState<SessionBackgroundReport | null>(null);
