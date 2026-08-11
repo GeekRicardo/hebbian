@@ -132,6 +132,9 @@ pub struct HebbianApp {
     /// 预览消息列表的虚拟化状态。见 `import_preview_view` 里为什么必须虚拟化。
     pub preview_list: Option<gpui::ListState>,
 
+    /// 聊天区消息列表的虚拟化状态。见 `chat.rs` 里为什么必须虚拟化。
+    pub messages_list: Option<gpui::ListState>,
+
     /// 聊天区消息列表的滚动句柄。「跳到这次工具调用」要用它把对应消息滚进视野。
     pub messages_scroll: gpui::ScrollHandle,
 
@@ -338,6 +341,7 @@ impl HebbianApp {
             editors: std::collections::HashMap::new(),
             pending_composer_text: None,
             preview_list: None,
+            messages_list: None,
             messages_scroll: gpui::ScrollHandle::new(),
             composer,
             search,
@@ -1031,14 +1035,10 @@ fn import_preview_view(
     };
 
     let entity = cx.entity().downgrade();
-    // 每条「有没有被点开看全文」在**建元素时就算好**，交给闭包按下标取。
+    // 哪些工具卡片是展开的，在**建元素时就快照一份**交给闭包。
     // 别在闭包里回头读 entity：那份读发生在布局阶段，和这一帧的状态对不对得上
-    // 不好保证（实测点了「展开全文」没反应，就是卡在这儿）。
-    let unfolded: std::rc::Rc<Vec<bool>> = std::rc::Rc::new(
-        (0..count)
-            .map(|ix| app.state.expanded_preview.contains(&ix))
-            .collect(),
-    );
+    // 不好保证。
+    let expanded_keys = std::rc::Rc::new(app.state.expanded_parts.clone());
     let body = if count == 0 {
         div()
             .py(px(20.))
@@ -1050,13 +1050,12 @@ fn import_preview_view(
         gpui::list(list_state, {
             let preview = preview.clone();
             let theme = theme.clone();
-            let unfolded = unfolded.clone();
+            let expanded_keys = expanded_keys.clone();
             move |ix, window, cx| {
                 let Some(app) = entity.upgrade() else {
                     return div().into_any_element();
                 };
-                let is_unfolded = unfolded.get(ix).copied().unwrap_or(false);
-                preview_message(&preview, ix, is_unfolded, &theme, &app, window, cx)
+                preview_message(&preview, ix, &expanded_keys, &theme, &app, window, cx)
             }
         })
         .flex_1()
@@ -1146,7 +1145,7 @@ fn import_preview_view(
 fn preview_message(
     preview: &crate::core::ClaudePreview,
     ix: usize,
-    unfolded: bool,
+    expanded_keys: &std::collections::HashSet<String>,
     theme: &Theme,
     app: &Entity<HebbianApp>,
     _window: &mut Window,
@@ -1171,14 +1170,6 @@ fn preview_message(
         );
 
     if !text.is_empty() {
-        // 长消息默认只铺一段，点一下看全文。折叠是渲染时机的问题，不是信息取舍。
-        const FOLD_CHARS: usize = 600;
-        let char_count = text.chars().count();
-        let shown = if char_count > FOLD_CHARS && !unfolded {
-            text.chars().take(FOLD_CHARS).collect::<String>()
-        } else {
-            text.to_string()
-        };
         bubble = bubble.child(
             div()
                 .p(px(8.))
@@ -1186,74 +1177,27 @@ fn preview_message(
                 .bg(if is_user { theme.accent_soft } else { theme.surface_veil })
                 .text_size(px(11.))
                 .text_color(theme.text)
-                .child(shown),
+                .child(text.to_string()),
         );
-        if char_count > FOLD_CHARS {
-            let app = app.downgrade();
-            bubble = bubble.child(
-                div()
-                    .id(gpui::SharedString::from(format!("unfold-{ix}")))
-                    .text_size(px(10.))
-                    .text_color(theme.accent)
-                    .cursor_pointer()
-                    .child(if unfolded {
-                        "收起".to_string()
-                    } else {
-                        format!("展开全文（还有 {} 字）", char_count - FOLD_CHARS)
-                    })
-                    .on_click(move |_, _, cx| {
-                        if let Some(app) = app.upgrade() {
-                            app.update(cx, |this, cx| {
-                                if !this.state.expanded_preview.remove(&ix) {
-                                    this.state.expanded_preview.insert(ix);
-                                }
-                                // 展开后这一条的高度变了，得让虚拟化列表重新量。
-                                // `splice(ix..ix+1, 1)` 不行——实测点了没反应，
-                                // 列表还是拿缓存的那份画。`reset` 才会真的重量一遍。
-                                if let Some(list) = this.preview_list.as_ref() {
-                                    let count = list.item_count();
-                                    list.reset(count);
-                                }
-                                cx.notify();
-                            });
-                        }
-                    }),
-            );
-        }
     }
 
-    // 工具调用画成一行摘要。预览要回答的是「是不是我要找的那段对话」，
-    // 一句「读取文件 main.rs」就够了；真要看入参出参，导入后在对话里展开。
-    for call in &message.tool_calls {
-        bubble = bubble.child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(6.))
-                .px(px(8.))
-                .py(px(3.))
-                .rounded(px(5.))
-                .border_1()
-                .border_color(theme.line)
-                .text_size(px(10.))
-                .child(
-                    div()
-                        .flex_none()
-                        .text_color(if call.is_error { theme.danger } else { theme.muted })
-                        .child(call.name.clone()),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .font_family("monospace")
-                        .text_color(theme.faint)
-                        .child(crate::tool_label::call_summary(&call.name, &call.input)),
-                ),
-        );
+    // 工具调用用聊天区那张卡片本体，不是另画一个简版：预览和正文里看到的东西
+    // 应当长一样，可展开看入参出参。收起态本身很轻（不序列化入参、不拷结果），
+    // 加上外面这层虚拟化，铺多少张都不贵。
+    for (ci, call) in message.tool_calls.iter().enumerate() {
+        let key = format!("preview-{ix}-{ci}");
+        bubble = bubble.child(crate::ui::chat::tool_card(
+            theme,
+            &app.downgrade(),
+            &key,
+            expanded_keys.contains(&key),
+            false,
+            &call.name,
+            &call.input,
+            call.result.as_deref(),
+            call.duration_ms,
+            call.is_error,
+        ));
     }
     bubble.into_any_element()
 }

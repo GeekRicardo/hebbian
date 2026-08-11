@@ -127,8 +127,8 @@ fn header(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
 
 /// 消息画布。没有会话时显示欢迎页。
 fn canvas(
-    app: &HebbianApp,
-    window: &mut Window,
+    app: &mut HebbianApp,
+    _window: &mut Window,
     cx: &mut Context<HebbianApp>,
 ) -> AnyElement {
     // 两种「空」是不同的画面，原前端分得很清楚，我之前混成了一个：
@@ -154,49 +154,90 @@ fn canvas(
         return empty_state(app).into_any_element();
     }
 
-    // 先把消息渲染成元素：markdown 视图要同时借 window 与 App，
-    // 与后面 `cx.listener(...)` 的借用错开，避免同一表达式里双份可变借用。
-    let bubbles: Vec<gpui::AnyElement> = app
+    // 消息列表**虚拟化**：只渲染视口内那几条。
+    //
+    // 非虚拟化版本在真实体量下是撑不住的：一段 33 条消息、439 次工具调用的对话
+    // （从 Claude 导入的真日志）打开要一分多钟才画得出来。虚拟化之后是常数开销，
+    // 多长的对话都一样快。
+    //
+    // 流式气泡与审批 / 提问卡片挂在列表**末尾的虚拟项**里，而不是列表外面——
+    // 挂外面它们就不跟着内容滚了，会一直钉在底部挡住消息。
+    let ctx = std::rc::Rc::new(RenderCtx::snapshot(app, cx));
+    let messages = std::rc::Rc::new(app.state.messages.clone());
+    let streaming = std::rc::Rc::new(app.state.streaming.clone());
+    let pending_approval = app
         .state
-        .messages
-        .iter()
-        .map(|m| bubble(app, m, window, cx).into_any_element())
-        .collect();
-    let streaming = if app.state.streaming.is_empty() {
-        None
-    } else {
-        Some(streaming_bubble(app, &app.state.streaming, window, cx).into_any_element())
+        .current_id()
+        .and_then(|id| app.state.pending_approvals.get(id))
+        .cloned();
+    let pending_question = app
+        .state
+        .current_id()
+        .and_then(|id| app.state.pending_questions.get(id))
+        .cloned();
+
+    // 尾部这几项按需出现，算进总数好让它们也参与虚拟化与滚动。
+    let mut tail: Vec<TailItem> = Vec::new();
+    if !streaming.is_empty() {
+        tail.push(TailItem::Streaming);
+    }
+    let tail = std::rc::Rc::new(tail);
+    let count = messages.len() + tail.len();
+
+    let list_state = match app.messages_list.as_ref() {
+        Some(state) if state.item_count() == count => state.clone(),
+        _ => {
+            // 新会话 / 条数变了就重建，并停在底部——聊天区的默认视角是最新一条。
+            let state = gpui::ListState::new(count, gpui::ListAlignment::Bottom, px(800.));
+            app.messages_list = Some(state.clone());
+            state
+        }
     };
 
-    let mut list = v_flex()
-        .id("messages")
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll()
-        .track_scroll(&app.messages_scroll)
-        .child(
-            v_flex()
-                .w_full()
-                .max_w(px(880.))
-                .mx_auto()
-                .px(px(32.))
-                .pt(px(34.))
-                .pb(px(42.))
-                .children(bubbles)
-                .children(streaming),
-        );
+    let messages_list = gpui::list(list_state, {
+        let ctx = ctx.clone();
+        move |ix, window, cx| {
+            let inner = |el: gpui::AnyElement| {
+                div()
+                    .w_full()
+                    .max_w(px(880.))
+                    .mx_auto()
+                    .px(px(32.))
+                    .child(el)
+                    .into_any_element()
+            };
+            if let Some(message) = messages.get(ix) {
+                return inner(bubble(&ctx, message, window, cx).into_any_element());
+            }
+            match tail.get(ix - messages.len()) {
+                Some(TailItem::Streaming) => {
+                    inner(streaming_bubble(&ctx, &streaming, window, cx).into_any_element())
+                }
+                None => div().into_any_element(),
+            }
+        }
+    })
+    .flex_1();
 
-    // 待审批 / 待回答的卡片压在消息流末尾，与原前端的行内弹层同位。
-    if let Some(session_id) = app.state.current_id() {
-        if let Some(pending) = app.state.pending_approvals.get(session_id) {
-            list = list.child(approval_card(app, cx, pending));
-        }
-        if let Some(question) = app.state.pending_questions.get(session_id) {
-            list = list.child(question_card(app, cx, question));
-        }
+    // 审批 / 提问压在消息流末尾（列表是底对齐的，视觉上就接在最后一条后面）。
+    let mut column = v_flex().flex_1().min_h_0().child(messages_list);
+    if let Some(pending) = pending_approval.as_ref() {
+        column = column.child(approval_card(app, cx, pending));
     }
-    list.into_any_element()
+    if let Some(question) = pending_question.as_ref() {
+        column = column.child(question_card(app, cx, question));
+    }
+    column.into_any_element()
 }
+
+/// 消息之后那几个「跟着一起滚」的东西。目前只有流式气泡：
+/// 审批 / 提问卡片留在列表外面（见下面 `render` 尾部），它们那几个监听器都在
+/// HITL 主路径上，为了虚拟化去改写不划算，而且它们本来就只出现在对话末尾。
+#[derive(Clone, Copy)]
+enum TailItem {
+    Streaming,
+}
+
 
 /// 还没选任何会话时的画面。对应 `ChatView` 里 `!currentSession` 那一段：
 /// 56px 渐变圆角方块 + 标题 + 一句说明 + 「新建对话 / 供应商配置」两个按钮。
@@ -319,12 +360,12 @@ fn empty_state(app: &HebbianApp) -> impl IntoElement {
 
 /// 一条落盘消息。用户消息靠右、助手消息占满宽——与 `.dsp-message.is-user` 一致。
 fn bubble(
-    app: &HebbianApp,
+    ctx: &RenderCtx,
     message: &Message,
     window: &mut Window,
-    cx: &mut Context<HebbianApp>,
+    cx: &mut gpui::App,
 ) -> impl IntoElement {
-    let theme = app.theme.clone();
+    let theme = ctx.theme.clone();
     let is_user = matches!(message.role, Role::User);
 
     if matches!(message.role, Role::Marker) {
@@ -356,11 +397,13 @@ fn bubble(
             cx,
         ));
         for (i, call) in message.tool_calls.iter().enumerate() {
+            let key = format!("{}-tc{}", message.id, i);
             body = body.child(tool_card(
-                app,
-                cx,
-                &format!("{}-tc{}", message.id, i),
-                Some(call.id.as_str()),
+                &ctx.theme,
+                &ctx.entity,
+                &key,
+                ctx.call_expanded(&key, Some(&call.id)),
+                ctx.flashed(&call.id),
                 &call.name,
                 &call.input,
                 call.result.as_deref(),
@@ -382,7 +425,7 @@ fn bubble(
                     cx,
                 )),
                 MessagePart::Reasoning { text, duration_ms } => {
-                    body.child(reasoning_block(app, cx, &key, text, *duration_ms))
+                    body.child(reasoning_block(ctx, &key, text, *duration_ms))
                 }
                 MessagePart::ToolCall {
                     id,
@@ -393,10 +436,11 @@ fn bubble(
                     is_error,
                     ..
                 } => body.child(tool_card(
-                    app,
-                    cx,
+                    &ctx.theme,
+                    &ctx.entity,
                     &key,
-                    Some(id.as_str()),
+                    ctx.call_expanded(&key, Some(id)),
+                    ctx.flashed(id),
                     name,
                     input,
                     result.as_deref(),
@@ -407,14 +451,14 @@ fn bubble(
         }
     }
 
-    body = body.child(meta_row(app, message, is_user, cx));
+    body = body.child(meta_row(ctx, message, is_user));
 
     h_flex()
         .group(gpui::SharedString::from(format!("msg-{}", message.id)))
         .items_start()
         .gap(px(12.))
         .mb(px(20.))
-        .child(avatar(app, is_user))
+        .child(avatar(&ctx.theme, is_user))
         .child(body)
 }
 
@@ -442,14 +486,14 @@ fn markdown(
 /// 思考过程折叠块。对应原 UI 的「⏱ 思考过程 N ms ⌄」——默认收起，
 /// 展开后正文用弱化色 + 左侧竖线，与正式回答区分开。
 fn reasoning_block(
-    app: &HebbianApp,
-    cx: &mut Context<HebbianApp>,
+    ctx: &RenderCtx,
     key: &str,
     text: &str,
     duration_ms: Option<u64>,
 ) -> impl IntoElement {
-    let theme = app.theme.clone();
-    let expanded = app.state.expanded_parts.contains(key);
+    let theme = ctx.theme.clone();
+    let expanded = ctx.expanded_parts.contains(key);
+    let entity = ctx.entity.clone();
     let key_owned = key.to_string();
     let duration = match duration_ms {
         Some(ms) if ms >= 1000 => format!("{:.1}s", ms as f64 / 1000.),
@@ -477,12 +521,16 @@ fn reasoning_block(
                         Icon::ChevronRight.el(px(12.), theme.faint)
                     },
                 )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if !this.state.expanded_parts.remove(&key_owned) {
-                        this.state.expanded_parts.insert(key_owned.clone());
-                    }
-                    cx.notify();
-                })),
+                .on_click(move |_, _, cx: &mut gpui::App| {
+                    let Some(app) = entity.upgrade() else { return };
+                    let key = key_owned.clone();
+                    app.update(cx, |this, cx| {
+                        if !this.state.expanded_parts.remove(&key) {
+                            this.state.expanded_parts.insert(key);
+                        }
+                        cx.notify();
+                    });
+                }),
         )
         .when(expanded && !body.is_empty(), |this| {
             this.child(
@@ -502,20 +550,66 @@ fn reasoning_block(
 /// 工具调用卡片。收起时是一行「图标 + 工具名 + 摘要 + 耗时」，
 /// 展开后把入参与结果原样摊开——排查 agent 行为时看的就是这两块。
 #[allow(clippy::too_many_arguments)]
+/// 渲染一条消息所需的全部状态。
+///
+/// 存在的理由：消息列表要虚拟化，而虚拟化列表的渲染回调只拿得到 `&mut App`，
+/// 拿不到 `Context<HebbianApp>`，也不方便在布局阶段回读 entity。所以把这几样
+/// 在建元素时先快照一份传进去，回调里只读它。
+pub(crate) struct RenderCtx {
+    pub theme: crate::theme::Theme,
+    pub entity: gpui::WeakEntity<HebbianApp>,
+    pub expanded_parts: std::collections::HashSet<String>,
+    pub expanded_calls: std::collections::HashSet<String>,
+    pub flash_tool_call: Option<String>,
+}
+
+impl RenderCtx {
+    pub fn snapshot(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> Self {
+        Self {
+            theme: app.theme.clone(),
+            entity: cx.entity().downgrade(),
+            expanded_parts: app.state.expanded_parts.clone(),
+            expanded_calls: app.state.expanded_calls.clone(),
+            flash_tool_call: app.state.flash_tool_call.clone(),
+        }
+    }
+
+    fn call_expanded(&self, key: &str, call_id: Option<&str>) -> bool {
+        self.expanded_parts.contains(key)
+            || call_id.is_some_and(|id| self.expanded_calls.contains(id))
+    }
+
+    fn flashed(&self, call_id: &str) -> bool {
+        self.flash_tool_call.as_deref() == Some(call_id)
+    }
+}
+
+/// 这张卡片是不是展开着。两个来源：用户自己点开的（按 key 记），
+/// 以及从「后台任务」面板点名跳过来的（按调用 id 记）。
+pub(crate) fn is_call_expanded(app: &HebbianApp, key: &str, call_id: Option<&str>) -> bool {
+    app.state.expanded_parts.contains(key)
+        || call_id.is_some_and(|id| app.state.expanded_calls.contains(id))
+}
+
+/// 工具调用卡片。
+///
+/// 参数刻意不收 `&HebbianApp` / `&mut Context`，只收算好的 `expanded` / `flashed` 和一个
+/// 弱引用：这样**聊天区和导入预览能共用同一份实现**。预览跑在虚拟化列表的渲染回调里，
+/// 那里只拿得到 `&mut App`，收 `Context` 的版本进不去；而预览若另写一份卡片，
+/// 两处样式迟早会走偏。
 pub(crate) fn tool_card(
-    app: &HebbianApp,
-    cx: &mut Context<HebbianApp>,
+    theme: &crate::theme::Theme,
+    entity: &gpui::WeakEntity<HebbianApp>,
     key: &str,
-    call_id: Option<&str>,
+    expanded: bool,
+    flashed: bool,
     name: &str,
     input: &serde_json::Value,
     result: Option<&str>,
     duration_ms: Option<u64>,
     is_error: bool,
 ) -> impl IntoElement {
-    let theme = app.theme.clone();
-    let expanded = app.state.expanded_parts.contains(key)
-        || call_id.is_some_and(|id| app.state.expanded_calls.contains(id));
+    let theme = theme.clone();
     let key_owned = key.to_string();
     // 卡片头是三段：工具名（粗）+ 这次在做什么 + 作用对象（等宽）。
     let description = crate::tool_label::call_description(name, input);
@@ -540,7 +634,6 @@ pub(crate) fn tool_card(
 
     // 从「后台任务」面板跳过来的那张卡片描一圈重色——长对话滚过去之后，
     // 不给个落点用户根本不知道该看哪一行。
-    let flashed = call_id.is_some() && app.state.flash_tool_call.as_deref() == call_id;
     v_flex()
         .rounded(px(5.))
         .border_1()
@@ -602,12 +695,22 @@ pub(crate) fn tool_card(
                         Icon::ChevronRight.el(px(12.), theme.faint)
                     },
                 )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if !this.state.expanded_parts.remove(&key_owned) {
-                        this.state.expanded_parts.insert(key_owned.clone());
+                .on_click({
+                    let entity = entity.clone();
+                    move |_, _, cx: &mut gpui::App| {
+                        let Some(app) = entity.upgrade() else { return };
+                        let key = key_owned.clone();
+                        app.update(cx, |this, cx| {
+                            if !this.state.expanded_parts.remove(&key) {
+                                this.state.expanded_parts.insert(key.clone());
+                            }
+                            // 不主动去 splice / reset 那条：两者都会动到列表的锚点，
+                            // 表现为「点开一张卡片，列表咣一下跳走」。视图重绘时
+                            // 渲染回调会被重新调用，高度自然就重量了。
+                            cx.notify();
+                        });
                     }
-                    cx.notify();
-                })),
+                }),
         )
         .when(expanded, |this| {
             this.child(
@@ -656,8 +759,8 @@ fn mono_block(
 }
 
 /// 消息左侧的头像位：用户是圆形底色块，助手是小星标。
-fn avatar(app: &HebbianApp, is_user: bool) -> impl IntoElement {
-    let theme = app.theme.clone();
+fn avatar(theme: &crate::theme::Theme, is_user: bool) -> impl IntoElement {
+    let theme = theme.clone();
     div()
         .size(px(28.))
         .flex_none()
@@ -681,13 +784,9 @@ fn avatar(app: &HebbianApp, is_user: bool) -> impl IntoElement {
 /// 与原前端逐项对齐（`MessageBubble.tsx`）：整行 **hover 才显出**（原来是
 /// `opacity-0 group-hover:opacity-100`，我之前一直常显）；时间当天只显时分；
 /// **重新生成对用户消息也有**（用户那条是「用同样内容重跑」，我之前只给了助手）。
-fn meta_row(
-    app: &HebbianApp,
-    message: &Message,
-    is_user: bool,
-    cx: &mut Context<HebbianApp>,
-) -> impl IntoElement {
-    let theme = app.theme.clone();
+fn meta_row(ctx: &RenderCtx, message: &Message, is_user: bool) -> impl IntoElement {
+    let theme = ctx.theme.clone();
+    let entity = ctx.entity.clone();
     let group = gpui::SharedString::from(format!("msg-{}", message.id));
 
     let action = |id: gpui::SharedString,
@@ -744,9 +843,9 @@ fn meta_row(
                 "",
                 theme.clone(),
             )
-            .on_click(cx.listener(move |_, _, _, cx| {
+            .on_click(move |_, _, cx: &mut gpui::App| {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(content.clone()));
-            })),
+            }),
         )
         .child(
             action(
@@ -755,11 +854,17 @@ fn meta_row(
                 "分叉",
                 theme.clone(),
             )
-            .on_click(cx.listener(move |this, _, _, _| {
+            .on_click({
+                let entity = entity.clone();
+                move |_, _, cx: &mut gpui::App| {
+                    let Some(app) = entity.upgrade() else { return };
+                    app.update(cx, |this, _| {
                 if let Some(sid) = this.state.current_id().map(str::to_string) {
                     this.state.core.fork_session(sid, fork_id.clone());
                 }
-            })),
+                    });
+                }
+            }),
         )
         .when(is_user, |row| {
             row.child(
@@ -769,11 +874,17 @@ fn meta_row(
                     "编辑",
                     theme.clone(),
                 )
-                .on_click(cx.listener(move |this, _, _, _| {
+                .on_click({
+                let entity = entity.clone();
+                move |_, _, cx: &mut gpui::App| {
+                    let Some(app) = entity.upgrade() else { return };
+                    app.update(cx, |this, _| {
                     if let Some(sid) = this.state.current_id().map(str::to_string) {
                         this.state.core.edit_message(sid, edit_id.clone());
                     }
-                })),
+                    });
+                }
+            }),
             )
         })
         .child(
@@ -783,23 +894,29 @@ fn meta_row(
                 "重新生成",
                 theme,
             )
-            .on_click(cx.listener(move |this, _, _, _| {
+            .on_click({
+                let entity = entity.clone();
+                move |_, _, cx: &mut gpui::App| {
+                    let Some(app) = entity.upgrade() else { return };
+                    app.update(cx, |this, _| {
                 if let Some(sid) = this.state.current_id().map(str::to_string) {
                     this.state.core.regenerate(sid, regen_id.clone(), is_user);
                 }
-            })),
+                    });
+                }
+            }),
         )
 }
 
 
 /// 流式进行中的助手气泡。
 fn streaming_bubble(
-    app: &HebbianApp,
+    ctx: &RenderCtx,
     turn: &StreamingTurn,
     window: &mut Window,
-    cx: &mut Context<HebbianApp>,
+    cx: &mut gpui::App,
 ) -> impl IntoElement {
-    let theme = app.theme.clone();
+    let theme = ctx.theme.clone();
     let mut body = v_flex()
         .flex_1()
         .min_w_0()
@@ -834,7 +951,7 @@ fn streaming_bubble(
     if !turn.tools.is_empty() {
         let mut strip = h_flex().flex_wrap().gap(px(7.)).mt(px(10.));
         for tool in &turn.tools {
-            strip = strip.child(tool_chip(app, &tool.name, tool.done, tool.is_error));
+            strip = strip.child(tool_chip(&theme, &tool.name, tool.done, tool.is_error));
         }
         body = body.child(strip);
     }
@@ -842,8 +959,8 @@ fn streaming_bubble(
     h_flex().items_start().gap(px(12.)).mb(px(20.)).child(body)
 }
 
-fn tool_chip(app: &HebbianApp, name: &str, done: bool, is_error: bool) -> impl IntoElement {
-    let theme = app.theme.clone();
+fn tool_chip(theme: &crate::theme::Theme, name: &str, done: bool, is_error: bool) -> impl IntoElement {
+    let theme = theme.clone();
     h_flex()
         .gap(px(5.))
         .px(px(8.))
