@@ -101,6 +101,16 @@ pub trait CoreClient: Send + Sync {
         title: String,
     ) -> Result<sessions_store::Session, CoreError>;
 
+    /// 改会话的思考强度（架构 §7.3：带业务规则，只能有一份实现）。
+    ///
+    /// 与切模型同理，它不是写一个字段：强度变了要往历史里插一条 ReasoningSwitch
+    /// marker，前端据此画分割线——从那条之后的回复才是新参数下产生的。
+    fn set_session_reasoning(
+        &self,
+        session_id: &str,
+        reasoning: Option<common::reasoning::ReasoningConfig>,
+    ) -> Result<sessions_store::Session, CoreError>;
+
     /// 切换会话的供应商 + 模型（架构 §7.3：这类带业务规则的能力必须只有一份实现）。
     ///
     /// 它不是「写两个字段」：要往历史里插一条 switch marker（前端据此画分割线）、
@@ -459,6 +469,29 @@ impl CoreClient for LocalCoreClient {
             .map_err(CoreError::from)
     }
 
+
+
+    fn set_session_reasoning(
+        &self,
+        session_id: &str,
+        reasoning: Option<common::reasoning::ReasoningConfig>,
+    ) -> Result<sessions_store::Session, CoreError> {
+        let dd = &self.data_dir;
+        let cur = sessions_store::load(dd, session_id)?;
+        if cur.reasoning == reasoning {
+            return Ok(cur);
+        }
+        // marker 先落，再重读改字段——顺序反了会把 marker 覆盖掉。
+        sessions_store::insert_reasoning_switch_marker(
+            dd,
+            session_id,
+            cur.reasoning.clone(),
+            reasoning.clone(),
+        )?;
+        let mut updated = sessions_store::load(dd, session_id)?;
+        updated.reasoning = reasoning;
+        Ok(sessions_store::save(dd, updated)?)
+    }
 
     fn switch_session_model(
         &self,

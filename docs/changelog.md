@@ -12111,3 +12111,14 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: 给 fixture 会话补真实 `token_stats`（input 120k / cache_read 90k）——显示 `cache 75%`，正好是 90000/120000；补 `reasoning.effort = high` —— pill 显示「高」而不是写死的「极高」。**过程中踩到自己一个坑**：`MetaUpdate` 行的 `at` 字段没有 serde default，我第一版 fixture 漏写，整行被静默跳过，表现为 cache 仍是 0%——不是代码错，是 fixture 错。
 - **留尾巴**: 两个 chip 都还不能点开改（原前端可以）；上下文环是纯边框圆，没有按百分比画弧。
+
+### 2026-08-11 — 思考强度 pill 可点开改（新增 `CoreClient::set_session_reasoning`）
+
+- **Why**: 上一条把 pill 从「硬写极高」改成反映真实档位，但仍然点不动。运行模式与思考强度是输入框下面仅有的两个可调项，另一个（运行模式）已经能切了。
+- **做法（与切模型同一条路径，不是又抄一份）**: 改思考强度也不是写一个字段——档位变了要往历史插一条 `ReasoningSwitch` marker，前端据此画分割线（从那条之后的回复才是新参数下产生的）。所以照架构 §7.3 的规定路径来：
+  - `crates/agent-core/src/core_client/mod.rs`: `CoreClient` 加 `set_session_reasoning`，**唯一实现**在 `LocalCoreClient`：值没变直接返回、marker 先落再重读改字段（顺序反了会把 marker 覆盖掉）。
+  - `crates/core-rpc/src/lib.rs`: 加 `SetSessionReasoning` 请求 / 响应 / dispatch 分支，纯 additive。
+  - `apps/gpui`: pill 点开是五档菜单（低 / 中 / 高 / 极高 / 最高，名字取自原前端 `REASONING_EFFORT_LABEL`）。`Max` 只有部分模型支持、core 侧会钳到 high——**UI 照列不替 core 判断**，钳不钳是 core 的事。
+- **影响范围**: 两个共享 crate 各加一个方法 / 一个 variant，均 additive；`cargo check -p agent-core` / `-p core-rpc` / `-p hebbian-web-server` 均通过。
+- **验证**: 点开菜单五档齐全、当前档高亮；选「极高」后 `session.jsonl` 里 `reasoning.effort` 变成 `extra` **且追加了一条 `reasoning_switch` marker（from: high）**，pill 同步变成「极高」。
+- **留尾巴**: 思考的开关（enabled）还不能在这里关；`apps/desktop` 的 `update_session_config` 仍是自己那份实现，没改成调这个新入口（同切模型，需要能编 tauri 的环境）。

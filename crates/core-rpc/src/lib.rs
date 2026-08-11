@@ -66,6 +66,11 @@ pub enum CoreRequest {
         session_id: String,
         title: String,
     },
+    /// 改思考强度。带业务规则（ReasoningSwitch marker），实现只在一处。
+    SetSessionReasoning {
+        session_id: String,
+        reasoning: Option<common::reasoning::ReasoningConfig>,
+    },
     /// 切供应商 + 模型。带业务规则（switch marker / 系列锁定 / 推理参数重置），
     /// 实现只在 `LocalCoreClient` 一处。
     SwitchSessionModel {
@@ -286,6 +291,7 @@ pub enum CoreResponse {
     LoadSession(agent_core::storage::sessions::Session),
     RenameSession(agent_core::storage::sessions::Session),
     SwitchSessionModel(agent_core::storage::sessions::Session),
+    SetSessionReasoning(agent_core::storage::sessions::Session),
     SearchSessions(Vec<agent_core::storage::sessions::SearchHit>),
 
     // ── Projects ────────────────────────────────────────────────────────
@@ -411,6 +417,13 @@ pub async fn dispatch(req: CoreRequest, core: &dyn CoreClient) -> CoreResponse {
             R::from_result(core.load_session(&session_id), R::LoadSession)
         }
         Q::DeleteSession { session_id } => R::from_unit(core.delete_session(&session_id)),
+        Q::SetSessionReasoning {
+            session_id,
+            reasoning,
+        } => R::from_result(
+            core.set_session_reasoning(&session_id, reasoning),
+            R::SetSessionReasoning,
+        ),
         Q::SwitchSessionModel {
             session_id,
             provider_id,

@@ -201,6 +201,24 @@ impl Core {
         });
     }
 
+    /// 改思考强度。业务规则（插 ReasoningSwitch marker）只在 core 一处。
+    pub fn set_reasoning(
+        &self,
+        session_id: String,
+        reasoning: Option<common::ReasoningConfig>,
+    ) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            match this
+                .local_client()
+                .set_session_reasoning(&session_id, reasoning)
+            {
+                Ok(session) => this.emit(CoreUpdate::SessionLoaded(Box::new(session))),
+                Err(err) => this.emit_err(err),
+            }
+        });
+    }
+
     /// 切运行模式。落两处：会话文件（跨重启保留）+ 活运行时（当前 run 立即生效）。
     /// 只落一处的话，要么重启就丢、要么当前这轮不生效。
     pub fn set_run_mode(&self, session_id: String, mode: agent_core::run_mode::RunMode) {

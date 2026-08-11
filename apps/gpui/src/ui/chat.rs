@@ -1142,7 +1142,7 @@ fn info_row(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement 
         .text_size(px(11.))
         .text_color(theme.muted)
         .child(run_mode_chip(app, cx))
-        .children(reasoning_pill(app))
+        .children(reasoning_pill(app, cx))
         .child(div().flex_1())
         .child(context_meter(app))
 }
@@ -1150,7 +1150,10 @@ fn info_row(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement 
 /// 思考强度 pill。**只在当前模型确实启用了推理时才显示**——
 /// 不支持推理的模型上原前端是隐藏这个 pill 的，硬画一个「极高」是假状态。
 /// 档位名逐字取自原前端 `REASONING_EFFORT_LABEL`。
-fn reasoning_pill(app: &HebbianApp) -> Option<impl IntoElement> {
+fn reasoning_pill(
+    app: &HebbianApp,
+    cx: &mut Context<HebbianApp>,
+) -> Option<impl IntoElement> {
     use common::ReasoningEffort;
     let theme = app.theme.clone();
     let reasoning = app.state.current.as_ref()?.reasoning.as_ref()?;
@@ -1164,14 +1167,76 @@ fn reasoning_pill(app: &HebbianApp) -> Option<impl IntoElement> {
         ReasoningEffort::Extra => "极高",
         ReasoningEffort::Max => "最高",
     };
+    // 档位顺序与原前端菜单一致。`Max` 只有部分模型支持，core 侧会钳到 high，
+    // 这里照列——钳不钳是 core 的事，UI 不替它做判断。
+    const LEVELS: [(ReasoningEffort, &str); 5] = [
+        (ReasoningEffort::Low, "低"),
+        (ReasoningEffort::Medium, "中"),
+        (ReasoningEffort::High, "高"),
+        (ReasoningEffort::Extra, "极高"),
+        (ReasoningEffort::Max, "最高"),
+    ];
+    let current = reasoning.effort.unwrap_or_default();
+    let base = reasoning.clone();
+
+    let mut menu = v_flex()
+        .absolute()
+        .bottom(px(24.))
+        .left(px(0.))
+        .w(px(120.))
+        .p(px(4.))
+        .rounded(px(10.))
+        .border_1()
+        .border_color(theme.card_line)
+        .bg(theme.card_strong)
+        .shadow(shadow_lifted(gpui::rgba(0x2d3d5324).into()));
+    for (effort, name) in LEVELS {
+        let active = effort == current;
+        let mut next = base.clone();
+        next.effort = Some(effort);
+        menu = menu.child(
+            h_flex()
+                .id(name)
+                .px(px(8.))
+                .py(px(5.))
+                .rounded(px(6.))
+                .text_size(px(12.))
+                .cursor_pointer()
+                .when(active, |this| {
+                    this.bg(theme.accent_soft).text_color(theme.accent)
+                })
+                .hover(|this| this.bg(theme.accent_soft))
+                .child(name)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(id) = this.state.current_id().map(str::to_string) {
+                        this.state.core.set_reasoning(id, Some(next.clone()));
+                    }
+                    this.reasoning_open = false;
+                    cx.notify();
+                })),
+        );
+    }
+
     Some(
-        h_flex()
-            .gap(px(4.))
-            .pr(px(8.))
-            .min_h(px(20.))
-            .child(Icon::Gauge.el(px(12.), theme.muted))
-            .child(label)
-            .child(Icon::ChevronDown.el(px(10.), theme.faint)),
+        div()
+            .relative()
+            .child(
+                h_flex()
+                    .id("reasoning-pill")
+                    .gap(px(4.))
+                    .pr(px(8.))
+                    .min_h(px(20.))
+                    .cursor_pointer()
+                    .hover(|this| this.text_color(theme.text))
+                    .child(Icon::Gauge.el(px(12.), theme.muted))
+                    .child(label)
+                    .child(Icon::ChevronDown.el(px(10.), theme.faint))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.reasoning_open = !this.reasoning_open;
+                        cx.notify();
+                    })),
+            )
+            .when(app.reasoning_open, |this| this.child(menu)),
     )
 }
 

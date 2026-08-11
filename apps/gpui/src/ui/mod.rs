@@ -57,6 +57,8 @@ pub struct HebbianApp {
     pub title_editing: bool,
     /// 标题输入框。
     pub title_input: Entity<InputState>,
+    /// 思考强度下拉是否展开。
+    pub reasoning_open: bool,
     /// 运行模式下拉是否展开。
     pub run_mode_open: bool,
     /// `//` 命令面板是否展开。
@@ -240,6 +242,7 @@ impl HebbianApp {
             dragging_project: None,
             title_editing: false,
             title_input,
+            reasoning_open: false,
             run_mode_open: false,
             slash_open: false,
             session_settings_open: false,
