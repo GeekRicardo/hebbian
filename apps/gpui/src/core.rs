@@ -799,6 +799,23 @@ impl Core {
         });
     }
 
+    /// 让模型按对话内容重新起一个标题。
+    pub fn regenerate_title(&self, session_id: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            match agent_core::session_titler::regenerate_session_title(
+                &this.inner.data_dir,
+                &session_id,
+            )
+            .await
+            {
+                // 标题写在会话列表里，改完要刷一次列表才看得到。
+                Ok(_) => this.refresh_catalog(),
+                Err(err) => this.emit_err(err),
+            }
+        });
+    }
+
     /// 把一段对话导出成 Claude 能 resume 的会话文件。
     ///
     /// 转换本身在 agent-core 里做（无副作用），落盘留在这一层——

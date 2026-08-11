@@ -60,17 +60,17 @@ impl SettingsTab {
             SettingsTab::General => Icon::Settings,
             SettingsTab::Conversation => Icon::FolderOpen,
             SettingsTab::Appearance => Icon::Palette,
-            SettingsTab::Roles => Icon::User,
-            SettingsTab::Providers => Icon::Globe,
+            SettingsTab::Roles => Icon::UserCog,
+            SettingsTab::Providers => Icon::Server,
             SettingsTab::Agents => Icon::Bot,
-            SettingsTab::Memory => Icon::Braces,
-            SettingsTab::Permissions => Icon::Check,
+            SettingsTab::Memory => Icon::Brain,
+            SettingsTab::Permissions => Icon::Shield,
             SettingsTab::Skills => Icon::Sparkles,
-            SettingsTab::Plugins => Icon::Braces,
+            SettingsTab::Plugins => Icon::Package,
             SettingsTab::Hooks => Icon::GitBranch,
-            SettingsTab::Mcp => Icon::Terminal,
-            SettingsTab::Channels => Icon::MessageSquare,
-            SettingsTab::Logs => Icon::FileText,
+            SettingsTab::Mcp => Icon::Plug,
+            SettingsTab::Channels => Icon::MessageCircle,
+            SettingsTab::Logs => Icon::ScrollText,
         }
     }
 }
@@ -260,6 +260,25 @@ fn header(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
                             if let Some(draft) = this.settings_draft.take() {
                                 this.state.core.save_settings(draft);
                             }
+                            this.settings_open = false;
+                            cx.notify();
+                        })),
+                )
+                // 关闭叉。原前端「取消 / 保存」右边还有一个 X，作用与取消相同
+                // （丢草稿关面板），我这边之前漏了。
+                .child(
+                    h_flex()
+                        .id("settings-close")
+                        .size(px(30.))
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(8.))
+                        .text_color(theme.muted)
+                        .cursor_pointer()
+                        .hover(|this| this.bg(theme.accent_soft).text_color(theme.text))
+                        .child(Icon::X.el(px(15.), theme.muted))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.settings_draft = None;
                             this.settings_open = false;
                             cx.notify();
                         })),

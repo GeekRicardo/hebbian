@@ -95,35 +95,47 @@ fn header(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
                         .hover(|this| this.bg(theme.accent_soft))
                         .child(Icon::Sparkles.el(px(14.), theme.muted))
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.state.error = Some("重新生成标题还没接上".to_string());
+                            if let Some(id) = this.state.current_id().map(str::to_string) {
+                                this.state.core.regenerate_title(id);
+                            }
                             cx.notify();
                         })),
                 ),
         )
-        .child(
-            h_flex()
-                .gap(px(8.))
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(theme.faint)
-                        .child(session_id),
-                )
-                .child(
-                    div()
-                        .id("session-settings-open")
-                        .p(px(4.))
-                        .rounded(px(6.))
-                        .cursor_pointer()
-                        .hover(|this| this.bg(theme.accent_soft))
-                        .child(Icon::Settings.el(px(14.), theme.faint))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.session_settings_open = true;
-                            this.state.core.refresh_providers();
-                            cx.notify();
-                        })),
-                ),
-        )
+        // 会话 id 与「对话设置」入口默认都不显示——原前端的标题栏只有标题 + 那颗小星星，
+        // id 那截是 debug 开关打开才出现的（`debugEnabled`，默认关），设置入口在标题栏
+        // 里压根没有。开 `HEBBIAN_DEBUG=1` 才把这两样放出来，对齐原版的默认长相。
+        .when(debug_chrome(), |this| {
+            this.child(
+                h_flex()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.faint)
+                            .child(session_id),
+                    )
+                    .child(
+                        div()
+                            .id("session-settings-open")
+                            .p(px(4.))
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .hover(|this| this.bg(theme.accent_soft))
+                            .child(Icon::Settings.el(px(14.), theme.faint))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.session_settings_open = true;
+                                this.state.core.refresh_providers();
+                                cx.notify();
+                            })),
+                    ),
+            )
+        })
+}
+
+/// 标题栏右侧那截调试信息要不要显示。对应原前端的 `debugEnabled`（默认关）。
+fn debug_chrome() -> bool {
+    std::env::var("HEBBIAN_DEBUG").is_ok_and(|v| v == "1")
 }
 
 /// 消息画布。没有会话时显示欢迎页。
@@ -1773,7 +1785,11 @@ fn slash_row(
 }
 
 /// 模型选择器弹窗。对应 `.model-picker-popup`：256px 宽、18px 圆角、
-/// 供应商一行 38px，展开后列出该供应商的模型（40px 一行）。
+/// 模型选择器。**两栏**：左边供应商、右边那个供应商的模型。
+///
+/// 之前做成了单栏「点供应商就地展开模型」，和原前端不是一个东西——原版是左栏选中
+/// 谁、右栏就飞出谁的模型，左栏底部还有一个整宽的「完成」。这次是照着跑起来的
+/// 原界面截图改的，不是照着源码猜的。
 fn model_picker(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> Option<impl IntoElement> {
     if !app.model_picker_open {
         return None;
@@ -1782,24 +1798,30 @@ fn model_picker(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> Option<impl I
     let current_model = app.state.current.as_ref().map(|s| s.model.clone());
     let current_provider = app.state.current.as_ref().map(|s| s.provider_id.clone());
 
-    let mut list = v_flex().max_h(px(420.)).id("provider-list").overflow_y_scroll();
+    // 左栏没选中谁时，默认落在当前对话用的那个供应商上——右栏才不会是空的。
+    let active_provider = app
+        .model_picker_provider
+        .clone()
+        .or_else(|| current_provider.clone());
 
+    let mut providers = v_flex()
+        .id("provider-list")
+        .max_h(px(360.))
+        .overflow_y_scroll();
     if app.state.providers.is_empty() {
-        list = list.child(
+        providers = providers.child(
             div()
-                .p(px(12.))
+                .px(px(12.))
+                .py(px(10.))
                 .text_size(px(12.))
                 .text_color(theme.muted)
-                .child("还没有配置模型供应商"),
+                .child("还没配供应商"),
         );
     }
-
     for provider in &app.state.providers {
-        let expanded = app.model_picker_provider.as_deref() == Some(provider.id.as_str());
-        let selected = current_provider.as_deref() == Some(provider.id.as_str());
+        let selected = active_provider.as_deref() == Some(provider.id.as_str());
         let pid = provider.id.clone();
-
-        list = list.child(
+        providers = providers.child(
             h_flex()
                 .id(gpui::SharedString::from(format!("prov-{}", provider.id)))
                 .h(px(38.))
@@ -1807,52 +1829,90 @@ fn model_picker(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> Option<impl I
                 .gap(px(6.))
                 .justify_between()
                 .text_size(px(12.))
-                .text_color(if selected { theme.accent } else { theme.muted })
+                .text_color(if selected { theme.accent } else { theme.text })
                 .cursor_pointer()
                 .when(selected, |this| this.bg(theme.accent_soft))
-                .hover(|this| this.bg(theme.accent_soft).text_color(theme.accent))
-                .child(div().overflow_hidden().text_ellipsis().child(provider.name.clone()))
+                .hover(|this| this.bg(theme.accent_soft))
                 .child(
-                    if expanded {
-                        Icon::ChevronDown.el(px(12.), theme.faint)
-                    } else {
-                        Icon::ChevronRight.el(px(12.), theme.faint)
-                    },
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(provider.name.clone()),
+                )
+                .child(
+                    h_flex()
+                        .flex_none()
+                        .gap(px(4.))
+                        .text_size(px(10.))
+                        .text_color(theme.faint)
+                        // 供应商类型（DEEPSEEK / ANTHROPIC / …）大写小字排在右边，
+                        // 同一个 kind 配了多个号时靠它区分。
+                        .child(provider_kind_label(provider.kind))
+                        .child(Icon::ChevronRight.el(px(11.), theme.faint)),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.model_picker_provider = if this.model_picker_provider.as_deref()
-                        == Some(pid.as_str())
-                    {
-                        None
-                    } else {
-                        Some(pid.clone())
-                    };
+                    this.model_picker_provider = Some(pid.clone());
                     cx.notify();
                 })),
         );
+    }
 
-        if !expanded {
-            continue;
-        }
-        for model in provider.models.iter() {
-            let is_current = current_model.as_deref() == Some(model.as_str());
+    // 右栏：选中那个供应商的模型。
+    let active = app
+        .state
+        .providers
+        .iter()
+        .find(|p| Some(p.id.as_str()) == active_provider.as_deref());
+    let models_pane = active.map(|provider| {
+        let mut list = v_flex()
+            .id("model-list")
+            .max_h(px(320.))
+            .overflow_y_scroll();
+        for model in &provider.models {
+            let is_current = current_model.as_deref() == Some(model.as_str())
+                && current_provider.as_deref() == Some(provider.id.as_str());
             let label = model.clone();
             let provider_id = provider.id.clone();
+            // 上下文窗口：供应商自己标了就用它的，没标就按 kind + 模型名推。
+            let window = provider
+                .model_context_windows
+                .get(model)
+                .copied()
+                .unwrap_or_else(|| {
+                    model_gateway::context_window::context_window_for(provider.kind, model)
+                });
             list = list.child(
                 h_flex()
-                    .id(gpui::SharedString::from(format!("model-{}-{}", provider.id, model)))
+                    .id(gpui::SharedString::from(format!(
+                        "model-{}-{}",
+                        provider.id, model
+                    )))
                     .min_h(px(40.))
                     .px(px(12.))
-                    .pl(px(24.))
+                    .gap(px(8.))
+                    .justify_between()
                     .text_size(px(12.))
                     .text_color(if is_current { theme.accent } else { theme.text })
                     .cursor_pointer()
                     .when(is_current, |this| this.bg(theme.accent_soft))
                     .hover(|this| this.bg(theme.accent_soft))
-                    .child(div().overflow_hidden().text_ellipsis().child(label.clone()))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(label.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(10.))
+                            .text_color(theme.faint)
+                            .child(human_tokens(window)),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        let Some(session_id) = this.state.current_id().map(str::to_string)
-                        else {
+                        let Some(session_id) = this.state.current_id().map(str::to_string) else {
                             return;
                         };
                         this.state.core.switch_model(
@@ -1865,13 +1925,10 @@ fn model_picker(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> Option<impl I
                     })),
             );
         }
-    }
-
-    Some(
         v_flex()
             .absolute()
-            .bottom(px(34.))
-            .left(px(0.))
+            .left(px(268.))
+            .bottom(px(0.))
             .w(px(256.))
             .rounded(px(18.))
             .bg(theme.card_strong)
@@ -1886,11 +1943,89 @@ fn model_picker(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> Option<impl I
                     .font_weight(gpui::FontWeight(650.))
                     .text_color(theme.muted)
                     .bg(theme.right_bg_top)
-                    .child("选择模型"),
+                    .child(format!("{} 的模型", provider.name)),
             )
             .child(list)
-            .children(thinking_toggle(app, cx)),
+    });
+
+    Some(
+        div()
+            .absolute()
+            .bottom(px(34.))
+            .left(px(0.))
+            .child(
+                v_flex()
+                    .w(px(256.))
+                    .rounded(px(18.))
+                    .bg(theme.card_strong)
+                    .border_1()
+                    .border_color(theme.card_line)
+                    .shadow(shadow_lifted(gpui::rgba(0x2d3d5324).into()))
+                    .child(
+                        div()
+                            .px(px(12.))
+                            .py(px(8.))
+                            .text_size(px(11.))
+                            .font_weight(gpui::FontWeight(650.))
+                            .text_color(theme.muted)
+                            .bg(theme.right_bg_top)
+                            .child("供应商"),
+                    )
+                    .child(providers)
+                    .children(thinking_toggle(app, cx))
+                    // 整宽的「完成」，与原版一样收在左栏底部。
+                    .child(
+                        div()
+                            .p(px(8.))
+                            .child(
+                                h_flex()
+                                    .id("model-picker-done")
+                                    .h(px(32.))
+                                    .w_full()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(8.))
+                                    .bg(theme.accent)
+                                    .text_size(px(12.))
+                                    .text_color(gpui::white())
+                                    .cursor_pointer()
+                                    .child("完成")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.model_picker_open = false;
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            )
+            .children(models_pane),
     )
+}
+
+/// 供应商类型的大写短标签，与原前端右侧那截小字一致。
+fn provider_kind_label(kind: model_gateway::config::ProviderKind) -> &'static str {
+    use model_gateway::config::ProviderKind as K;
+    match kind {
+        K::Anthropic => "ANTHROPIC",
+        K::Openai => "OPENAI",
+        K::Deepseek => "DEEPSEEK",
+        K::Gemini => "GEMINI",
+    }
+}
+
+/// `128000` → `128k`、`1000000` → `1M`。原版模型行右侧显示的就是这种缩写。
+fn human_tokens(n: usize) -> String {
+    if n >= 1_000_000 {
+        let m = n as f64 / 1_000_000.0;
+        if (m - m.round()).abs() < 0.05 {
+            format!("{}M", m.round() as usize)
+        } else {
+            format!("{m:.1}M")
+        }
+    } else if n >= 1000 {
+        format!("{}k", n / 1000)
+    } else {
+        n.to_string()
+    }
 }
 
 /// 模型菜单底部的「思考」开关。原 UI 把它放在这儿（`.model-picker-selected-controls`）

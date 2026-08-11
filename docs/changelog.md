@@ -12534,3 +12534,20 @@ WARN HOVERPROBE popup shell hovered=false
 **mock 扩充**：加 `MOCK_TOOL=ask`（发 Ask 工具调用，验提问卡片）与 `MOCK_CMD`（换 Bash 命令，用来构造「有可记忆段」的审批）。
 
 **留尾巴**：无。三种尾部项都在列表里了。
+
+---
+
+## 2026-08-11 — 把原版真正跑起来做像素级比对，修掉 4 处只有对着看才发现的差异
+
+**Why**：之前所有「还原度」判断都是**照着源码猜**的——读 `ChatView.tsx` 想象它长什么样，再跟我的 gpui 比。这次把原版真的跑起来了：`pnpm build` 出前端 → `hebweb --port 38080` 起服务 → 用机器上现成的 playwright chromium（headless + CDP 直接驱动，不需要 playwright 的 node 包）截图。有了参照图，一眼就看出几处照源码根本发现不了的差异。
+
+**修掉的 4 处**：
+
+1. **标题栏多了两样原版没有的东西**。原版标题栏只有「标题 + 一颗小星星」；我这边还常驻显示会话 id 和一个齿轮（打开对话设置）。查了原码：id 那截是 `debugEnabled` 开关（localStorage，默认关）才出现的；而对话设置弹窗在原前端里**没有任何入口**（`setSettingsOpen(true)` 全局搜不到一处调用）。现在两样都收进 `HEBBIAN_DEBUG=1` 后面，默认长相与原版一致
+2. **那颗小星星是个假按钮**。点了只弹一句「重新生成标题还没接上」。原版点它是用模型重起标题。接上了 `agent_core::session_titler::regenerate_session_title`，改完刷会话列表
+3. **设置面板少一个关闭叉**，且 **8 个导航图标不对**：角色该是 user-cog（我用了 user）、供应商该是 server（globe）、记忆该是 brain（braces）、权限该是 shield（check）、插件该是 package（braces）、MCP 该是 plug（terminal）、连接器该是 message-circle（message-square）、日志该是 scroll-text（file-text）。补了 8 个 lucide 图标并改对映射
+4. **模型选择器结构整个不对**。原版是**两栏浮层**：左栏「供应商」（每行右侧有 DEEPSEEK / ANTHROPIC 这样的大写类型标签 + `›`），底部一个整宽的蓝色「完成」；点谁，右边就飞出「XX 的模型」那一栏，每个模型右侧标着上下文窗口（1M / 384k）。我做成了单栏「点供应商就地展开模型」。已按参照图重做，上下文窗口取 `provider.model_context_windows`，没标就用 `model_gateway::context_window::context_window_for` 按 kind 推
+
+**踩的坑**：加完 8 个 SVG 文件、改完映射，图标还是空白——`assets.rs` 里除了枚举和路径映射，还有一张 `ICONS` 表用 `include_str!` 把文件编进二进制，我漏了往那张表里加。SVG 在磁盘上有、二进制里没有，于是画出来一片空。
+
+**留给后面的**：这次只比了主界面 / 设置面板 / 模型选择器三处。右侧工作台各面板、审批卡片、提问卡片、导入弹窗都还没有和参照图逐一对过——同一套方法可以接着跑：`hebweb` + `node /tmp/shot2.js <url> <out.png> '<要点的选择器>'`。
