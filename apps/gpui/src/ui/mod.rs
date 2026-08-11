@@ -98,6 +98,14 @@ impl HebbianApp {
 
         core.refresh_catalog();
 
+        // 调试入口：`HEBBIAN_GPUI_OPEN=<session_id>` 启动即打开某个对话。
+        // 无人值守截图 / 排查渲染时不用先点一下侧栏，与 heb CLI 的脚本化调试同一思路。
+        if let Ok(session_id) = std::env::var("HEBBIAN_GPUI_OPEN") {
+            if !session_id.is_empty() {
+                core.open_session(session_id);
+            }
+        }
+
         Self {
             state: AppState::new(core),
             theme: Theme::new(ThemePreset::Glacier, 208.0),

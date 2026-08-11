@@ -11801,3 +11801,14 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
   - 侧栏的项目拖拽排序、列表高度拖拽、hover 浮出的「从 Claude 导入 / 导出到 Claude」尚未移植。
   - `apps/desktop` 未删除，两套 UI 并存；切换时机由用户决定。
 - **关联**: 架构 §13「2.2 / 7.2（2026-08-11）」决策行
+
+### 2026-08-11 — gpui surface 接上 Markdown 正文渲染 + hover 才显出的行内操作
+
+- **Why**: 上一条落地的 gpui surface 里消息正文是纯文本，与现 Desktop 差距最大的一块就是它——真实对话里大量是表格 / 代码块 / 行内代码。另外侧栏的删除、新建、时间戳当时是常显，与原 UI「hover 才浮出」的克制感不符。
+- **改动**:
+  - `apps/gpui/src/ui/chat.rs`: 正文改用 `gpui_component::text::TextView::markdown`（自带表格、代码块高亮、列表），外层只把字号 / 行高 / 颜色拉回本主题配色。渲染顺序上先把消息元素收集成 `Vec<AnyElement>` 再拼容器——markdown 视图要同时借 `Window` 与 `App`，与后面 `cx.listener` 的借用必须错开。
+  - `apps/gpui/src/ui/sidebar.rs`: 会话行 / 项目行用 gpui 的 `group` + `group_hover`，把删除按钮、新建按钮、相对时间做成常态隐形、hover 整行才显出（对应 CSS 的 `opacity: 0` → `1` 与 `.dsp-session-time { display: none }`）。
+  - `apps/gpui/src/ui/mod.rs`: 新增调试入口 `HEBBIAN_GPUI_OPEN=<session_id>`，启动即打开指定对话。无人值守截图 / 排查渲染时不用先点侧栏，与 heb CLI 的脚本化调试同一思路。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: 在容器内用 Xvfb + lavapipe（软件 Vulkan）真机起窗截图——表格边框、代码块底色、行内代码、活动会话行的高亮与描边均已呈现；hover 态因 Xvfb 无 XInput 指针无法在此环境模拟，需在 macOS 上复核。
+- **留尾巴**: 粗体 `**x**` 在 TextView 下未见明显字重变化，待查是缺字体还是解析；表格里的 emoji 在无 emoji 字体的容器里退化成普通字形（macOS 上应正常）；工具调用仍是小胶囊，未做可展开的工具卡片。

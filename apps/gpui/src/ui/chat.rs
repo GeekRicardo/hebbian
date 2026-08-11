@@ -11,7 +11,7 @@ use crate::state::StreamingTurn;
 use crate::ui::widgets::{h_flex, shadow_lifted, v_flex};
 use crate::ui::HebbianApp;
 
-pub fn render(app: &mut HebbianApp, _window: &mut Window, cx: &mut Context<HebbianApp>) -> impl IntoElement {
+pub fn render(app: &mut HebbianApp, window: &mut Window, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();
 
     v_flex()
@@ -27,7 +27,7 @@ pub fn render(app: &mut HebbianApp, _window: &mut Window, cx: &mut Context<Hebbi
             gpui::linear_color_stop(theme.chat_panel_end, 0.58),
         ))
         .child(header(app, cx))
-        .child(canvas(app, cx))
+        .child(canvas(app, window, cx))
         .child(composer(app, cx))
 }
 
@@ -85,10 +85,28 @@ fn header(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
 }
 
 /// 消息画布。没有会话时显示欢迎页。
-fn canvas(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> AnyElement {
+fn canvas(
+    app: &HebbianApp,
+    window: &mut Window,
+    cx: &mut Context<HebbianApp>,
+) -> AnyElement {
     if app.state.current.is_none() {
         return empty_state(app).into_any_element();
     }
+
+    // 先把消息渲染成元素：markdown 视图要同时借 window 与 App，
+    // 与后面 `cx.listener(...)` 的借用错开，避免同一表达式里双份可变借用。
+    let bubbles: Vec<gpui::AnyElement> = app
+        .state
+        .messages
+        .iter()
+        .map(|m| bubble(app, m, window, cx).into_any_element())
+        .collect();
+    let streaming = if app.state.streaming.is_empty() {
+        None
+    } else {
+        Some(streaming_bubble(app, &app.state.streaming, window, cx).into_any_element())
+    };
 
     let mut list = v_flex()
         .id("messages")
@@ -103,10 +121,8 @@ fn canvas(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> AnyElement {
                 .px(px(32.))
                 .pt(px(34.))
                 .pb(px(42.))
-                .children(app.state.messages.iter().map(|m| bubble(app, m)))
-                .when(!app.state.streaming.is_empty(), |this| {
-                    this.child(streaming_bubble(app, &app.state.streaming))
-                }),
+                .children(bubbles)
+                .children(streaming),
         );
 
     // 待审批 / 待回答的卡片压在消息流末尾，与原前端的行内弹层同位。
@@ -161,7 +177,12 @@ fn empty_state(app: &HebbianApp) -> impl IntoElement {
 }
 
 /// 一条落盘消息。用户消息靠右、助手消息占满宽——与 `.dsp-message.is-user` 一致。
-fn bubble(app: &HebbianApp, message: &Message) -> impl IntoElement {
+fn bubble(
+    app: &HebbianApp,
+    message: &Message,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> impl IntoElement {
     let theme = app.theme.clone();
     let is_user = matches!(message.role, Role::User);
 
@@ -182,12 +203,13 @@ fn bubble(app: &HebbianApp, message: &Message) -> impl IntoElement {
 
     // 正文直接铺在画布上，不套气泡边框——这与实际跑起来的 `MessageBubble` 一致
     // （`.dsp-message-body` 那套卡片是更早一版设计，现行 shell 没有启用）。
-    let mut body = v_flex().flex_1().min_w_0().child(
-        div()
-            .text_size(px(14.))
-            .line_height(px(24.))
-            .child(message.content.clone()),
-    );
+    let mut body = v_flex().flex_1().min_w_0().child(markdown(
+        format!("msg-{}", message.id),
+        message.content.clone(),
+        &theme,
+        window,
+        cx,
+    ));
 
     // 工具调用以小胶囊排在正文下方（`.dsp-tool-strip`）。
     if !message.tool_calls.is_empty() {
@@ -206,6 +228,27 @@ fn bubble(app: &HebbianApp, message: &Message) -> impl IntoElement {
         .mb(px(20.))
         .child(avatar(app, is_user))
         .child(body)
+}
+
+/// Markdown 正文。gpui-component 的 `TextView` 负责解析与代码块高亮；
+/// 外层只负责把字号 / 行高 / 颜色拉回本主题，避免用它自带的配色。
+fn markdown(
+    id: String,
+    text: String,
+    theme: &crate::theme::Theme,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> impl IntoElement {
+    div()
+        .text_size(px(14.))
+        .line_height(px(24.))
+        .text_color(theme.text)
+        .child(gpui_component::text::TextView::markdown(
+            gpui::SharedString::from(id),
+            text,
+            window,
+            cx,
+        ))
 }
 
 /// 消息左侧的头像位：用户是圆形底色块，助手是小星标。
@@ -274,7 +317,12 @@ fn meta_row(app: &HebbianApp, message: &Message, is_user: bool) -> impl IntoElem
 }
 
 /// 流式进行中的助手气泡。
-fn streaming_bubble(app: &HebbianApp, turn: &StreamingTurn) -> impl IntoElement {
+fn streaming_bubble(
+    app: &HebbianApp,
+    turn: &StreamingTurn,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> impl IntoElement {
     let theme = app.theme.clone();
     let mut body = v_flex()
         .flex_1()
@@ -299,12 +347,13 @@ fn streaming_bubble(app: &HebbianApp, turn: &StreamingTurn) -> impl IntoElement 
         );
     }
     if !turn.text.is_empty() {
-        body = body.child(
-            div()
-                .text_size(px(14.))
-                .line_height(px(24.))
-                .child(turn.text.clone()),
-        );
+        body = body.child(markdown(
+            "msg-streaming".to_string(),
+            turn.text.clone(),
+            &theme,
+            window,
+            cx,
+        ));
     }
     if !turn.tools.is_empty() {
         let mut strip = h_flex().flex_wrap().gap(px(7.)).mt(px(10.));
