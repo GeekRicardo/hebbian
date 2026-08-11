@@ -40,6 +40,8 @@ pub enum CoreUpdate {
     Settings(Box<agent_core::storage::settings::Settings>),
     /// 供应商列表刷新完成（模型选择器用）。
     Providers(Vec<model_gateway::config::Provider>),
+    /// 某会话的 plan 列表（新到旧），每项是（标题, 正文）。
+    Plans(Vec<(String, String)>),
     /// 某个文件的 diff 两侧文本。
     DiffLoaded {
         rel_path: String,
@@ -199,6 +201,38 @@ impl Core {
         self.inner.rt.spawn(async move {
             let skills = this.local_client().list_skills(&workdir);
             this.emit(CoreUpdate::Skills(skills));
+        });
+    }
+
+    /// 读某会话的 plan。plan 按 workdir 归属（项目级 / 全局），
+    /// 目录规则由 storage 决定，这里只负责读出来按时间倒序给 UI。
+    pub fn refresh_plans(&self, session_id: String, workdir: Option<PathBuf>) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let dir = agent_core::storage::plans::dir_for_session(
+                &this.inner.data_dir,
+                workdir.as_deref(),
+                &session_id,
+            );
+            let mut plans: Vec<(String, String)> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                        continue;
+                    }
+                    let name = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    if let Ok(body) = std::fs::read_to_string(&path) {
+                        plans.push((name, body));
+                    }
+                }
+            }
+            // 文件名带时间戳，倒序即最新在前。
+            plans.sort_by(|a, b| b.0.cmp(&a.0));
+            this.emit(CoreUpdate::Plans(plans));
         });
     }
 

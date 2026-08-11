@@ -1,7 +1,7 @@
 //! 设置面板。对应原前端 `AppSettingsDialog.tsx`：整屏覆盖，左侧 252px 导航
 //! （四个分组共 14 项），右侧顶部是标题 + 取消 / 保存 / 关闭。
 
-use gpui::{div, prelude::*, px, Context, Window};
+use gpui::{div, prelude::*, px, Context};
 
 use crate::assets::Icon;
 use crate::ui::widgets::{h_flex, v_flex};

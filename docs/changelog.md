@@ -11960,3 +11960,13 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: 在 fixture 仓库里改一行后点该文件——diff 显示 `+1 −0` 与绿底的 `+// tweak`。**过程中修掉一个自己的布局错**：文件列表与 diff 都写了 `flex_1`，结果按内容比例分配、长 diff 反而被挤成 0 高；改成列表按内容高度（封顶 200px）、剩下全给 diff。新增 6 条单测（增 / 删 / 替换 / 全同 / 超限退化 / 折叠），共 17 条通过。
 - **留尾巴**: 只有 Git 面板能看 diff，Edit 工具卡片里还没内嵌 diff；不能暂存 / 撤销单个文件（`git_scm` 的 stage / discard 已就绪，只差入口）。
+
+### 2026-08-11 — gpui surface 加目标面板与计划面板
+
+- **Why**: 工作台九个入口里还剩七个是说明页，目标与计划两个的数据其实早就有（`Session.active_goal` / `storage::plans`），只差渲染。
+- **改动**:
+  - `apps/gpui/src/ui/right_panel.rs`: 目标面板显示 `//goal` 挂的完成条件、已自动续跑几轮、判官上一轮说还差什么；没挂目标时告诉用户怎么挂（而不是只说「没有」）。计划面板列出 PlanMode 落盘的 plan markdown，新的在前，正文走 markdown 渲染。
+  - `apps/gpui/src/core.rs` / `state.rs`: `refresh_plans` 按 `storage::plans::dir_for_session` 的归属规则读盘（有 workdir 走项目级、没有走全局），打开会话时预取。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: 给 fixture 会话挂上目标并造一份 plan——目标面板显示条件 / 3 轮 / 判定原因，计划面板正确渲染标题、有序列表与引用块。
+- **留尾巴**: 计划不能就地编辑或加批注（原前端有 plan comments）；目标不能在面板里清除。

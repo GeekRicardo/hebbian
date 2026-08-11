@@ -88,7 +88,7 @@ impl Workbench {
     }
 }
 
-pub fn render(app: &mut HebbianApp, _window: &mut Window, cx: &mut Context<HebbianApp>) -> impl IntoElement {
+pub fn render(app: &mut HebbianApp, window: &mut Window, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();
 
     h_flex()
@@ -97,12 +97,16 @@ pub fn render(app: &mut HebbianApp, _window: &mut Window, cx: &mut Context<Hebbi
         .items_start()
         .border_l_1()
         .border_color(theme.line)
-        .when(!app.right_collapsed, |this| this.child(panel(app, cx)))
+        .when(!app.right_collapsed, |this| this.child(panel(app, window, cx)))
         .child(rail(app, cx))
 }
 
 /// 文件目录面板本体。
-fn panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
+fn panel(
+    app: &HebbianApp,
+    window: &mut Window,
+    cx: &mut Context<HebbianApp>,
+) -> impl IntoElement {
     let theme = app.theme.clone();
     let workdir = app.state.current.as_ref().and_then(|s| s.workdir.clone());
 
@@ -168,6 +172,8 @@ fn panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
             Workbench::Files => file_panel(app, cx, workdir).into_any_element(),
             Workbench::Todo => todo_panel(app).into_any_element(),
             Workbench::Git => git_panel(app, cx).into_any_element(),
+            Workbench::Target => target_panel(app).into_any_element(),
+            Workbench::Plan => plan_panel(app, window, cx).into_any_element(),
             other => empty_panel(app, other).into_any_element(),
         })
 }
@@ -497,6 +503,117 @@ fn diff_view(app: &HebbianApp) -> Option<impl IntoElement> {
             )
             .child(body),
     )
+}
+
+/// 目标面板：`//goal` 挂上的完成条件、已自动续跑几轮、判官上次说还差什么。
+fn target_panel(app: &HebbianApp) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let Some(goal) = app.state.current.as_ref().and_then(|s| s.active_goal.as_ref()) else {
+        return v_flex()
+            .p(px(14.))
+            .gap(px(6.))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.muted)
+                    .child("这个对话还没挂目标"),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(theme.faint)
+                    .child("在输入框里用 //goal 写一个完成条件，没达成它就会自己接着跑。"),
+            )
+            .into_any_element();
+    };
+
+    v_flex()
+        .p(px(12.))
+        .gap(px(10.))
+        .child(
+            div()
+                .p(px(10.))
+                .rounded(px(8.))
+                .bg(theme.accent_soft)
+                .text_size(px(12.))
+                .text_color(theme.text)
+                .child(goal.condition.clone()),
+        )
+        .child(
+            h_flex()
+                .gap(px(6.))
+                .text_size(px(11.))
+                .text_color(theme.muted)
+                .child(Icon::RefreshCw.el(px(12.), theme.faint))
+                .child(format!("已自动续跑 {} 轮", goal.iterations)),
+        )
+        .children(goal.last_reason.clone().map(|reason| {
+            v_flex()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(theme.faint)
+                        .child("上一轮判定还差"),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.muted)
+                        .child(reason),
+                )
+        }))
+        .into_any_element()
+}
+
+/// 计划面板：PlanMode 落盘的 plan markdown，新的在前。
+fn plan_panel(
+    app: &HebbianApp,
+    window: &mut Window,
+    cx: &mut Context<HebbianApp>,
+) -> impl IntoElement {
+    let theme = app.theme.clone();
+    if app.state.plans.is_empty() {
+        return div()
+            .p(px(14.))
+            .text_size(px(12.))
+            .text_color(theme.muted)
+            .child("这个对话还没有计划")
+            .into_any_element();
+    }
+
+    let mut list = v_flex()
+        .id("plan-list")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .px(px(12.))
+        .py(px(8.))
+        .gap(px(12.));
+
+    for (name, body) in &app.state.plans {
+        list = list.child(
+            v_flex()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(theme.faint)
+                        .child(name.clone()),
+                )
+                .child(
+                    div().text_size(px(12.)).child(
+                        gpui_component::text::TextView::markdown(
+                            gpui::SharedString::from(format!("plan-{name}")),
+                            body.clone(),
+                            window,
+                            cx,
+                        ),
+                    ),
+                ),
+        );
+    }
+    list.into_any_element()
 }
 
 /// 还没搬过来的面板：给出这块将来放什么，而不是一片空白。

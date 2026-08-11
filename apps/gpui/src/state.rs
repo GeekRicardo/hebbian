@@ -88,6 +88,9 @@ pub struct AppState {
     pub search_regex: bool,
     pub collapsed: HashSet<String>,
 
+    /// 这个会话的 plan（新到旧）。
+    pub plans: Vec<(String, String)>,
+
     /// 当前正在看的改动：文件相对路径 + 逐行 diff。
     pub diff: Option<(String, Vec<crate::diff::DiffLine>)>,
 
@@ -138,6 +141,7 @@ impl AppState {
             search_case: false,
             search_regex: false,
             collapsed: HashSet::new(),
+            plans: Vec::new(),
             diff: None,
             skills: Vec::new(),
             git: None,
@@ -179,6 +183,10 @@ impl AppState {
                     .collect();
                 self.streaming = StreamingTurn::default();
                 self.todos.clear();
+                self.plans.clear();
+                self.diff = None;
+                self.core
+                    .refresh_plans(session.id.clone(), session.workdir.clone());
                 if let Some(workdir) = session.workdir.clone() {
                     self.expanded_dirs.insert(workdir.clone());
                     self.core.list_dir(workdir.clone());
@@ -195,6 +203,9 @@ impl AppState {
             }
             CoreUpdate::Providers(providers) => {
                 self.providers = providers;
+            }
+            CoreUpdate::Plans(plans) => {
+                self.plans = plans;
             }
             CoreUpdate::DiffLoaded {
                 rel_path,
