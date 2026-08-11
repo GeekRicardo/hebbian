@@ -66,6 +66,7 @@ pub struct AppState {
     pub sessions: Vec<SessionMeta>,
     pub projects: Vec<WorkspaceProject>,
     pub providers: Vec<model_gateway::config::Provider>,
+    pub settings: agent_core::storage::settings::Settings,
 
     pub current: Option<Session>,
     pub messages: Vec<Message>,
@@ -107,6 +108,7 @@ impl AppState {
             sessions: Vec::new(),
             projects: Vec::new(),
             providers: Vec::new(),
+            settings: agent_core::storage::settings::Settings::default(),
             current: None,
             messages: Vec::new(),
             streaming: StreamingTurn::default(),
@@ -162,6 +164,9 @@ impl AppState {
             }
             CoreUpdate::SessionCreated(id) => {
                 self.core.open_session(id);
+            }
+            CoreUpdate::Settings(settings) => {
+                self.settings = *settings;
             }
             CoreUpdate::Providers(providers) => {
                 self.providers = providers;

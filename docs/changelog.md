@@ -11846,3 +11846,17 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: Xvfb + lavapipe 起窗，用 xdotool 点开思考块与一张工具卡片后截图——思考正文、入参 JSON、结果文本、失败卡片的红框都正确呈现，文本/工具/思考的先后顺序与 parts 一致。
 - **留尾巴**: 工具卡片还没有按工具类型定制（Edit 应显示 diff、Read 应显示带行号的片段、Task 应能下钻子 run）；`nested`（subagent 子过程）未渲染。
+
+### 2026-08-11 — gpui surface 加设置面板（整屏覆盖 + 14 项导航）
+
+- **Why**: 「设置」是侧栏底部常驻入口，此前点了只弹一句「还在搬运中」。它也是用户点名要的「点击后展开的小窗口」里最大的一个。
+- **改动**:
+  - `apps/gpui/src/ui/settings.rs`（新）: 整屏覆盖布局，左侧 252px 导航（基础 / Agent / 扩展 / 调试 四组共 14 项，选中项白底 + 强调色图标），右侧顶部「Hebbian settings + 页名 + 关闭」。
+    - 通用页：真实读 `CoreClient::get_settings()` 展示语言 / 开机启动 / Grep 路径 / 日志落盘 / shell / 改文件方式。
+    - 供应商页：真实读 `list_providers()`，每家一张卡片带启用徽章、base_url 与模型数。
+    - 外观页：当前色系与色相，并指向左下角调色盘。
+    - 其余 11 页给明确的「还在搬运中，去原桌面端改，配置是同一份」，不是空白页。
+  - `apps/gpui/src/core.rs` / `state.rs`: 新增 `refresh_settings`，`Settings` 进 state。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: xdotool 点开设置 → 切到供应商页 → 截图，导航分组、选中态、真实数据均正确。**过程中修掉两个自己的错**：① 根容器误用了带 `items_center` 的 `h_flex`，把整个右栏按内容高度垂直居中、标题栏被顶到屏幕中间；② 通用页直接 `{:?}` 打印了枚举，UI 上出现 `ZhCn` / `StringReplace` 这种内部命名，违反 CLAUDE.md 的 UI 文案纪律，已改成「简体中文」「精确替换原文（默认）」。
+- **留尾巴**: 设置全部只读，没有表单控件与保存按钮（`save_settings` 还没接）；其余 11 页未实现。

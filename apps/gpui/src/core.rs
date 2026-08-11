@@ -36,6 +36,8 @@ pub enum CoreUpdate {
     SessionLoaded(Box<Session>),
     /// 新建会话成功，附带要打开的 id。
     SessionCreated(String),
+    /// 全局设置读完了。
+    Settings(Box<agent_core::storage::settings::Settings>),
     /// 供应商列表刷新完成（模型选择器用）。
     Providers(Vec<model_gateway::config::Provider>),
     /// 某个目录读完了（文件树按需展开）。
@@ -150,6 +152,15 @@ impl Core {
                 Ok(file) => this.emit(CoreUpdate::Providers(file.providers)),
                 Err(err) => this.emit_err(err),
             }
+        });
+    }
+
+    /// 读一次全局设置。
+    pub fn refresh_settings(&self) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let settings = this.local_client().get_settings();
+            this.emit(CoreUpdate::Settings(Box::new(settings)));
         });
     }
 

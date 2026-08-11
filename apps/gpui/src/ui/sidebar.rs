@@ -460,7 +460,9 @@ fn footer(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElemen
                 .child(Icon::Settings.el(px(14.), theme.muted))
                 .child("设置")
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.state.error = Some("设置面板还在搬运中".to_string());
+                    this.settings_open = true;
+                    this.state.core.refresh_settings();
+                    this.state.core.refresh_providers();
                     cx.notify();
                 })),
         )
