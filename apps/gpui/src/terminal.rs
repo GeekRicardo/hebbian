@@ -48,8 +48,10 @@ pub struct TerminalSession {
     sender: EventLoopSender,
     dirty: Arc<AtomicBool>,
     exited: Arc<AtomicBool>,
-    pub rows: u16,
-    pub cols: u16,
+    /// 当前网格尺寸。用 Cell 是因为 resize 要能在渲染路径（只有 &self）里调——
+    /// 面板宽度一变就得跟着改，不然回车换行的位置和看到的不一样。
+    rows: std::cell::Cell<u16>,
+    cols: std::cell::Cell<u16>,
 }
 
 impl TerminalSession {
@@ -91,9 +93,45 @@ impl TerminalSession {
             sender,
             dirty,
             exited,
-            rows,
-            cols,
+            rows: std::cell::Cell::new(rows),
+            cols: std::cell::Cell::new(cols),
         })
+    }
+
+    pub fn cols(&self) -> u16 {
+        self.cols.get()
+    }
+
+    pub fn rows(&self) -> u16 {
+        self.rows.get()
+    }
+
+    /// 按面板实际大小调整网格。尺寸没变就什么都不做——
+    /// 每帧无脑 resize 会让 shell 反复收到 SIGWINCH。
+    pub fn resize(&self, cols: u16, rows: u16) {
+        let cols = cols.max(20);
+        let rows = rows.max(4);
+        if self.cols.get() == cols && self.rows.get() == rows {
+            return;
+        }
+        self.cols.set(cols);
+        self.rows.set(rows);
+
+        self.term
+            .lock()
+            .resize(TermSize { cols, rows });
+        let _ = self.sender.send(Msg::Resize(WindowSize {
+            num_lines: rows,
+            num_cols: cols,
+            cell_width: 8,
+            cell_height: 16,
+        }));
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
+    /// 当前选中的文本。没有选区时返回 None。
+    pub fn selection_text(&self) -> Option<String> {
+        self.term.lock().selection_to_string()
     }
 
     /// 有没有新输出。渲染循环用它决定要不要重绘。
@@ -200,7 +238,8 @@ fn xterm_256(i: u8) -> (u8, u8, u8) {
     }
 }
 
-/// 给 `Term::new` 用的尺寸。
+/// 给 `Term::new` / `resize` 用的尺寸。
+#[derive(Clone, Copy)]
 struct TermSize {
     cols: u16,
     rows: u16,

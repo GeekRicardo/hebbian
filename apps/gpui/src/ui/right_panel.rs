@@ -633,6 +633,12 @@ fn terminal_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEl
             .into_any_element();
     };
 
+    // 按面板实际宽度换算列数：等宽 11px 字体的字符宽约 6.6px，
+    // 左右各留 8px 内边距。行数按窗口高度估，够用即可。
+    let cols = (((app.right_width - 16.) / 6.6) as u16).max(20);
+    let rows = 30u16;
+    session.resize(cols, rows);
+
     let mut screen = v_flex()
         .id("terminal-screen")
         .flex_1()
@@ -672,6 +678,27 @@ fn terminal_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEl
             };
             // 把按键翻成 PTY 字节。控制键单独处理，其余取 key_char。
             let keystroke = &event.keystroke;
+            // Ctrl+Shift+C / V 走剪贴板，不当普通控制键发下去。
+            if keystroke.modifiers.control && keystroke.modifiers.shift {
+                match keystroke.key.as_str() {
+                    "c" => {
+                        if let Some(text) = term.selection_text() {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                        }
+                        return;
+                    }
+                    "v" => {
+                        if let Some(text) =
+                            cx.read_from_clipboard().and_then(|item| item.text())
+                        {
+                            term.write(text.into_bytes());
+                            cx.notify();
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
+            }
             let bytes: Vec<u8> = match keystroke.key.as_str() {
                 "enter" => vec![b'\r'],
                 "backspace" => vec![0x7f],
@@ -712,7 +739,11 @@ fn terminal_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEl
                 .child(if session.has_exited() {
                     "shell 已退出".to_string()
                 } else {
-                    format!("{}×{} · 点一下再打字", session.cols, session.rows)
+                    format!(
+                        "{}×{} · 点一下再打字 · Ctrl+Shift+C/V 复制粘贴",
+                        session.cols(),
+                        session.rows()
+                    )
                 }),
         )
         .into_any_element()
