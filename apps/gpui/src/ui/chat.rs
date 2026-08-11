@@ -843,6 +843,9 @@ fn approval_card(
 ) -> impl IntoElement {
     let theme = app.theme.clone();
     let session_id = app.state.current_id().unwrap_or_default().to_string();
+    // 「记住」区必须在下面那个 button 闭包之前算完：闭包会捕获 cx，
+    // 之后再对 cx 可变借用就冲突了。
+    let remember = remember_section(app, pending, cx);
 
     let button = |label: &'static str,
                   decision: protocol::ApprovalDecision,
@@ -897,6 +900,7 @@ fn approval_card(
                 .font_weight(gpui::FontWeight(650.))
                 .child(format!("需要确认：{}", pending.tool_name)),
         )
+        .children(remember)
         .child(
             div()
                 .text_size(px(12.))
@@ -1003,6 +1007,161 @@ fn approval_card(
                     )
                 }),
         )
+}
+
+/// 审批卡片的「记住」二级区：勾选要记的 pattern，再选生效范围写规则。
+///
+/// **候选 pattern 与它们的状态全部由 core 随事件发来**（`segments`），UI 不自己解析
+/// 命令——段级判定规则在 core，前端再推一遍必然走样。各状态的处理与原前端一致：
+/// 只读段灰显、已白名单段划掉、**不可记忆段（rm/dd 之类）红色且不可勾选**。
+/// core 说 `refuse_remember` 时整个区不出现——不是灰掉，是根本不给。
+fn remember_section(
+    app: &HebbianApp,
+    pending: &crate::state::PendingApproval,
+    cx: &mut Context<HebbianApp>,
+) -> Option<impl IntoElement> {
+    use protocol::ApprovalSegmentStatus as St;
+    if pending.refuse_remember || pending.segments.is_empty() {
+        return None;
+    }
+    let theme = app.theme.clone();
+    let session_id = app.state.current_id().unwrap_or_default().to_string();
+
+    let mut list = v_flex().gap(px(4.));
+    for seg in &pending.segments {
+        let fp = seg.fingerprint.clone();
+        let picked = app.state.approval_picked.contains(&fp);
+        let selectable = matches!(seg.status, St::NeedsApproval);
+        let (color, note) = match seg.status {
+            St::Readonly => (theme.faint, "只读，免审"),
+            St::Whitelisted => (theme.green, "已允许"),
+            St::Unmemorable => (theme.danger, "每次都要确认，不能记住"),
+            St::NeedsApproval => (theme.text, ""),
+        };
+        let fp_click = fp.clone();
+        list = list.child(
+            h_flex()
+                .id(gpui::SharedString::from(format!("seg-{fp}")))
+                .gap(px(8.))
+                .py(px(3.))
+                .items_center()
+                .when(selectable, |this| {
+                    this.cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(i) =
+                                this.state.approval_picked.iter().position(|p| p == &fp_click)
+                            {
+                                this.state.approval_picked.remove(i);
+                            } else {
+                                this.state.approval_picked.push(fp_click.clone());
+                            }
+                            cx.notify();
+                        }))
+                })
+                .child(
+                    div()
+                        .size(px(12.))
+                        .flex_none()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(if selectable { theme.line } else { theme.faint })
+                        .when(picked && selectable, |this| this.bg(theme.accent)),
+                )
+                .child(
+                    div()
+                        .font_family("monospace")
+                        .text_size(px(11.))
+                        .text_color(color)
+                        .child(fp.clone()),
+                )
+                .when(!note.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(theme.faint)
+                            .child(note),
+                    )
+                }),
+        );
+    }
+
+    let scope_button = |label: &'static str,
+                        scope: protocol::PermissionScope,
+                        theme: crate::theme::Theme,
+                        session_id: String| {
+        h_flex()
+            .id(label)
+            .h(px(26.))
+            .px(px(10.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(theme.line)
+            .text_size(px(11.))
+            .text_color(theme.muted)
+            .cursor_pointer()
+            .hover(|this| this.bg(theme.accent_soft).text_color(theme.accent))
+            .child(label)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let mut picked = this.state.approval_picked.clone();
+                if picked.is_empty() {
+                    this.state.error = Some("先勾上要记住的那几段".to_string());
+                    cx.notify();
+                    return;
+                }
+                // 协议是「第一条进 pattern，其余进 extra_patterns」。
+                let first = picked.remove(0);
+                if let Some(p) = this.state.take_approval(&session_id) {
+                    this.state.core.resolve_approval(
+                        session_id.clone(),
+                        p.request_id,
+                        protocol::ApprovalDecision::AllowAndRemember {
+                            scope,
+                            pattern: Some(first),
+                            extra_patterns: picked,
+                        },
+                    );
+                }
+                this.state.approval_picked.clear();
+                cx.notify();
+            }))
+    };
+
+    Some(
+        v_flex()
+            .gap(px(8.))
+            .p(px(10.))
+            .rounded(px(10.))
+            .bg(theme.right_bg_top)
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(theme.muted)
+                    .child("以后不用再问我："),
+            )
+            .child(list)
+            .child(
+                h_flex()
+                    .gap(px(6.))
+                    .child(scope_button(
+                        "本对话",
+                        protocol::PermissionScope::Session,
+                        theme.clone(),
+                        session_id.clone(),
+                    ))
+                    .child(scope_button(
+                        "本项目",
+                        protocol::PermissionScope::Project,
+                        theme.clone(),
+                        session_id.clone(),
+                    ))
+                    .child(scope_button(
+                        "所有对话",
+                        protocol::PermissionScope::Global,
+                        theme,
+                        session_id,
+                    )),
+            ),
+    )
 }
 
 /// 模型提问卡片。

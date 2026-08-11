@@ -19,6 +19,12 @@ pub struct PendingApproval {
     pub request_id: String,
     pub tool_name: String,
     pub summary: String,
+    /// 可记忆的候选 pattern 及其状态。**由 core 算好随事件发来**，
+    /// UI 不自己解析命令——段级判定的规则在 core，前端再推一遍必然走样。
+    pub segments: Vec<protocol::ApprovalSegment>,
+    /// core 判定这条命令不允许记忆（含危险复合模式，架构 §4.4.2.3）。
+    /// 为真时整个「记住」区不出现——不是灰掉，是根本不给。
+    pub refuse_remember: bool,
 }
 
 /// 一条待回答的提问。
@@ -144,6 +150,9 @@ pub struct AppState {
     /// 展开着的目录。
     pub expanded_dirs: HashSet<PathBuf>,
 
+    /// 审批「记住」区已勾选的 pattern（默认勾选所有待决定段）。
+    pub approval_picked: Vec<String>,
+
     /// 「编辑后重跑」待填进输入框的原文。
     pub edit_draft: Option<String>,
 
@@ -195,6 +204,7 @@ impl AppState {
             expanded_parts: HashSet::new(),
             dirs: HashMap::new(),
             expanded_dirs: HashSet::new(),
+            approval_picked: Vec::new(),
             edit_draft: None,
             saved_notice: None,
             error: None,
@@ -379,14 +389,39 @@ impl AppState {
                 request_id,
                 tool_name,
                 summary,
+                segments,
+                command_segments,
+                refuse_remember,
                 ..
             } => {
+                // 新事件带 `segments`（含状态）；老事件只有 `command_segments`
+                // 字符串数组，退化成「都待决定」。
+                let segments = if segments.is_empty() {
+                    command_segments
+                        .into_iter()
+                        .map(|fingerprint| protocol::ApprovalSegment {
+                            fingerprint,
+                            status: protocol::ApprovalSegmentStatus::NeedsApproval,
+                        })
+                        .collect()
+                } else {
+                    segments
+                };
+                self.approval_picked = segments
+                    .iter()
+                    .filter(|s| {
+                        matches!(s.status, protocol::ApprovalSegmentStatus::NeedsApproval)
+                    })
+                    .map(|s| s.fingerprint.clone())
+                    .collect();
                 self.pending_approvals.insert(
                     session_id.to_string(),
                     PendingApproval {
                         request_id,
                         tool_name,
                         summary,
+                        segments,
+                        refuse_remember,
                     },
                 );
             }
