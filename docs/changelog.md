@@ -12551,3 +12551,24 @@ WARN HOVERPROBE popup shell hovered=false
 **踩的坑**：加完 8 个 SVG 文件、改完映射，图标还是空白——`assets.rs` 里除了枚举和路径映射，还有一张 `ICONS` 表用 `include_str!` 把文件编进二进制，我漏了往那张表里加。SVG 在磁盘上有、二进制里没有，于是画出来一片空。
 
 **留给后面的**：这次只比了主界面 / 设置面板 / 模型选择器三处。右侧工作台各面板、审批卡片、提问卡片、导入弹窗都还没有和参照图逐一对过——同一套方法可以接着跑：`hebweb` + `node /tmp/shot2.js <url> <out.png> '<要点的选择器>'`。
+
+---
+
+## 2026-08-11 — 接着对参照图比：右侧竖条换成 codicon，文件树补按扩展名的图标，后台任务卡片对齐
+
+**Why**：上一条只比了主界面 / 设置 / 模型选择器。继续往下比右侧工作台，又发现三处。
+
+1. **右侧竖条那 9 个图标根本不是一套字形**。原前端这里用的是 **codicon**（VS Code 那套，`<Codicon name="files" />`），我按感觉挑了形近的 lucide 顶上。放大对着看，`server-process`（带齿轮的文件）、`diff-modified`（方块里一个实心圆）、`source-control`（分叉）这几个 lucide 里根本没有对应字形
+2. **文件树所有文件都是同一个图标**。原前端 `FileIcon.tsx` 按扩展名映射到 codicon 的文件子类型（file-code / file-text / file-media / file-binary / file-pdf / file-zip），效果接近 VS Code 默认图标主题；我全用了一个通用文件图标，扫一眼分不出源码、图片还是压缩包。文件夹也分开合两态（folder / folder-opened）
+3. **后台任务卡片有两处对不上**：原版只在定时唤醒 / 子任务前面放图标，普通命令那行是「状态点 + 编号」不带图标（我多加了个终端图标）；状态徽章原版是大写英文（`EXITED` / `FAILED`），我写成了「已结束」「失败」
+
+**改动**：
+- 从 `@vscode/codicons` 拷了 18 个 SVG 进 `apps/gpui/assets/icons/codicon/`（MIT / CC BY 4.0，附 README 说明为什么单独放一套）
+- 新增 `apps/gpui/src/file_icon.rs`：107 条扩展名映射直接从原前端那张表转过来，另加「整个文件名定性」的那几个（Dockerfile / LICENSE / .gitignore …）。3 条单测钉住按扩展名、按整名、兜底三条路径
+- `right_panel.rs`：竖条改用 codicon；文件树用 `file_icon()` 与文件夹开合两态；后台任务卡片去掉 Bash 那个多余图标、徽章文字改回大写英文
+
+**一处明知故犯**：徽章直接显示 `EXITED` / `FAILED` 这种运行状态原文，与本仓库 CLAUDE.md「UI 不许出现内部枚举值」的规矩相左。这里以「和原版一模一样」为准——原版就是这么显示的。这条冲突记在这里，将来若要改回中文，两个 surface 要一起改。
+
+**一个值得记的细节**：原版右侧竖条只有 7 个图标，浏览器 / 终端那两个是 `nativeTabsAvailable = isTauri()` 才出现的——hebweb（浏览器里跑的那份）看不到它们。所以拿 hebweb 当参照时，**这两个 tab 的缺席不是差异**，gpui 是原生应用，显示 9 个才对。
+
+**留给后面的**：审批卡片、提问卡片、导入弹窗还没和参照图对过。前两个需要在 hebweb 里真触发一次审批 / 提问才截得到，比前面几处麻烦。

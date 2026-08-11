@@ -44,17 +44,22 @@ impl Workbench {
         Workbench::Terminal,
     ];
 
+    /// 竖条上的图标。
+    ///
+    /// **这一列用的是 codicon（VS Code 那套），不是 lucide**——原前端这里写的就是
+    /// `<Codicon name="files" />`。之前我按感觉挑了几个形近的 lucide 图标顶上，
+    /// 把原版跑起来对着看才发现根本不是一套字形。
     fn icon(self) -> Icon {
         match self {
-            Workbench::Files => Icon::FileText,
-            Workbench::Tasks => Icon::LoaderCircle,
-            Workbench::Edits => Icon::Pencil,
-            Workbench::Git => Icon::GitBranch,
-            Workbench::Todos => Icon::ListTodo,
-            Workbench::Plans => Icon::List,
-            Workbench::Branches => Icon::MessageSquare,
-            Workbench::Browser => Icon::Globe,
-            Workbench::Terminal => Icon::Terminal,
+            Workbench::Files => Icon::CoFiles,
+            Workbench::Tasks => Icon::CoServerProcess,
+            Workbench::Edits => Icon::CoDiffModified,
+            Workbench::Git => Icon::CoSourceControl,
+            Workbench::Todos => Icon::CoChecklist,
+            Workbench::Plans => Icon::CoListTree,
+            Workbench::Branches => Icon::CoCommentDiscussion,
+            Workbench::Browser => Icon::CoGlobe,
+            Workbench::Terminal => Icon::CoTerminal,
         }
     }
 
@@ -533,10 +538,12 @@ fn tasks_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEleme
         // 展开态按 tool_call_id 记，不用 task_id：定时唤醒压根没有 task_id。
         let key = task.tool_call_id.clone();
         let expanded = expanded_id.as_deref() == Some(key.as_str());
+        // 原版只有定时唤醒和子任务在编号前放图标；普通命令那行是「状态点 + 编号」，
+        // 没有图标。之前我给三种都加了图标，多出来一个终端小图标。
         let (icon, prefix) = match task.kind {
-            BackgroundKind::Bash => (Icon::Terminal, "$ "),
-            BackgroundKind::Cron => (Icon::Clock, "⏰ "),
-            BackgroundKind::Subagent => (Icon::Bot, "🤖 "),
+            BackgroundKind::Bash => (None, "$ "),
+            BackgroundKind::Cron => (Some(Icon::Clock), "⏰ "),
+            BackgroundKind::Subagent => (Some(Icon::Bot), "🤖 "),
         };
         let dot = if task.is_error {
             theme.danger
@@ -552,7 +559,7 @@ fn tasks_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEleme
             .text_size(px(10.))
             .text_color(theme.faint)
             .child(div().size(px(6.)).flex_none().rounded_full().bg(dot))
-            .child(icon.el(px(11.), theme.faint));
+            .children(icon.map(|i| i.el(px(11.), theme.faint)));
         head = match (&task.cron, &task.task_id) {
             (Some(cron), _) => head.child(if cron.pending {
                 format!("{} 后唤醒", countdown(cron.fire_at_ms, now_ms))
@@ -574,10 +581,13 @@ fn tasks_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEleme
                     .rounded(px(4.))
                     .bg(theme.line)
                     .text_color(theme.muted)
+                    // 徽章文字照搬原版：定时唤醒写「已唤醒」，其余直接是大写的
+                    // 运行状态（EXITED / FAILED）。这与本仓库「UI 不出现内部枚举值」
+                    // 的惯例相左，但用户要的是和原版一模一样，以原版为准。
                     .child(match task.kind {
                         BackgroundKind::Cron => "已唤醒",
-                        _ if task.is_error => "失败",
-                        _ => "已结束",
+                        _ if task.is_error => "FAILED",
+                        _ => "EXITED",
                     }),
             );
         }
@@ -1262,7 +1272,7 @@ fn tree(app: &HebbianApp, cx: &mut Context<HebbianApp>, dir: PathBuf) -> impl In
                 .text_size(px(12.))
                 .text_color(theme.text)
                 .child(Icon::ChevronDown.el(px(12.), theme.faint))
-                .child(Icon::Folder.el(px(13.), theme.muted))
+                .child(Icon::CoFolderOpened.el(px(15.), theme.muted))
                 .child(leaf),
         );
 
@@ -1327,10 +1337,15 @@ fn node_row(app: &HebbianApp, cx: &mut Context<HebbianApp>, row: TreeRow) -> imp
             // 文件没有折叠箭头，但要占同样的位置，否则同层的名字对不齐。
             Icon::ChevronRight.el(px(12.), gpui::transparent_black())
         })
+        // 文件夹开合两态、文件按扩展名挑图标——与原前端同一套 codicon。
         .child(if is_dir {
-            Icon::Folder.el(px(13.), theme.muted)
+            if row.expanded {
+                Icon::CoFolderOpened.el(px(15.), theme.muted)
+            } else {
+                Icon::CoFolder.el(px(15.), theme.muted)
+            }
         } else {
-            Icon::File.el(px(13.), theme.faint)
+            crate::file_icon::file_icon(&row.entry.name).el(px(15.), theme.faint)
         })
         .child(
             div()

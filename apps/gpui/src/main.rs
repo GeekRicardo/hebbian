@@ -7,6 +7,7 @@
 mod assets;
 mod core;
 mod diff;
+mod file_icon;
 mod prefs;
 mod state;
 mod terminal;
