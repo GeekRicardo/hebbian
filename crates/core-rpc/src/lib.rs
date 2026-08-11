@@ -66,6 +66,13 @@ pub enum CoreRequest {
         session_id: String,
         title: String,
     },
+    /// 切供应商 + 模型。带业务规则（switch marker / 系列锁定 / 推理参数重置），
+    /// 实现只在 `LocalCoreClient` 一处。
+    SwitchSessionModel {
+        session_id: String,
+        provider_id: String,
+        model: String,
+    },
     SearchSessions {
         query: String,
         case_sensitive: bool,
@@ -278,6 +285,7 @@ pub enum CoreResponse {
     ListSessions(Vec<agent_core::storage::sessions::SessionMeta>),
     LoadSession(agent_core::storage::sessions::Session),
     RenameSession(agent_core::storage::sessions::Session),
+    SwitchSessionModel(agent_core::storage::sessions::Session),
     SearchSessions(Vec<agent_core::storage::sessions::SearchHit>),
 
     // ── Projects ────────────────────────────────────────────────────────
@@ -403,6 +411,14 @@ pub async fn dispatch(req: CoreRequest, core: &dyn CoreClient) -> CoreResponse {
             R::from_result(core.load_session(&session_id), R::LoadSession)
         }
         Q::DeleteSession { session_id } => R::from_unit(core.delete_session(&session_id)),
+        Q::SwitchSessionModel {
+            session_id,
+            provider_id,
+            model,
+        } => R::from_result(
+            core.switch_session_model(&session_id, provider_id, model),
+            R::SwitchSessionModel,
+        ),
         Q::RenameSession { session_id, title } => {
             R::from_result(core.rename_session(&session_id, title), R::RenameSession)
         }

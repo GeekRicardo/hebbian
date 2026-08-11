@@ -1040,6 +1040,7 @@ fn model_picker(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> Option<impl I
         for model in provider.models.iter() {
             let is_current = current_model.as_deref() == Some(model.as_str());
             let label = model.clone();
+            let provider_id = provider.id.clone();
             list = list.child(
                 h_flex()
                     .id(gpui::SharedString::from(format!("model-{}-{}", provider.id, model)))
@@ -1053,14 +1054,15 @@ fn model_picker(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> Option<impl I
                     .hover(|this| this.bg(theme.accent_soft))
                     .child(div().overflow_hidden().text_ellipsis().child(label.clone()))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        // 切模型不是纯写字段：会话里要插一条 switch marker、
-                        // DeepSeek 与其他系列之间还有锁定规则、推理参数要跟着模型默认值走。
-                        // 这套业务规则现在只存在于 desktop / hebweb 的命令壳里，gpui 不再抄第三份
-                        // ——等它收进 core-rpc 之后再接上，在此之前明确告诉用户而不是假装切了。
-                        this.state.error = Some(format!(
-                            "切换到「{label}」还没接上：切模型要连带插切换标记、系列锁定与推理参数，\
-                             这套规则得先收进公共入口，我不想在这里再抄一份走样的"
-                        ));
+                        let Some(session_id) = this.state.current_id().map(str::to_string)
+                        else {
+                            return;
+                        };
+                        this.state.core.switch_model(
+                            session_id,
+                            provider_id.clone(),
+                            label.clone(),
+                        );
                         this.model_picker_open = false;
                         cx.notify();
                     })),

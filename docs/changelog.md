@@ -11999,3 +11999,14 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。开了 `gpui-component/webview` feature，Linux 构建需要 `libwebkit2gtk-4.1-dev`；macOS 用系统 WKWebView，无额外依赖。
 - **验证**: 容器是 X11，正好验到了守卫——加守卫前点「打开」应用 panic 退出，加守卫后应用存活并给出上面那句提示。**webview 真正加载页面这条路径本环境验不了**（X11 拦住了），需要在 macOS 上复核。新增 4 条单测（裸地址补协议 / 显式协议保留 / 空串 / X11 判定为不支持），共 23 条通过。
 - **留尾巴**: 只有地址栏与加载，没有前进后退 / 刷新 / 开发者工具；原 Desktop 的页面注释、元素旁支对话、CDP 截图这些依赖预览的能力都还没搬（「对话」面板即为其中之一，故仍是说明页）。
+
+### 2026-08-11 — 切模型收进 core（新增 `CoreClient::switch_session_model` + `CoreRequest::SwitchSessionModel`），gpui 接上
+
+- **Why**: gpui 的模型选择器此前只能看不能切，因为切模型带三条业务规则（往历史插 switch marker、「会话有真实对话后锁模型系列」、按新模型重置推理参数），而这套规则当时**同时存在于 `apps/desktop/src/lib.rs` 与 `apps/web-server/src/server.rs` 两份命令壳里**，`CoreRequest` 里没有入口。在 gpui 里再抄一份就是第三份。
+- **做法（按架构 §7.3 的规定路径，不是绕开它）**: §7.3 写明「新增核心同步能力时，先加 `CoreRequest` / `CoreResponse` / `dispatch` 分支，再让各 surface 适配自己的命令壳」。因此：
+  - `crates/agent-core/src/core_client/mod.rs`: `CoreClient` 加 `switch_session_model`，**唯一实现**放在 `LocalCoreClient`——三条规则在此处各写一次。
+  - `crates/core-rpc/src/lib.rs`: 加 `CoreRequest::SwitchSessionModel` / `CoreResponse::SwitchSessionModel` / dispatch 分支。**纯 additive**，旧调用方无感。
+  - `apps/gpui`: 模型选择器选中即调它，成功刷新会话与列表，被拒时把 core 返回的原话直接给用户（「本会话已锁定模型系列…」那句本身就是解释，不该被我改写）。
+- **影响范围**: 动了两个共享 crate，但都是新增：`CoreClient` trait 加了一个方法（全仓仅 `LocalCoreClient` 一个实现者，已确认），`CoreRequest` 加了一个 variant。`cargo check -p agent-core` / `-p core-rpc` / `-p hebbian-web-server` 均通过，hebweb 与 desktop 的现有代码路径未改动、行为不变。
+- **验证**: ① 在 deepseek 会话里选 claude-opus-5 —— 顶部弹出「本会话已锁定模型系列：DeepSeek 与其他模型之间不可互相切换，请新建会话。」，磁盘未变；② 选 deepseek-v4 —— `session.jsonl` 里 model 变成 `deepseek-v4` 且追加了 `switch` marker（`deepseek-v4-flash -> deepseek-v4`），输入框上的模型名同步变化。允许与拒绝两条路径都跑到了。
+- **留尾巴**: **`apps/desktop` 与 `apps/web-server` 仍在用各自的旧实现**，没有改成调这个新入口——那是两处独立改动，应各自单独验证后再做，不该混在本次里。收口它们之前，切模型逻辑事实上仍是三份（core 一份 + 那两份旧的），只是 gpui 用的是 core 那份。

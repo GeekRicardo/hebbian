@@ -100,6 +100,17 @@ pub trait CoreClient: Send + Sync {
         session_id: &str,
         title: String,
     ) -> Result<sessions_store::Session, CoreError>;
+
+    /// 切换会话的供应商 + 模型（架构 §7.3：这类带业务规则的能力必须只有一份实现）。
+    ///
+    /// 它不是「写两个字段」：要往历史里插一条 switch marker（前端据此画分割线）、
+    /// 要执行「会话一旦有真实对话就锁模型系列」的规则、还要按新模型重置推理参数。
+    fn switch_session_model(
+        &self,
+        session_id: &str,
+        new_provider_id: String,
+        new_model: String,
+    ) -> Result<sessions_store::Session, CoreError>;
     fn search_sessions(
         &self,
         query: &str,
@@ -446,6 +457,78 @@ impl CoreClient for LocalCoreClient {
     ) -> Result<Vec<sessions_store::SearchHit>, CoreError> {
         sessions_store::search(&self.data_dir, query, case_sensitive, regex)
             .map_err(CoreError::from)
+    }
+
+
+    fn switch_session_model(
+        &self,
+        session_id: &str,
+        new_provider_id: String,
+        new_model: String,
+    ) -> Result<sessions_store::Session, CoreError> {
+        let dd = &self.data_dir;
+        let cur = sessions_store::load(dd, session_id)?;
+
+        // 没变就直接返回，不留无意义的 marker。
+        if cur.provider_id == new_provider_id && cur.model == new_model {
+            return Ok(cur);
+        }
+
+        let cur_provider = providers::get(dd, &cur.provider_id).ok();
+        let new_provider = providers::get(dd, &new_provider_id).ok();
+        let from_provider = cur_provider
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| cur.provider_id.clone());
+        let to_provider = new_provider
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| new_provider_id.clone());
+
+        // 锁定模型系列：一旦会话有过真实对话，就不允许 DeepSeek 与其他系列互切。
+        // DeepSeek web 协议的 prompt / tool_call / thinking 编码与 OpenAI/Anthropic
+        // 完全不同，跨系列重放历史会让模型脑补出伪角色头。新会话不受限。
+        let has_real_turn = cur.messages.iter().any(|m| {
+            matches!(
+                m.role,
+                sessions_store::Role::User | sessions_store::Role::Assistant
+            )
+        });
+        if has_real_turn {
+            if let (Some(c), Some(n)) = (cur_provider.as_ref(), new_provider.as_ref()) {
+                let cur_is_ds = matches!(c.kind, providers::ProviderKind::Deepseek);
+                let new_is_ds = matches!(n.kind, providers::ProviderKind::Deepseek);
+                if cur_is_ds != new_is_ds {
+                    return Err(CoreError::from(common::AppError::msg(
+                        "本会话已锁定模型系列：DeepSeek 与其他模型之间不可互相切换，请新建会话。",
+                    )));
+                }
+            }
+        }
+
+        let meta = sessions_store::MessageMeta::Switch {
+            from_provider,
+            from_model: cur.model.clone(),
+            to_provider,
+            to_model: new_model.clone(),
+        };
+        sessions_store::insert_switch_marker(dd, session_id, meta)?;
+
+        // marker 已落盘，重新读一遍再改字段，避免覆盖掉它。
+        let mut updated = sessions_store::load(dd, session_id)?;
+        updated.provider_id = new_provider_id;
+        updated.model = new_model;
+        let model_default = common::reasoning::default_reasoning_for_model(&updated.model);
+        if model_default.is_some() {
+            // 首次切到支持推理的模型：给一份默认推理配置，用户可再调。
+            if updated.reasoning.is_none() {
+                updated.reasoning = model_default;
+            }
+        } else {
+            // 切到不支持推理的模型：丢掉旧配置，免得残留的 thinking 字段被 server 拒。
+            updated.reasoning = None;
+        }
+        Ok(sessions_store::save(dd, updated)?)
     }
 
     fn list_projects(&self) -> Result<Vec<projects_store::WorkspaceProject>, CoreError> {

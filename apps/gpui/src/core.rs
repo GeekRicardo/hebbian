@@ -171,6 +171,25 @@ impl Core {
         });
     }
 
+    /// 切供应商 + 模型。业务规则（switch marker / 系列锁定 / 推理参数重置）
+    /// 只在 `LocalCoreClient::switch_session_model` 一处，这里只是转发。
+    pub fn switch_model(&self, session_id: String, provider_id: String, model: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            match this
+                .local_client()
+                .switch_session_model(&session_id, provider_id, model)
+            {
+                Ok(session) => {
+                    this.emit(CoreUpdate::SessionLoaded(Box::new(session)));
+                    this.refresh_catalog();
+                }
+                // 系列锁定这类拒绝要原样带给用户——那句文案本身就是解释。
+                Err(err) => this.emit_err(err),
+            }
+        });
+    }
+
     /// 改对话标题。改完刷新列表，让侧栏与头部同步。
     pub fn rename_session(&self, session_id: String, title: String) {
         let this = self.clone();
