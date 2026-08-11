@@ -50,8 +50,6 @@ pub struct HebbianApp {
 
     /// 本机 UI 偏好（项目排序 / 折叠）。
     pub prefs: crate::prefs::UiPrefs,
-    /// 正在拖的项目 id 与已经拖过的行数——用来预览让位。
-    pub dragging_project: Option<String>,
 
     /// 正在改标题（点头部标题进入）。
     pub title_editing: bool,
@@ -255,7 +253,6 @@ impl HebbianApp {
             terminal: None,
             terminal_focus: cx.focus_handle(),
             prefs,
-            dragging_project: None,
             title_editing: false,
             title_input,
             question_picked: Vec::new(),
@@ -366,6 +363,33 @@ impl HebbianApp {
     pub fn save_prefs(&mut self) {
         self.prefs.collapsed = self.state.collapsed.clone();
         crate::prefs::save(self.state.core.data_dir(), &self.prefs);
+    }
+
+    /// 发起一次需要确认的破坏性操作。
+    pub fn ask_confirm(&mut self, action: crate::state::ConfirmAction) {
+        self.state.confirm = Some(crate::state::Confirm { action, asked: 0 });
+    }
+
+    /// 用户点了「确认」：第一次只是把问题换一句再问，第二次才真的执行。
+    pub fn advance_confirm(&mut self) {
+        let Some(confirm) = self.state.confirm.take() else {
+            return;
+        };
+        if confirm.asked == 0 {
+            self.state.confirm = Some(crate::state::Confirm {
+                asked: 1,
+                ..confirm
+            });
+            return;
+        }
+        match confirm.action {
+            crate::state::ConfirmAction::DeleteSession { id, .. } => {
+                self.state.core.delete_session(id)
+            }
+            crate::state::ConfirmAction::DeleteProject { id, .. } => {
+                self.state.core.delete_project(id)
+            }
+        }
     }
 
     /// 把 `from` 项目挪到 `to` 的位置，并记住新顺序。
@@ -582,8 +606,93 @@ impl Render for HebbianApp {
             .child(right_panel::render(self, window, cx))
             .children(session_settings::render(self, cx))
             .children(settings::render(self, cx))
+            .children(self.state.confirm.clone().map(|c| confirm_dialog(&theme, c, cx)))
             .children(self.state.error.clone().map(|message| toast(&theme, message, cx)))
     }
+}
+
+/// 破坏性操作的确认弹窗。删对话 / 删项目都从这里过一遍。
+///
+/// 两遍确认之间只换文案不换按钮位置，是有意的：位置一换，第二次点击就成了
+/// 「找按钮」而不是「再想一秒」，防误删的作用反而弱了。
+fn confirm_dialog(
+    theme: &Theme,
+    confirm: crate::state::Confirm,
+    cx: &mut Context<HebbianApp>,
+) -> impl IntoElement {
+    let body = confirm.action.body(confirm.asked);
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        // 半透明遮罩：点空白处等同取消，与原 UI 的 confirm 一致。
+        .bg(gpui::rgba(0x0000_0059))
+        .child(
+            div()
+                .id("confirm-card")
+                .w(px(360.))
+                .p(px(18.))
+                .rounded(px(14.))
+                .border_1()
+                .border_color(theme.line)
+                .bg(theme.card_strong)
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(gpui::FontWeight(600.))
+                        .child(confirm.action.title()),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.muted)
+                        .child(body),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_end()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .id("confirm-cancel")
+                                .px(px(12.))
+                                .py(px(6.))
+                                .rounded(px(8.))
+                                .text_size(px(12.))
+                                .text_color(theme.muted)
+                                .cursor_pointer()
+                                .hover(|this| this.bg(theme.surface_veil))
+                                .child("取消")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.state.confirm = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("confirm-ok")
+                                .px(px(12.))
+                                .py(px(6.))
+                                .rounded(px(8.))
+                                .text_size(px(12.))
+                                .text_color(theme.danger)
+                                .cursor_pointer()
+                                .hover(|this| this.bg(gpui::rgba(0xd35b5b1a)))
+                                .child(if confirm.asked == 0 { "删除" } else { "确认删除" })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.advance_confirm();
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+        )
 }
 
 /// 顶部居中的错误提示条，对应原前端 sonner 的 `toast.error`。

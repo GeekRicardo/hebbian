@@ -12,18 +12,6 @@ pub fn v_flex() -> Div {
     div().flex().flex_col()
 }
 
-/// `--dsp-shadow-soft`：`0 8px 20px rgba(45,61,83,0.045)`。
-pub fn shadow_soft(color: Hsla) -> Vec<BoxShadow> {
-    vec![BoxShadow {
-        color,
-        offset: Point {
-            x: px(0.),
-            y: px(8.),
-        },
-        blur_radius: px(20.),
-        spread_radius: px(0.),
-    }]
-}
 
 /// `--dsp-shadow`：`0 14px 38px rgba(45,61,83,0.08)`。
 pub fn shadow_lifted(color: Hsla) -> Vec<BoxShadow> {

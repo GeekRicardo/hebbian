@@ -12213,3 +12213,34 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **审批卡片终于验到真数据**：core 把 `rm /tmp/mock-target` 判为 `Unmemorable`（红色、不可勾选、「每次都要确认，不能记住」），`echo done` 判为 `Readonly`（灰显「只读，免审」），三个范围按钮就位。**这正是我之前说「需要在有 provider 的环境复核」的那一项，现在不需要了。**
 - **影响范围**: `apps/gpui` + 新增 dev 脚本。33 条单测通过。
 - **留尾巴**: mock 只覆盖「一次工具调用 + 收尾」，没覆盖多轮工具、流式 reasoning、压缩等路径。
+
+---
+
+## 2026-08-11 — gpui surface：补齐删除确认 / 改动 diff / 停止后台任务，修一类点击穿透
+
+**Why**：用真跑（Xvfb + mock provider）做了一轮功能级核对，暴露出四类问题，其中两类是安全 / 数据风险，不是纯观感：
+
+1. **删对话没有任何确认**。原前端 `DesktopSidebar.tsx` 对删除对话 / 删除项目都要过**两次** `ipcConfirm`（第二句文案与第一句不同）；gpui 版是 hover 出的 22px 垃圾桶图标，单击即删、不可撤销。手一抖就没了。
+2. **删除按钮的点击会冒泡到整行**。点垃圾桶的同时把那条对话打开了；项目头上的「+ 新建对话」同理会顺带折叠 / 展开该项目。gpui 的 `on_click` 默认继续向上派发，必须显式 `cx.stop_propagation()`。
+3. **「修改文件」面板只能看不能点**。原 `EditTreePanel.tsx` 点文件行会拉这轮的改动快照（`diff_edit`）开 diff；gpui 版整行没有交互，且直接铺绝对路径——面板只有两百多像素宽，铺完只剩一串目录名，真正想看的文件名反倒被截掉了。
+4. **「后台任务」面板没有停止入口**，也不显示任务编号。原 `BackgroundTaskPanel.tsx` 有「停止」按钮（`killBackgroundTask`），卡片标题就是 task_id。模型在聊天区说「已在后台启动 bash_3」，用户在面板里却找不到 bash_3 是哪条，更停不掉。
+
+**改动**：
+- `apps/gpui/src/state.rs`：新增 `Confirm` / `ConfirmAction`（DeleteSession / DeleteProject），带 `asked` 计数实现两遍问话；删掉从没被读过的 `search_open`（搜索过滤实际走 `build_buckets`，这个字段是早期实现遗留）
+- `apps/gpui/src/ui/mod.rs`：新增 `confirm_dialog` 遮罩弹窗与 `ask_confirm` / `advance_confirm`；删掉遗留字段 `dragging_project`（项目拖拽排序实际由 `ProjectDrag` 承载）
+- `apps/gpui/src/ui/sidebar.rs`：会话删除改走确认；补上原前端有而这边漏掉的**项目删除**按钮（项目头部原本就预留了 58px 双按钮位，只画了一个）；三个悬浮按钮加 `stop_propagation`
+- `apps/gpui/src/ui/right_panel.rs`：「修改文件」行改为只显示文件名（全路径挂 tooltip）+ 点击开这轮的改动 diff；「后台任务」补 task_id 与「停止」；竖条图标补 tooltip（原前端每个按钮都有 `title`，折叠时那一列图标否则只能靠猜）；浏览器 / 终端两条说明还写着「还没搬过来」，但两个面板早就实现了，改成实际用途；删掉九个面板全实现后已死的占位面板 `empty_panel` / `blurb`
+- `apps/gpui/src/core.rs`：新增 `load_edit_diff`（读 edits-worktree 快照，与读 git 工作区的 `load_diff` 不同：改完用户又手改过、或这轮已回退时，git 已经看不到当时的两侧内容，快照还留着）与 `kill_task`（停完立刻重读注册表，否则面板一直显示「运行中」）
+- `apps/gpui/dev/mock-provider.py`：① 从错误的嵌套路径 `apps/gpui/apps/gpui/dev/` 挪回 `apps/gpui/dev/`（当初 cwd 在 `apps/gpui` 下写的相对路径，已连错误路径一起提交过）；② 加 `MOCK_TOOL=edit`，先发 `Read` 再发 `Edit`——`Edit` 有「先读后写」守卫（ReadStateTracker），直接发会被拒；③ README 补一段说明它与已有的 `apps/cli/src/mock_provider.rs` 不是重复：那个只吐固定文本、不调用工具，触发不了审批 / 编辑链路
+
+**怎么验的**（阶段 A 复现 / 阶段 B 验证）：
+- 回退这轮：`MOCK_TOOL=edit` 起 mock → 真跑一轮 → 落出 `version: 3` 的真实 edits-worktree 快照（`revert-target.txt` 13 → 26 字节）→ 点「回退这轮」→ 文件回到原文、`reverted: true`、徽章从「回退这轮」变「已回退」。这条路径此前完全没被走过，因为没有真模型就造不出快照
+- 删除确认：点垃圾桶 → 弹「删除对话「X」？」→ 点删除 → 换成「再确认一次：…删了就找不回来了。」→ 确认后磁盘上会话数 44 → 43、侧栏计数 13 → 12
+- 点击穿透：修前点垃圾桶会把那条对话一并打开（聊天区标题变了）；修后聊天区保持原会话不动
+
+**影响范围**：只动 `apps/gpui`（新 surface，未发布）。不改协议、不改 agent-core、不影响 Desktop / heb / hebweb。
+
+**留尾巴**：
+- `load_edit_diff` 与 desktop `diff_edit` / hebweb `cmd_diff_edit` 是三处形状相同的「建 worktree → 找 run → 找 file → diff_text」样板。真要收口应在 `agent_core::edits` 上加一个 `diff_run_file(&self, run_id, real_path)`，三个 surface 各减十几行——本次没做，因为它会动到 Desktop 与 hebweb 两个已发布 surface，值得单开一次改动
+- 后台任务面板还差「展开看实时输出」（原前端展开卡片会 polling `read_background_task_output`）
+- `apps/desktop` 的模型 / 思考强度切换去重仍卡在 Linux 上 `cargo check -p hebbian` 编不过（`tauri-runtime-wry` E0046/E0277），非本次改动引入

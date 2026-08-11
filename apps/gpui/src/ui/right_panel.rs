@@ -58,21 +58,6 @@ impl Workbench {
         }
     }
 
-    /// 还没实现的面板里那句「这块以后放什么」。
-    fn blurb(self) -> &'static str {
-        match self {
-            Workbench::Files => "当前对话工作目录里的文件。",
-            Workbench::Tasks => "在后台跑着的命令与子任务。",
-            Workbench::Edits => "这轮改过的文件，可整轮回退。",
-            Workbench::Git => "改了哪些文件、能不能一键回退。",
-            Workbench::Todos => "这轮的任务清单。",
-            Workbench::Plans => "计划模式下的方案与批注。",
-            Workbench::Branches => "从这个对话分叉出去的旁支。",
-            Workbench::Browser => "内置浏览器预览，还没搬过来。",
-            Workbench::Terminal => "内置终端，还没搬过来。",
-        }
-    }
-
     pub fn title(self) -> &'static str {
         match self {
             Workbench::Files => "文件目录",
@@ -173,12 +158,11 @@ fn panel(
             Workbench::Todos => todo_panel(app).into_any_element(),
             Workbench::Git => git_panel(app, cx).into_any_element(),
             Workbench::Edits => edits_panel(app, cx).into_any_element(),
-            Workbench::Tasks => tasks_panel(app).into_any_element(),
+            Workbench::Tasks => tasks_panel(app, cx).into_any_element(),
             Workbench::Branches => branches_panel(app, cx).into_any_element(),
             Workbench::Plans => plan_panel(app, window, cx).into_any_element(),
             Workbench::Terminal => terminal_panel(app, cx).into_any_element(),
             Workbench::Browser => crate::ui::browser::panel(app, cx).into_any_element(),
-            other => empty_panel(app, other).into_any_element(),
         })
 }
 
@@ -511,7 +495,7 @@ fn diff_view(app: &HebbianApp) -> Option<impl IntoElement> {
 
 /// 后台任务面板。与原前端同源：历史从 `session.messages` 派生（跑完的永久保留），
 /// 再用本进程注册表 join 出「还在跑」的实时状态。
-fn tasks_panel(app: &HebbianApp) -> impl IntoElement {
+fn tasks_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();
     let tasks = crate::state::derive_background_tasks(&app.state.messages);
     let live = &app.state.live_tasks;
@@ -534,6 +518,7 @@ fn tasks_panel(app: &HebbianApp) -> impl IntoElement {
 
     // 注册表里还活着的排在最前——它们是此刻正在发生的事。
     for t in live {
+        let task_id = t.task_id.clone();
         list = list.child(
             v_flex()
                 .py(px(6.))
@@ -546,7 +531,13 @@ fn tasks_panel(app: &HebbianApp) -> impl IntoElement {
                         .text_size(px(11.))
                         .text_color(theme.faint)
                         .child(Icon::Terminal.el(px(11.), theme.faint))
-                        .child("命令")
+                        // 任务编号要露出来：模型自己用它读输出 / 停任务，
+                        // 用户在聊天区看到「已在后台启动 bash_3」时得对得上号。
+                        .child(
+                            div()
+                                .font_family("monospace")
+                                .child(t.task_id.clone()),
+                        )
                         .child(
                             div()
                                 .text_color(if t.running { theme.accent } else { theme.green })
@@ -558,7 +549,34 @@ fn tasks_panel(app: &HebbianApp) -> impl IntoElement {
                                         Some(code) => format!("退出码 {code}"),
                                     }
                                 }),
-                        ),
+                        )
+                        .child(div().flex_1())
+                        // 只有还在跑的才给「停止」——已经结束的按了也没意义。
+                        .when(t.running, |this| {
+                            this.child(
+                                div()
+                                    .id(gpui::SharedString::from(format!("kill-{task_id}")))
+                                    .px(px(6.))
+                                    .rounded(px(999.))
+                                    .border_1()
+                                    .border_color(theme.line)
+                                    .text_color(theme.muted)
+                                    .cursor_pointer()
+                                    .hover(|this| {
+                                        this.bg(gpui::rgba(0xd35b5b1a)).text_color(theme.danger)
+                                    })
+                                    .child("停止")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        let Some(sid) =
+                                            this.state.current_id().map(str::to_string)
+                                        else {
+                                            return;
+                                        };
+                                        this.state.core.kill_task(sid, task_id.clone());
+                                        cx.notify();
+                                    })),
+                            )
+                        }),
                 )
                 .child(
                     div()
@@ -711,11 +729,54 @@ fn edits_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEleme
             } else {
                 ("", theme.muted)
             };
+            // 面板只有二百来像素宽，绝对路径铺进去只剩一串目录名，
+            // 真正想看的文件名反而被截没了——所以只显示末段，全路径挂 tooltip。
+            let leaf = file
+                .real_path
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(&file.real_path)
+                .to_string();
+            let full_path = file.real_path.clone();
+            let run_id = run.run_id.clone();
+            let selected = app
+                .state
+                .diff
+                .as_ref()
+                .is_some_and(|(p, _)| p == &file.real_path);
             group = group.child(
                 h_flex()
+                    .id(gpui::SharedString::from(format!(
+                        "edit-{}-{}",
+                        run.run_id, file.real_path
+                    )))
                     .gap(px(8.))
                     .py(px(3.))
+                    .px(px(4.))
+                    .rounded(px(6.))
                     .text_size(px(12.))
+                    .cursor_pointer()
+                    .when(selected, |this| this.bg(theme.accent_soft))
+                    .hover(|this| this.bg(theme.accent_soft))
+                    .tooltip({
+                        let path = full_path.clone();
+                        move |window, cx| {
+                            gpui_component::tooltip::Tooltip::new(path.clone()).build(window, cx)
+                        }
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let Some(session) = this.state.current.as_ref() else {
+                            return;
+                        };
+                        let (sid, workdir) = (session.id.clone(), session.workdir.clone());
+                        this.state.core.load_edit_diff(
+                            sid,
+                            workdir,
+                            run_id.clone(),
+                            full_path.clone(),
+                        );
+                        cx.notify();
+                    }))
                     .child(
                         div()
                             .min_w_0()
@@ -723,8 +784,9 @@ fn edits_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEleme
                             .overflow_hidden()
                             .text_ellipsis()
                             .whitespace_nowrap()
+                            .font_family("monospace")
                             .text_color(if run.reverted { theme.faint } else { theme.muted })
-                            .child(file.real_path.clone()),
+                            .child(leaf),
                     )
                     .child(
                         div()
@@ -984,26 +1046,6 @@ fn terminal_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEl
         .into_any_element()
 }
 
-/// 还没搬过来的面板：给出这块将来放什么，而不是一片空白。
-fn empty_panel(app: &HebbianApp, item: Workbench) -> impl IntoElement {
-    let theme = app.theme.clone();
-    v_flex()
-        .p(px(14.))
-        .gap(px(6.))
-        .child(
-            div()
-                .text_size(px(12.))
-                .text_color(theme.text)
-                .child(item.title()),
-        )
-        .child(
-            div()
-                .text_size(px(11.))
-                .text_color(theme.muted)
-                .child(item.blurb()),
-        )
-}
-
 /// 文件树。按需读盘：只有展开过的目录才会被读，读到的结果缓存在 state 里。
 fn tree(app: &HebbianApp, cx: &mut Context<HebbianApp>, dir: PathBuf) -> impl IntoElement {
     let theme = app.theme.clone();
@@ -1156,6 +1198,12 @@ fn rail(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
                 }
                 .el(px(15.), theme.muted),
             )
+            .tooltip({
+                let label = if app.right_collapsed { "展开工作台" } else { "折叠工作台" };
+                move |window, cx| {
+                    gpui_component::tooltip::Tooltip::new(label).build(window, cx)
+                }
+            })
             .on_click(cx.listener(|this, _, _, cx| {
                 this.right_collapsed = !this.right_collapsed;
                 cx.notify();
@@ -1179,6 +1227,10 @@ fn rail(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
                     px(15.),
                     if active { theme.accent } else { theme.muted },
                 ))
+                // 竖条收起时只剩一列图标，没有 tooltip 就只能靠猜哪个是哪个。
+                .tooltip(move |window, cx| {
+                    gpui_component::tooltip::Tooltip::new(item.title()).build(window, cx)
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     // 点已选中的那个 = 收起面板，与原 UI 的开合手感一致。
                     if this.workbench == item && !this.right_collapsed {

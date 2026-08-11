@@ -5,7 +5,7 @@
 //! wry / CEF。界面主体仍然是 gpui 原生绘制，只有这一块内容区是网页。
 
 use gpui::{div, prelude::*, px, Context, Entity, Window};
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::Input;
 use gpui_component::webview::WebView;
 
 use crate::assets::Icon;

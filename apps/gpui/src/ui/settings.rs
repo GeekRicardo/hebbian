@@ -1142,22 +1142,5 @@ fn hint(theme: &crate::theme::Theme, text: impl Into<String>) -> impl IntoElemen
         .child(text.into())
 }
 
-/// 枚举变体名（ZhCn / StringReplace）绝不能直接进 UI——那是内部命名，
-/// 用户看不懂。这里翻成人话。
-fn language_label(language: agent_core::storage::settings::AppLanguage) -> String {
-    match language {
-        agent_core::storage::settings::AppLanguage::ZhCn => "简体中文",
-        agent_core::storage::settings::AppLanguage::En => "English",
-    }
-    .to_string()
-}
-
-fn edit_backend_label(backend: agent_core::storage::settings::EditBackend) -> String {
-    match backend {
-        agent_core::storage::settings::EditBackend::StringReplace => "精确替换原文（默认）",
-        agent_core::storage::settings::EditBackend::Hashline => "按行号打补丁（实验）",
-    }
-    .to_string()
-}
 
 

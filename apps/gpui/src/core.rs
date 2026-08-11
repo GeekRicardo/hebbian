@@ -464,6 +464,51 @@ impl Core {
         });
     }
 
+    /// 取某轮改动里某个文件的前后文本。
+    ///
+    /// 与 [`Self::load_diff`] 的区别：那个比的是 git 工作区当下的状态，这个比的是
+    /// **改动快照**——改完之后用户又手改过、或者这轮已经回退了，快照里仍然留着
+    /// 当时的两侧内容，git diff 却已经看不到了。「这轮到底改了什么」只有快照答得准。
+    pub fn load_edit_diff(
+        &self,
+        session_id: String,
+        workdir: Option<PathBuf>,
+        run_id: String,
+        file_path: String,
+    ) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let Some(workdir) = workdir else {
+                return this.emit_err("这个对话没有工作目录，看不了改动");
+            };
+            let workspace = agent_core::Workspace::new(workdir, Vec::new());
+            let tree =
+                agent_core::edits::EditsWorktree::new(&this.inner.data_dir, &session_id, &workspace);
+            let runs = match tree.list_runs() {
+                Ok(runs) => runs,
+                Err(err) => return this.emit_err(err),
+            };
+            let found = runs
+                .iter()
+                .find(|r| r.run_id == run_id)
+                .and_then(|r| r.files.iter().find(|f| f.real_path == file_path));
+            let Some(file) = found else {
+                return this.emit_err("找不到这个文件的改动，可能已经被清理了");
+            };
+            match tree.diff_text(file).await {
+                Ok((before, after)) => this.emit(CoreUpdate::DiffLoaded {
+                    rel_path: file_path,
+                    before,
+                    after,
+                }),
+                Err(err) => {
+                    tracing::error!(error = %err, run_id = %run_id, "取改动快照失败");
+                    this.emit_err("取不到这轮的改动内容：快照不完整或已被清理")
+                }
+            }
+        });
+    }
+
     /// 读一次工作目录的 git 状态。不是仓库不算错——很多对话的目录本来就没进 git，
     /// 这种情况回 None 让面板显示「不是 git 仓库」，而不是弹一条报错。
     pub fn refresh_git(&self, workdir: PathBuf) {
@@ -618,6 +663,21 @@ impl Core {
     /// 注册表是进程内的：gpui 自己跑 run，所以这里看到的就是它自己起的那些。
     /// 别的 surface（Desktop / heb）起的后台任务在它们各自进程里，这边看不到——
     /// 这是 in-process 架构的既有边界（架构 §7.5），不是这里漏读了。
+    /// 停掉一个还在跑的后台命令。
+    ///
+    /// 停完立刻重读一次注册表：注册表是进程内内存，没有变更推送，
+    /// 不主动刷新的话面板上那条会一直显示「运行中」，像是没停掉。
+    pub fn kill_task(&self, session_id: String, task_id: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let registry = agent_core::tools::background::registry_for_session(&session_id);
+            match registry.kill(&task_id).await {
+                Some(_) => this.refresh_live_tasks(session_id),
+                None => this.emit_err("这个后台任务已经不在了，可能自己跑完了"),
+            }
+        });
+    }
+
     pub fn refresh_live_tasks(&self, session_id: String) {
         let this = self.clone();
         self.inner.rt.spawn(async move {

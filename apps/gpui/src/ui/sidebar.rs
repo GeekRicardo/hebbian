@@ -337,8 +337,7 @@ fn project_group(
     let group_name = gpui::SharedString::from(format!("proj-row-{}", bucket.id));
     let count = bucket.sessions.len();
 
-    let mut group = v_flex().flex_none().mb(px(4.)).child(
-        h_flex()
+    let mut header = h_flex()
             .id(gpui::SharedString::from(format!("proj-{}", bucket.id)))
             .group(group_name.clone())
             .relative()
@@ -411,11 +410,43 @@ fn project_group(
                     .group_hover(group_name.clone(), |this| this.visible())
                     .hover(|this| this.bg(theme.accent_soft).text_color(theme.accent))
                     .child(Icon::Plus.el(px(13.), theme.faint))
-                    .on_click(cx.listener(move |this, _, _, _| {
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
                         this.state.core.create_session(project_id.clone(), None);
                     })),
-            ),
-    );
+            );
+
+    // 默认分组不是真项目，没有可删的东西——只有真项目才给删除入口。
+    if let Some(pid) = bucket.project_id.clone() {
+        let name = bucket.name.clone();
+        header = header.child(
+            div()
+                .id(gpui::SharedString::from(format!("del-proj-{}", bucket.id)))
+                .absolute()
+                .right(px(4.))
+                .size(px(22.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.))
+                .text_color(theme.faint)
+                .cursor_pointer()
+                .invisible()
+                .group_hover(group_name.clone(), |this| this.visible())
+                .hover(|this| this.bg(gpui::rgba(0xd35b5b1a)).text_color(theme.danger))
+                .child(Icon::Trash2.el(px(12.), theme.faint))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.ask_confirm(crate::state::ConfirmAction::DeleteProject {
+                        id: pid.clone(),
+                        name: name.clone(),
+                    });
+                    cx.notify();
+                })),
+        );
+    }
+
+    let mut group = v_flex().flex_none().mb(px(4.)).child(header);
 
     if !collapsed {
         let mut list = v_flex().pl(px(16.)).pr(px(4.)).pb(px(4.));
@@ -443,6 +474,7 @@ fn session_row(
     let time = relative_time(session.updated_at, now_ms());
     let open_id = id.clone();
     let delete_id = id.clone();
+    let delete_title = session.title.clone();
     let group_name = gpui::SharedString::from(format!("sess-row-{id}"));
 
     h_flex()
@@ -518,8 +550,16 @@ fn session_row(
                 .group_hover(group_name.clone(), |this| this.visible())
                 .hover(|this| this.bg(gpui::rgba(0xd35b5b1a)).text_color(theme.danger))
                 .child(Icon::Trash2.el(px(12.), theme.faint))
-                .on_click(cx.listener(move |this, _, _, _| {
-                    this.state.core.delete_session(delete_id.clone());
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    // 点删除不该顺带把这条对话打开——事件必须在这里截住，
+                    // 否则会冒泡到整行的 on_click。
+                    cx.stop_propagation();
+                    // 删了找不回来，先问两遍——原 UI 就是两次 confirm。
+                    this.ask_confirm(crate::state::ConfirmAction::DeleteSession {
+                        id: delete_id.clone(),
+                        title: delete_title.clone(),
+                    });
+                    cx.notify();
                 })),
         )
 }

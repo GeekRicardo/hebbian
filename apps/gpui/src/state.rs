@@ -89,10 +89,13 @@ pub struct AppState {
     // ── 侧栏 UI 态 ──────────────────────────────────────────────
     pub tab: SidebarTab,
     pub query: String,
-    pub search_open: bool,
     pub search_case: bool,
     pub search_regex: bool,
     pub collapsed: HashSet<String>,
+
+    /// 待用户确认的破坏性操作。删除对话 / 删除项目都不可撤销，
+    /// 所以照原 UI 一样问两遍——第一遍防误点，第二遍防手快。
+    pub confirm: Option<Confirm>,
 
     /// 这个会话的 plan（新到旧）。
     pub plans: Vec<(String, String)>,
@@ -180,10 +183,10 @@ impl AppState {
             pending_questions: HashMap::new(),
             tab: SidebarTab::Code,
             query: String::new(),
-            search_open: false,
             search_case: false,
             search_regex: false,
             collapsed: HashSet::new(),
+            confirm: None,
             plans: Vec::new(),
             extras: crate::core::Extras::default(),
             log_tail: (String::new(), Vec::new()),
@@ -572,6 +575,50 @@ pub struct ProjectBucket {
     pub path: String,
     pub project_id: Option<String>,
     pub sessions: Vec<SessionMeta>,
+}
+
+/// 一个等着用户点「确认」的破坏性操作。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Confirm {
+    pub action: ConfirmAction,
+    /// 已经确认过几次。0 = 还没问过，1 = 问过一遍正在问第二遍。
+    pub asked: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfirmAction {
+    DeleteSession { id: String, title: String },
+    DeleteProject { id: String, name: String },
+}
+
+impl ConfirmAction {
+    /// 两遍问话的正文。第二遍必须和第一遍不一样，否则用户会以为没点上，
+    /// 无脑再点一次——那这道确认就白设了。
+    pub fn body(&self, asked: u8) -> String {
+        match self {
+            ConfirmAction::DeleteSession { title, .. } => {
+                if asked == 0 {
+                    format!("删除对话「{title}」？")
+                } else {
+                    format!("再确认一次：删除对话「{title}」，删了就找不回来了。")
+                }
+            }
+            ConfirmAction::DeleteProject { name, .. } => {
+                if asked == 0 {
+                    format!("删除项目「{name}」？项目下的对话不会被删掉。")
+                } else {
+                    format!("再确认一次：删除项目「{name}」。")
+                }
+            }
+        }
+    }
+
+    pub fn title(&self) -> &'static str {
+        match self {
+            ConfirmAction::DeleteSession { .. } => "删除对话",
+            ConfirmAction::DeleteProject { .. } => "删除项目",
+        }
+    }
 }
 
 /// 会话是否命中搜索。与原前端 `sessionMatchesQuery` 同语义：
