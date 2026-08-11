@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 TARGET = os.environ.get("MOCK_EDIT_FILE", "/root/code/chroma/revert-target.txt")
 EDIT_MODE = os.environ.get("MOCK_TOOL") == "edit"
 BG_MODE = os.environ.get("MOCK_TOOL") == "bg"
+ASK_MODE = os.environ.get("MOCK_TOOL") == "ask"
 FIRST_TEXT = "我来改一行。" if EDIT_MODE else ("我起个后台任务。" if BG_MODE else "我来清理一下。")
 DONE_TEXT = "改好了。" if EDIT_MODE else ("已经在后台跑了。" if BG_MODE else "清理完成了。")
 
@@ -61,6 +62,13 @@ class H(BaseHTTPRequestHandler):
                            "old_string":"原始内容",
                            "new_string":"被 agent 改过的内容",
                            "description":"改一行做回退测试"})}}
+            elif ASK_MODE:
+                # 提问卡片：单题多选，用来验 question_card 那几个交互
+                tc = {"index":0,"id":"call_mock_1","type":"function",
+                      "function":{"name":"Ask","arguments":json.dumps(
+                          {"question":"这次先做哪几项？",
+                           "multi": True,
+                           "options":[{"label":"改配色"},{"label":"补测试"},{"label":"写文档"}]})}}
             elif BG_MODE:
                 # 起一个会持续吐东西的后台命令，用来验「后台任务」面板：
                 # 任务编号 / 停止 / 展开看输出这三样都得有真任务才试得出来。
@@ -72,7 +80,7 @@ class H(BaseHTTPRequestHandler):
             else:
                 tc = {"index":0,"id":"call_mock_1","type":"function",
                       "function":{"name":"Bash","arguments":json.dumps(
-                          {"command":"rm -rf /tmp/mock-target && echo done",
+                          {"command":os.environ.get("MOCK_CMD","rm -rf /tmp/mock-target && echo done"),
                            "description":"清理临时目录"})}}
             if streaming:
                 chunks = [

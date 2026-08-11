@@ -4,7 +4,8 @@
 //! `DesktopEmptyState`（居中的品牌卡片 + 「你想用 Hebbian 做什么」）。
 
 use agent_core::storage::sessions::{Message, MessagePart, Role};
-use gpui::{div, prelude::*, px, AnyElement, Context, Window};
+use gpui::{div, prelude::*, px, AnyElement, Context, Entity, Window};
+use gpui_component::input::InputState;
 
 use crate::assets::Icon;
 use crate::state::StreamingTurn;
@@ -181,6 +182,12 @@ fn canvas(
     if !streaming.is_empty() {
         tail.push(TailItem::Streaming);
     }
+    if pending_approval.is_some() {
+        tail.push(TailItem::Approval);
+    }
+    if pending_question.is_some() {
+        tail.push(TailItem::Question);
+    }
     let tail = std::rc::Rc::new(tail);
     let count = messages.len() + tail.len();
 
@@ -194,7 +201,7 @@ fn canvas(
         }
     };
 
-    let messages_list = gpui::list(list_state, {
+    gpui::list(list_state, {
         let ctx = ctx.clone();
         move |ix, window, cx| {
             let inner = |el: gpui::AnyElement| {
@@ -213,29 +220,29 @@ fn canvas(
                 Some(TailItem::Streaming) => {
                     inner(streaming_bubble(&ctx, &streaming, window, cx).into_any_element())
                 }
+                Some(TailItem::Approval) => match pending_approval.as_ref() {
+                    Some(p) => inner(approval_card(&ctx, p).into_any_element()),
+                    None => div().into_any_element(),
+                },
+                Some(TailItem::Question) => match pending_question.as_ref() {
+                    Some(q) => inner(question_card(&ctx, q).into_any_element()),
+                    None => div().into_any_element(),
+                },
                 None => div().into_any_element(),
             }
         }
     })
-    .flex_1();
-
-    // 审批 / 提问压在消息流末尾（列表是底对齐的，视觉上就接在最后一条后面）。
-    let mut column = v_flex().flex_1().min_h_0().child(messages_list);
-    if let Some(pending) = pending_approval.as_ref() {
-        column = column.child(approval_card(app, cx, pending));
-    }
-    if let Some(question) = pending_question.as_ref() {
-        column = column.child(question_card(app, cx, question));
-    }
-    column.into_any_element()
+    .flex_1()
+    .into_any_element()
 }
 
-/// 消息之后那几个「跟着一起滚」的东西。目前只有流式气泡：
-/// 审批 / 提问卡片留在列表外面（见下面 `render` 尾部），它们那几个监听器都在
-/// HITL 主路径上，为了虚拟化去改写不划算，而且它们本来就只出现在对话末尾。
+/// 消息之后那几个「跟着一起滚」的东西。它们都在列表**里面**当虚拟项，
+/// 这样往上翻历史时会跟着滚走——和原前端一样是消息流的一部分，不是钉在底部的浮层。
 #[derive(Clone, Copy)]
 enum TailItem {
     Streaming,
+    Approval,
+    Question,
 }
 
 
@@ -561,6 +568,14 @@ pub(crate) struct RenderCtx {
     pub expanded_parts: std::collections::HashSet<String>,
     pub expanded_calls: std::collections::HashSet<String>,
     pub flash_tool_call: Option<String>,
+    /// 下面这些是审批 / 提问卡片要用的。它们也在虚拟化列表里，
+    /// 同样拿不到 `Context`，所以一并快照。
+    pub session_id: String,
+    pub deny_feedback_open: bool,
+    pub deny_feedback: Entity<InputState>,
+    pub question_custom: Entity<InputState>,
+    pub approval_picked: Vec<String>,
+    pub question_picked: Vec<String>,
 }
 
 impl RenderCtx {
@@ -571,6 +586,12 @@ impl RenderCtx {
             expanded_parts: app.state.expanded_parts.clone(),
             expanded_calls: app.state.expanded_calls.clone(),
             flash_tool_call: app.state.flash_tool_call.clone(),
+            session_id: app.state.current_id().unwrap_or_default().to_string(),
+            deny_feedback_open: app.deny_feedback_open,
+            deny_feedback: app.deny_feedback.clone(),
+            question_custom: app.question_custom.clone(),
+            approval_picked: app.state.approval_picked.clone(),
+            question_picked: app.question_picked.clone(),
         }
     }
 
@@ -993,15 +1014,15 @@ fn tool_chip(theme: &crate::theme::Theme, name: &str, done: bool, is_error: bool
 /// （那样后续 `rm -rf /` 也会免审批）。这里没实现 pattern 多选，就不提供退化成
 /// 工具名级的快捷放行，宁可少一个按钮也不放宽审批面。
 fn approval_card(
-    app: &HebbianApp,
-    cx: &mut Context<HebbianApp>,
+    ctx: &RenderCtx,
     pending: &crate::state::PendingApproval,
 ) -> impl IntoElement {
-    let theme = app.theme.clone();
-    let session_id = app.state.current_id().unwrap_or_default().to_string();
+    let theme = ctx.theme.clone();
+    let session_id = ctx.session_id.clone();
+    let entity = ctx.entity.clone();
     // 「记住」区必须在下面那个 button 闭包之前算完：闭包会捕获 cx，
     // 之后再对 cx 可变借用就冲突了。
-    let remember = remember_section(app, pending, cx);
+    let remember = remember_section(ctx, pending);
 
     let button = |label: &'static str,
                   decision: protocol::ApprovalDecision,
@@ -1026,17 +1047,23 @@ fn approval_card(
             })
             .when(!primary && !danger, |this| this.text_color(theme.muted))
             .child(label)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if let Some(pending) = this.state.take_approval(&session_id) {
-                    this.state.core.resolve_approval(
-                        session_id.clone(),
-                        pending.request_id,
-                        decision.clone(),
-                    );
+            .on_click({
+                let entity = entity.clone();
+                move |_, _, outer: &mut gpui::App| {
+                    let Some(app) = entity.upgrade() else { return };
+                    app.update(outer, |this, cx| {
+                        if let Some(pending) = this.state.take_approval(&session_id) {
+                            this.state.core.resolve_approval(
+                                session_id.clone(),
+                                pending.request_id,
+                                decision.clone(),
+                            );
+                        }
+                        this.deny_feedback_open = false;
+                        cx.notify();
+                    });
                 }
-                this.deny_feedback_open = false;
-                cx.notify();
-            }))
+            })
     };
 
     v_flex()
@@ -1064,7 +1091,7 @@ fn approval_card(
                 .child(pending.summary.clone()),
         )
         // 「拒绝并说明」展开后先填理由再提交——这段话会回灌给模型。
-        .when(app.deny_feedback_open, |this| {
+        .when(ctx.deny_feedback_open, |this| {
             this.child(
                 div()
                     .p(px(8.))
@@ -1072,13 +1099,13 @@ fn approval_card(
                     .border_1()
                     .border_color(theme.line)
                     .text_size(px(12.))
-                    .child(gpui_component::input::Input::new(&app.deny_feedback)),
+                    .child(gpui_component::input::Input::new(&ctx.deny_feedback)),
             )
         })
         .child(
             h_flex()
                 .gap(px(8.))
-                .when(!app.deny_feedback_open, |row| {
+                .when(!ctx.deny_feedback_open, |row| {
                     row.child(button(
                         "允许此次",
                         protocol::ApprovalDecision::AllowOnce,
@@ -1099,12 +1126,18 @@ fn approval_card(
                             .cursor_pointer()
                             .hover(|this| this.bg(theme.accent_soft))
                             .child("拒绝并说明")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.deny_feedback_open = true;
-                                this.deny_feedback
-                                    .update(cx, |state, cx| state.focus(window, cx));
-                                cx.notify();
-                            })),
+                            .on_click({
+                                let entity = entity.clone();
+                                move |_, window: &mut Window, outer: &mut gpui::App| {
+                                    let Some(app) = entity.upgrade() else { return };
+                                    app.update(outer, |this, cx| {
+                                        this.deny_feedback_open = true;
+                                        this.deny_feedback
+                                            .update(cx, |state, cx| state.focus(window, cx));
+                                        cx.notify();
+                                    });
+                                }
+                            }),
                     )
                     .child(button(
                         "拒绝",
@@ -1115,7 +1148,7 @@ fn approval_card(
                         session_id.clone(),
                     ))
                 })
-                .when(app.deny_feedback_open, |row| {
+                .when(ctx.deny_feedback_open, |row| {
                     let sid = session_id.clone();
                     let theme2 = theme.clone();
                     row.child(
@@ -1128,10 +1161,16 @@ fn approval_card(
                             .text_color(theme.muted)
                             .cursor_pointer()
                             .child("取消")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.deny_feedback_open = false;
-                                cx.notify();
-                            })),
+                            .on_click({
+                                let entity = entity.clone();
+                                move |_, _, outer: &mut gpui::App| {
+                                    let Some(app) = entity.upgrade() else { return };
+                                    app.update(outer, |this, cx| {
+                                        this.deny_feedback_open = false;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
                     )
                     .child(div().flex_1())
                     .child(
@@ -1145,21 +1184,27 @@ fn approval_card(
                             .text_size(px(13.))
                             .cursor_pointer()
                             .child("提交拒绝")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let feedback =
-                                    this.deny_feedback.read(cx).value().trim().to_string();
-                                if let Some(pending) = this.state.take_approval(&sid) {
-                                    this.state.core.resolve_approval(
-                                        sid.clone(),
-                                        pending.request_id,
-                                        protocol::ApprovalDecision::DenyWithFeedback {
-                                            feedback,
-                                        },
-                                    );
+                            .on_click({
+                                let entity = entity.clone();
+                                move |_, _, outer: &mut gpui::App| {
+                                    let Some(app) = entity.upgrade() else { return };
+                                    app.update(outer, |this, cx| {
+                                        let feedback =
+                                            this.deny_feedback.read(cx).value().trim().to_string();
+                                        if let Some(pending) = this.state.take_approval(&sid) {
+                                            this.state.core.resolve_approval(
+                                                sid.clone(),
+                                                pending.request_id,
+                                                protocol::ApprovalDecision::DenyWithFeedback {
+                                                    feedback,
+                                                },
+                                            );
+                                        }
+                                        this.deny_feedback_open = false;
+                                        cx.notify();
+                                    });
                                 }
-                                this.deny_feedback_open = false;
-                                cx.notify();
-                            })),
+                            }),
                     )
                 }),
         )
@@ -1172,21 +1217,21 @@ fn approval_card(
 /// 只读段灰显、已白名单段划掉、**不可记忆段（rm/dd 之类）红色且不可勾选**。
 /// core 说 `refuse_remember` 时整个区不出现——不是灰掉，是根本不给。
 fn remember_section(
-    app: &HebbianApp,
+    ctx: &RenderCtx,
     pending: &crate::state::PendingApproval,
-    cx: &mut Context<HebbianApp>,
 ) -> Option<impl IntoElement> {
     use protocol::ApprovalSegmentStatus as St;
     if pending.refuse_remember || pending.segments.is_empty() {
         return None;
     }
-    let theme = app.theme.clone();
-    let session_id = app.state.current_id().unwrap_or_default().to_string();
+    let theme = ctx.theme.clone();
+    let session_id = ctx.session_id.clone();
+    let entity = ctx.entity.clone();
 
     let mut list = v_flex().gap(px(4.));
     for seg in &pending.segments {
         let fp = seg.fingerprint.clone();
-        let picked = app.state.approval_picked.contains(&fp);
+        let picked = ctx.approval_picked.contains(&fp);
         let selectable = matches!(seg.status, St::NeedsApproval);
         let (color, note) = match seg.status {
             St::Readonly => (theme.faint, "只读，免审"),
@@ -1203,16 +1248,25 @@ fn remember_section(
                 .items_center()
                 .when(selectable, |this| {
                     this.cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(i) =
-                                this.state.approval_picked.iter().position(|p| p == &fp_click)
-                            {
-                                this.state.approval_picked.remove(i);
-                            } else {
-                                this.state.approval_picked.push(fp_click.clone());
+                        .on_click({
+                            let entity = entity.clone();
+                            move |_, _, outer: &mut gpui::App| {
+                                let Some(app) = entity.upgrade() else { return };
+                                app.update(outer, |this, cx| {
+                                    if let Some(i) = this
+                                        .state
+                                        .approval_picked
+                                        .iter()
+                                        .position(|p| p == &fp_click)
+                                    {
+                                        this.state.approval_picked.remove(i);
+                                    } else {
+                                        this.state.approval_picked.push(fp_click.clone());
+                                    }
+                                    cx.notify();
+                                });
                             }
-                            cx.notify();
-                        }))
+                        })
                 })
                 .child(
                     div()
@@ -1257,29 +1311,35 @@ fn remember_section(
             .cursor_pointer()
             .hover(|this| this.bg(theme.accent_soft).text_color(theme.accent))
             .child(label)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                let mut picked = this.state.approval_picked.clone();
-                if picked.is_empty() {
-                    this.state.error = Some("先勾上要记住的那几段".to_string());
-                    cx.notify();
-                    return;
+            .on_click({
+                let entity = entity.clone();
+                move |_, _, outer: &mut gpui::App| {
+                    let Some(app) = entity.upgrade() else { return };
+                    app.update(outer, |this, cx| {
+                        let mut picked = this.state.approval_picked.clone();
+                        if picked.is_empty() {
+                            this.state.error = Some("先勾上要记住的那几段".to_string());
+                            cx.notify();
+                            return;
+                        }
+                        // 协议是「第一条进 pattern，其余进 extra_patterns」。
+                        let first = picked.remove(0);
+                        if let Some(p) = this.state.take_approval(&session_id) {
+                            this.state.core.resolve_approval(
+                                session_id.clone(),
+                                p.request_id,
+                                protocol::ApprovalDecision::AllowAndRemember {
+                                    scope,
+                                    pattern: Some(first),
+                                    extra_patterns: picked,
+                                },
+                            );
+                        }
+                        this.state.approval_picked.clear();
+                        cx.notify();
+                    });
                 }
-                // 协议是「第一条进 pattern，其余进 extra_patterns」。
-                let first = picked.remove(0);
-                if let Some(p) = this.state.take_approval(&session_id) {
-                    this.state.core.resolve_approval(
-                        session_id.clone(),
-                        p.request_id,
-                        protocol::ApprovalDecision::AllowAndRemember {
-                            scope,
-                            pattern: Some(first),
-                            extra_patterns: picked,
-                        },
-                    );
-                }
-                this.state.approval_picked.clear();
-                cx.notify();
-            }))
+            })
     };
 
     Some(
@@ -1326,19 +1386,19 @@ fn remember_section(
 /// 另有「其他回答」自由输入与「取消」（取消 = `UserAnswer::Cancelled`，
 /// 让模型知道用户主动放弃了这轮提问，而不是干等）。
 fn question_card(
-    app: &HebbianApp,
-    cx: &mut Context<HebbianApp>,
+    ctx: &RenderCtx,
     question: &crate::state::PendingQuestion,
 ) -> impl IntoElement {
-    let theme = app.theme.clone();
-    let session_id = app.state.current_id().unwrap_or_default().to_string();
+    let theme = ctx.theme.clone();
+    let session_id = ctx.session_id.clone();
+    let entity = ctx.entity.clone();
     let multi = question.multi;
 
     let mut options = v_flex().gap(px(6.));
     for option in &question.options {
         let label = option.label.clone();
         let sid = session_id.clone();
-        let picked = app.question_picked.contains(&label);
+        let picked = ctx.question_picked.contains(&label);
         let label_for_click = label.clone();
         options = options.child(
             h_flex()
@@ -1366,31 +1426,38 @@ fn question_card(
                     )
                 })
                 .child(label.clone())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if multi {
-                        // 多选只切换勾选状态，等用户点「提交」再一次性回答。
-                        if let Some(i) =
-                            this.question_picked.iter().position(|l| l == &label_for_click)
-                        {
-                            this.question_picked.remove(i);
-                        } else {
-                            this.question_picked.push(label_for_click.clone());
-                        }
-                        cx.notify();
-                        return;
+                .on_click({
+                    let entity = entity.clone();
+                    move |_, _, outer: &mut gpui::App| {
+                        let Some(app) = entity.upgrade() else { return };
+                        app.update(outer, |this, cx| {
+                            if multi {
+                                // 多选只切换勾选状态，等用户点「提交」再一次性回答。
+                                if let Some(i) =
+                                    this.question_picked.iter().position(|l| l == &label_for_click)
+                                {
+                                    this.question_picked.remove(i);
+                                } else {
+                                    this.question_picked.push(label_for_click.clone());
+                                }
+                                cx.notify();
+                                return;
+                            }
+                            if let Some(pending) = this.state.take_question(&sid) {
+                                this.state.core.answer_question(
+                                    sid.clone(),
+                                    pending.request_id,
+                                    protocol::UserAnswer::Selected {
+                                        label: label_for_click.clone(),
+                                    },
+                                );
+                            }
+                            this.question_picked.clear();
+                            cx.notify();
+                
+                        });
                     }
-                    if let Some(pending) = this.state.take_question(&sid) {
-                        this.state.core.answer_question(
-                            sid.clone(),
-                            pending.request_id,
-                            protocol::UserAnswer::Selected {
-                                label: label_for_click.clone(),
-                            },
-                        );
-                    }
-                    this.question_picked.clear();
-                    cx.notify();
-                })),
+                }),
         );
     }
 
@@ -1428,7 +1495,7 @@ fn question_card(
                         .border_1()
                         .border_color(theme.line)
                         .text_size(px(12.))
-                        .child(gpui_component::input::Input::new(&app.question_custom)),
+                        .child(gpui_component::input::Input::new(&ctx.question_custom)),
                 )
                 .child(
                     h_flex()
@@ -1441,23 +1508,30 @@ fn question_card(
                         .text_size(px(12.))
                         .cursor_pointer()
                         .child("发送")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            let text = this.question_custom.read(cx).value().trim().to_string();
-                            if text.is_empty() {
-                                return;
+                        .on_click({
+                            let entity = entity.clone();
+                            move |_, window: &mut Window, outer: &mut gpui::App| {
+                                let Some(app) = entity.upgrade() else { return };
+                                app.update(outer, |this, cx| {
+                                    let text = this.question_custom.read(cx).value().trim().to_string();
+                                    if text.is_empty() {
+                                        return;
+                                    }
+                                    if let Some(pending) = this.state.take_question(&sid_custom) {
+                                        this.state.core.answer_question(
+                                            sid_custom.clone(),
+                                            pending.request_id,
+                                            protocol::UserAnswer::Custom { text },
+                                        );
+                                    }
+                                    this.question_custom
+                                        .update(cx, |state, cx| state.set_value("", window, cx));
+                                    this.question_picked.clear();
+                                    cx.notify();
+                        
+                                });
                             }
-                            if let Some(pending) = this.state.take_question(&sid_custom) {
-                                this.state.core.answer_question(
-                                    sid_custom.clone(),
-                                    pending.request_id,
-                                    protocol::UserAnswer::Custom { text },
-                                );
-                            }
-                            this.question_custom
-                                .update(cx, |state, cx| state.set_value("", window, cx));
-                            this.question_picked.clear();
-                            cx.notify();
-                        })),
+                        }),
                 ),
         )
         .child(
@@ -1474,17 +1548,24 @@ fn question_card(
                         .cursor_pointer()
                         .hover(|this| this.bg(theme.accent_soft))
                         .child("取消")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(pending) = this.state.take_question(&sid_cancel) {
-                                this.state.core.answer_question(
-                                    sid_cancel.clone(),
-                                    pending.request_id,
-                                    protocol::UserAnswer::Cancelled,
-                                );
+                        .on_click({
+                            let entity = entity.clone();
+                            move |_, _, outer: &mut gpui::App| {
+                                let Some(app) = entity.upgrade() else { return };
+                                app.update(outer, |this, cx| {
+                                    if let Some(pending) = this.state.take_question(&sid_cancel) {
+                                        this.state.core.answer_question(
+                                            sid_cancel.clone(),
+                                            pending.request_id,
+                                            protocol::UserAnswer::Cancelled,
+                                        );
+                                    }
+                                    this.question_picked.clear();
+                                    cx.notify();
+                        
+                                });
                             }
-                            this.question_picked.clear();
-                            cx.notify();
-                        })),
+                        }),
                 )
                 .child(div().flex_1())
                 .when(multi, |row| {
@@ -1498,22 +1579,29 @@ fn question_card(
                             .text_color(gpui::white())
                             .text_size(px(12.))
                             .cursor_pointer()
-                            .child(format!("提交（已选 {}）", app.question_picked.len()))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if this.question_picked.is_empty() {
-                                    return;
+                            .child(format!("提交（已选 {}）", ctx.question_picked.len()))
+                            .on_click({
+                                let entity = entity.clone();
+                                move |_, _, outer: &mut gpui::App| {
+                                    let Some(app) = entity.upgrade() else { return };
+                                    app.update(outer, |this, cx| {
+                                        if this.question_picked.is_empty() {
+                                            return;
+                                        }
+                                        let labels = this.question_picked.clone();
+                                        if let Some(pending) = this.state.take_question(&sid_submit) {
+                                            this.state.core.answer_question(
+                                                sid_submit.clone(),
+                                                pending.request_id,
+                                                protocol::UserAnswer::SelectedMulti { labels },
+                                            );
+                                        }
+                                        this.question_picked.clear();
+                                        cx.notify();
+                            
+                                    });
                                 }
-                                let labels = this.question_picked.clone();
-                                if let Some(pending) = this.state.take_question(&sid_submit) {
-                                    this.state.core.answer_question(
-                                        sid_submit.clone(),
-                                        pending.request_id,
-                                        protocol::UserAnswer::SelectedMulti { labels },
-                                    );
-                                }
-                                this.question_picked.clear();
-                                cx.notify();
-                            })),
+                            }),
                     )
                 }),
         )
