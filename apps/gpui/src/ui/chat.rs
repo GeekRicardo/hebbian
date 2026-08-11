@@ -412,7 +412,8 @@ fn tool_card(
     let theme = app.theme.clone();
     let expanded = app.state.expanded_parts.contains(key);
     let key_owned = key.to_string();
-    let summary = tool_summary(input);
+    let action = crate::tool_label::action_label(name);
+    let summary = crate::tool_label::call_summary(name, input);
     let duration = match duration_ms {
         Some(ms) if ms >= 1000 => format!("{:.1}s", ms as f64 / 1000.),
         Some(ms) => format!("{ms}ms"),
@@ -446,7 +447,7 @@ fn tool_card(
                     div()
                         .font_weight(gpui::FontWeight(600.))
                         .text_color(theme.text)
-                        .child(name.to_string()),
+                        .child(action),
                 )
                 .child(
                     div()
@@ -487,16 +488,6 @@ fn tool_card(
                     }),
             )
         })
-}
-
-/// 工具卡片收起时那句摘要：优先挑最能说明「这次调用干了什么」的字段。
-fn tool_summary(input: &serde_json::Value) -> String {
-    for key in ["command", "file_path", "path", "pattern", "query", "url", "description"] {
-        if let Some(value) = input.get(key).and_then(|v| v.as_str()) {
-            return value.to_string();
-        }
-    }
-    String::new()
 }
 
 /// 等宽小块：工具入参 / 结果都用它，超长时内部滚动而不是把气泡撑爆。

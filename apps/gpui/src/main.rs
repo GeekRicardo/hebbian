@@ -11,6 +11,7 @@ mod prefs;
 mod state;
 mod terminal;
 mod theme;
+mod tool_label;
 mod ui;
 
 use gpui::{

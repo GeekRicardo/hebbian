@@ -12159,3 +12159,13 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **提问卡片**（对 `UserQuestionPopup`）: 补上多选（勾选态 + 「提交（已选 N）」）、**「其他回答」自由输入**（`UserAnswer::Custom`）、**「取消」**（`UserAnswer::Cancelled`——让模型知道用户主动放弃这轮，而不是干等）。之前只有一排单选按钮。
 - **影响范围**: 仅 `apps/gpui`。26 条单测通过。
 - **留尾巴**: 审批的 pattern 多选 + scope 二级区未做（所以目前只能「此次」，不能记忆）；提问不支持多题（`UserAnswer::Multi`）；ESC 取消未绑。
+
+### 2026-08-11 — 工具卡片文案按源码重做（原来显示的是工具名 + 全路径）
+
+- **Why**: 继续源码比对。原前端的工具卡片读起来是**一句话**——「读取文件 main.rs:120」「运行命令 cargo build」；我之前直接摆的是工具名 + 从几个固定 key 里挑的原值，卡片上是「Read /root/code/chroma/args.gn」这种。差别不只是好看：全路径把卡片挤爆、工具名对不熟悉的人没有意义。
+- **改动**: `apps/gpui/src/tool_label.rs`（新）——逐条对齐原前端的 `defaultActionLabel` / `callSummary`：
+  - **动作名**：运行命令 / 读取文件 / 编辑文件 / 写入文件 / 搜索代码 / 匹配文件 / 读取技能说明 / 网络搜索 / 抓取网页内容 / 生成图片 / 任务列表 / 提交计划 / 记下 / 读取记忆 / 读取后台命令输出 …（Bash / PowerShell / InteractiveBash 共用「运行命令」）
+  - **摘要**：Read 带 offset 时是 `文件名:行号`、Write/Edit 只取文件名、TodoWrite 是统计（`4 项 · 2 完成 · 1 进行中`）而不是原文、其余按各自的关键入参；兜底顺序 prompt → query → file_path 也照抄。
+  - 空串入参当作「没有」——否则卡片上会出现一段空白摘要。
+- **影响范围**: 仅 `apps/gpui`。新增 6 条单测（shell 家族共用标签 / Read 的 basename+offset / Edit·Write 取文件名 / TodoWrite 统计含「无进行中」分支 / 未知工具的兜底顺序 / 空串入参），共 32 条通过。
+- **验证**: 截图确认卡片变成「运行命令 du -sh target/」「读取文件 args.gn」。
