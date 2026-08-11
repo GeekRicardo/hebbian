@@ -94,6 +94,12 @@ pub struct AppState {
     /// 当前正在看的改动：文件相对路径 + 逐行 diff。
     pub diff: Option<(String, Vec<crate::diff::DiffLine>)>,
 
+    /// 设置里几页共用的只读清单。
+    pub extras: crate::core::Extras,
+
+    /// 最近一份调度日志（名字 + 尾部若干行）。
+    pub log_tail: (String, Vec<String>),
+
     /// 全局权限规则（设置里的「权限」页）。
     pub perm_allow: Vec<String>,
     pub perm_deny: Vec<String>,
@@ -152,6 +158,8 @@ impl AppState {
             search_regex: false,
             collapsed: HashSet::new(),
             plans: Vec::new(),
+            extras: crate::core::Extras::default(),
+            log_tail: (String::new(), Vec::new()),
             perm_allow: Vec::new(),
             perm_deny: Vec::new(),
             diff: None,
@@ -211,6 +219,12 @@ impl AppState {
             }
             CoreUpdate::SessionCreated(id) => {
                 self.core.open_session(id);
+            }
+            CoreUpdate::Extras(extras) => {
+                self.extras = *extras;
+            }
+            CoreUpdate::LogTail { name, lines } => {
+                self.log_tail = (name, lines);
             }
             CoreUpdate::Permissions { allow, deny } => {
                 self.perm_allow = allow;

@@ -36,6 +36,10 @@ pub enum CoreUpdate {
     SessionLoaded(Box<Session>),
     /// 新建会话成功，附带要打开的 id。
     SessionCreated(String),
+    /// 角色（prompts）/ 子 agent / 插件 / MCP / Hooks 的清单，供设置页展示。
+    Extras(Box<Extras>),
+    /// 最近一份调度日志的尾部（设置里的「日志」页）。
+    LogTail { name: String, lines: Vec<String> },
     /// 权限规则读完了（全局层的 allow / deny）。
     Permissions { allow: Vec<String>, deny: Vec<String> },
     /// 全局设置读完了。
@@ -65,6 +69,16 @@ pub enum CoreUpdate {
     },
     /// 任何一步失败。文案直接进 toast。
     Failed(String),
+}
+
+/// 设置里几页共用的一坨只读清单。一次性取回，省得每页各发一次。
+#[derive(Debug, Default)]
+pub struct Extras {
+    pub prompts: Vec<agent_core::storage::prompts::Prompt>,
+    pub subagents: Vec<agent_core::storage::subagents::SubagentDefinition>,
+    pub plugins: Vec<agent_core::storage::plugins::PluginListItem>,
+    pub mcp_servers: Vec<String>,
+    pub hooks_raw: String,
 }
 
 /// 文件树的一个条目。
@@ -347,6 +361,70 @@ impl Core {
                 Ok(_) => this.refresh_catalog(),
                 Err(err) => this.emit_err(err),
             }
+        });
+    }
+
+    /// 一次取回设置里几页要的只读清单。
+    pub fn refresh_extras(&self, workdir: Option<PathBuf>) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let client = this.local_client();
+            let mcp = client.get_mcp_config();
+            let extras = Extras {
+                prompts: client.list_prompts().map(|f| f.prompts).unwrap_or_default(),
+                subagents: client.list_subagents(workdir.as_deref()),
+                plugins: client.plugin_list(),
+                mcp_servers: mcp.mcp_servers.keys().cloned().collect(),
+                hooks_raw: client.get_hooks_raw(),
+            };
+            this.emit(CoreUpdate::Extras(Box::new(extras)));
+        });
+    }
+
+    /// 读最近一份调度日志的尾部。
+    ///
+    /// 只取末尾若干行：日志按天 rotate，整份可能很大，设置页要的是「刚发生了什么」。
+    pub fn refresh_log_tail(&self) {
+        const TAIL_LINES: usize = 200;
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let dir = this.inner.data_dir.join("logs");
+            let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_file() {
+                        continue;
+                    }
+                    let modified = entry
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::UNIX_EPOCH);
+                    if newest.as_ref().is_none_or(|(t, _)| modified > *t) {
+                        newest = Some((modified, path));
+                    }
+                }
+            }
+            let Some((_, path)) = newest else {
+                return this.emit(CoreUpdate::LogTail {
+                    name: String::new(),
+                    lines: Vec::new(),
+                });
+            };
+            let name = path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let lines = std::fs::read_to_string(&path)
+                .map(|body| {
+                    let all: Vec<&str> = body.lines().collect();
+                    all[all.len().saturating_sub(TAIL_LINES)..]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            this.emit(CoreUpdate::LogTail { name, lines });
         });
     }
 

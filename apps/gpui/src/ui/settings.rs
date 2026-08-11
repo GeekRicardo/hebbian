@@ -276,6 +276,12 @@ fn body(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
         SettingsTab::Memory => memory_pane(app, cx).into_any_element(),
         SettingsTab::Permissions => permissions_pane(app).into_any_element(),
         SettingsTab::Skills => skills_pane(app).into_any_element(),
+        SettingsTab::Logs => logs_pane(app).into_any_element(),
+        SettingsTab::Roles => roles_pane(app).into_any_element(),
+        SettingsTab::Agents => agents_pane(app).into_any_element(),
+        SettingsTab::Plugins => plugins_pane(app).into_any_element(),
+        SettingsTab::Mcp => mcp_pane(app).into_any_element(),
+        SettingsTab::Hooks => hooks_pane(app).into_any_element(),
         SettingsTab::Appearance => appearance_pane(app, cx).into_any_element(),
         other => not_yet(app, other.label()).into_any_element(),
     };
@@ -481,6 +487,246 @@ fn segmented(
                 .child(label),
         )
         .child(group)
+}
+
+/// 一张「名字 + 一句说明（+ 可选徽章）」的卡片。角色 / 子 agent / 插件 / MCP 共用。
+fn entry_card(
+    theme: &crate::theme::Theme,
+    title: String,
+    subtitle: String,
+    badge: Option<(String, bool)>,
+) -> impl IntoElement {
+    let theme = theme.clone();
+    v_flex()
+        .p(px(12.))
+        .gap(px(4.))
+        .rounded(px(10.))
+        .border_1()
+        .border_color(theme.line)
+        .bg(theme.card)
+        .child(
+            h_flex()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(gpui::FontWeight(600.))
+                        .child(title),
+                )
+                .children(badge.map(|(text, on)| {
+                    div()
+                        .px(px(8.))
+                        .py(px(2.))
+                        .rounded(px(999.))
+                        .text_size(px(11.))
+                        .bg(if on { theme.accent_soft } else { theme.line })
+                        .text_color(if on { theme.accent } else { theme.muted })
+                        .child(text)
+                })),
+        )
+        .when(!subtitle.is_empty(), |this| {
+            this.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(theme.muted)
+                    .child(subtitle),
+            )
+        })
+}
+
+/// 一页「清单 + 说明」的通用外壳。空清单时只给一句说明，不留空白页。
+fn list_pane(
+    theme: &crate::theme::Theme,
+    items: Vec<gpui::AnyElement>,
+    empty: &'static str,
+    note: &'static str,
+) -> gpui::AnyElement {
+    if items.is_empty() {
+        return v_flex().child(hint(theme, empty)).into_any_element();
+    }
+    v_flex()
+        .gap(px(8.))
+        .children(items)
+        .child(hint(theme, note))
+        .into_any_element()
+}
+
+/// 角色页：可切换的 Agent 预设 prompt。
+fn roles_pane(app: &HebbianApp) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let items = app
+        .state
+        .extras
+        .prompts
+        .iter()
+        .map(|p| {
+            // 正文首行当摘要——prompt 往往很长，列表里给一行足够认出是哪个。
+            let first_line = p.content.lines().next().unwrap_or("").to_string();
+            entry_card(&theme, p.name.clone(), first_line, None).into_any_element()
+        })
+        .collect();
+    list_pane(
+        &theme,
+        items,
+        "还没有自定义角色。",
+        "在对话头部可以给当前对话挑一个角色。",
+    )
+}
+
+/// Agents 页：可被 Task 工具调用的子 agent。
+fn agents_pane(app: &HebbianApp) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let items = app
+        .state
+        .extras
+        .subagents
+        .iter()
+        .map(|a| {
+            let tools = match a.tools.as_ref() {
+                Some(list) if list.is_empty() => "不给工具".to_string(),
+                Some(list) => format!("{} 个工具", list.len()),
+                None => "继承全部工具".to_string(),
+            };
+            entry_card(
+                &theme,
+                a.name.clone(),
+                a.description.clone(),
+                Some((tools, true)),
+            )
+            .into_any_element()
+        })
+        .collect();
+    list_pane(
+        &theme,
+        items,
+        "还没有子 agent。",
+        "子 agent 由主对话通过 Task 工具按描述挑选调用。",
+    )
+}
+
+/// 插件页。
+fn plugins_pane(app: &HebbianApp) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let items = app
+        .state
+        .extras
+        .plugins
+        .iter()
+        .map(|p| {
+            entry_card(
+                &theme,
+                p.name.clone(),
+                p.description
+                    .clone()
+                    .or_else(|| p.version.clone().map(|v| format!("v{v}")))
+                    .unwrap_or_default(),
+                // 插件没有启用开关，列出它带了什么更有用。
+                Some((
+                    format!("{} skills · {} agents", p.skills_count, p.agents_count),
+                    true,
+                )),
+            )
+            .into_any_element()
+        })
+        .collect();
+    list_pane(&theme, items, "还没有装插件。", "插件从市场安装后在这里管理。")
+}
+
+/// MCP 页：外部工具服务器。
+fn mcp_pane(app: &HebbianApp) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let items = app
+        .state
+        .extras
+        .mcp_servers
+        .iter()
+        .map(|name| entry_card(&theme, name.clone(), String::new(), None).into_any_element())
+        .collect();
+    list_pane(
+        &theme,
+        items,
+        "还没有接外部工具服务器。",
+        "这些服务器提供的工具会和内置工具一起给到模型。",
+    )
+}
+
+/// Hooks 页：原样展示配置文件内容。
+fn hooks_pane(app: &HebbianApp) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let raw = app.state.extras.hooks_raw.trim();
+    if raw.is_empty() {
+        return v_flex()
+            .child(hint(&theme, "还没有配 Hooks。"))
+            .into_any_element();
+    }
+    let mut body = v_flex()
+        .id("hooks-body")
+        .max_h(px(520.))
+        .overflow_y_scroll()
+        .p(px(10.))
+        .rounded(px(8.))
+        .bg(theme.right_bg_top)
+        .font_family("monospace")
+        .text_size(px(11.))
+        .line_height(px(17.));
+    for line in raw.lines() {
+        body = body.child(div().whitespace_nowrap().child(line.to_string()));
+    }
+    v_flex()
+        .gap(px(8.))
+        .child(body)
+        .child(hint(&theme, "改 Hooks 目前要直接编辑配置文件。"))
+        .into_any_element()
+}
+
+/// 日志页：最近一份调度日志的尾部。
+fn logs_pane(app: &HebbianApp) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let (name, lines) = &app.state.log_tail;
+
+    if lines.is_empty() {
+        return v_flex()
+            .child(hint(
+                &theme,
+                "还没有日志。要记录工具调度过程，去「通用」页把「工具调度日志落盘」打开。",
+            ))
+            .into_any_element();
+    }
+
+    let mut body = v_flex()
+        .id("log-body")
+        .max_h(px(560.))
+        .overflow_y_scroll()
+        .p(px(10.))
+        .rounded(px(8.))
+        .bg(theme.right_bg_top)
+        .font_family("monospace")
+        .text_size(px(11.))
+        .line_height(px(17.));
+    for line in lines {
+        body = body.child(div().whitespace_nowrap().child(line.clone()));
+    }
+
+    v_flex()
+        .gap(px(8.))
+        .child(
+            h_flex()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.muted)
+                        .child(name.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(theme.faint)
+                        .child(format!("末尾 {} 行", lines.len())),
+                ),
+        )
+        .child(body)
+        .into_any_element()
 }
 
 /// 记忆页：长期记忆的总开关与深睡节奏。

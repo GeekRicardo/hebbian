@@ -12036,3 +12036,13 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: 打开设置切到 Skills——两个真实 skill 与其 frontmatter 描述；切到权限——放行 / 拦截两栏与说明（本机没配规则，显示「还没有规则」而不是空白）。
 - **留尾巴**: 权限规则不能在这里增删（`CoreClient` 有 add/remove，只差入口）；Skills 不能在这里启停；角色 / 插件 / Hooks / MCP / 连接器 / 日志六页仍是说明页。
+
+### 2026-08-11 — gpui surface 设置补齐角色 / Agents / 插件 / MCP / Hooks / 日志六页
+
+- **Why**: 把设置里剩下的占位页填完。这几页的数据 core 里都有现成接口，缺的只是渲染。
+- **改动**:
+  - `apps/gpui/src/core.rs`: 加 `refresh_extras`——角色（prompts）、子 agent、插件、MCP 服务器名、Hooks 原文一次性取回，省得每页各发一次请求；加 `refresh_log_tail`（只读最近一份日志的末尾 200 行，日志按天 rotate、整份可能很大，设置页要的是「刚发生了什么」）。
+  - `apps/gpui/src/ui/settings.rs`: 抽出 `entry_card` / `list_pane` 两个小件给这几页共用（名字 + 一句说明 + 可选徽章；空清单只给一句说明，不留空白页）。角色列出预设 prompt 并用正文首行当摘要；Agents 列子 agent 并标「继承全部工具 / N 个工具 / 不给工具」；插件标它带了几个 skills 与 agents（插件没有启用开关，列这个更有用）；MCP 列服务器名；Hooks 与日志原样等宽展示。
+- **影响范围**: 仅 `apps/gpui`。全部只读。
+- **验证**: 造 subagent 与 prompt fixture 后逐页截图——Agents 页正确列出内置 `code-reviewer` 与 fixture `explore` 及其描述；日志页显示文件名与末尾行。
+- **留尾巴**: 这六页全部只读，不能增删改；「连接器」页仍是说明页（渠道配置在 `channel-core`，接它要先想清楚 gpui 侧要不要管渠道生命周期）。
