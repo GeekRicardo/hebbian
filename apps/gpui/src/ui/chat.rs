@@ -525,8 +525,18 @@ pub(crate) fn tool_card(
         Some(ms) => format!("{ms}ms"),
         None => String::new(),
     };
-    let args = serde_json::to_string_pretty(input).unwrap_or_default();
-    let result_text = result.unwrap_or("").to_string();
+    // **只有展开时才去序列化入参 / 拷贝结果**。收起态的卡片只显示一行标题，
+    // 却照样把每次调用的 JSON 全 pretty-print 一遍、把结果全文再拷一份——
+    // 一段几百次工具调用的对话（读文件、跑命令，结果动辄几十 KB）光这一步
+    // 每帧就要搬几百 MB，实测能让预览弹窗几十秒出不来、CPU 一直满着。
+    let (args, result_text) = if expanded {
+        (
+            serde_json::to_string_pretty(input).unwrap_or_default(),
+            result.unwrap_or("").to_string(),
+        )
+    } else {
+        (String::new(), String::new())
+    };
 
     // 从「后台任务」面板跳过来的那张卡片描一圈重色——长对话滚过去之后，
     // 不给个落点用户根本不知道该看哪一行。

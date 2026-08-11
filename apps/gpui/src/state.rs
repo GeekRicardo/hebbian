@@ -113,8 +113,10 @@ pub struct AppState {
     /// 长对话里滚动之后，用户往往不知道该看哪一行。
     pub flash_tool_call: Option<String>,
 
+    /// 预览里被点开看全文的那些消息（按下标记）。
+    pub expanded_preview: HashSet<usize>,
     /// 正在预览的那条 Claude 对话（点列表里某一条后才有）。
-    pub claude_preview: Option<crate::core::ClaudePreview>,
+    pub claude_preview: Option<std::rc::Rc<crate::core::ClaudePreview>>,
 
     /// 用户 Claude 目录下可以导入的对话（导入弹窗打开时才拉）。
     pub claude_importable: Vec<crate::core::ClaudeImportable>,
@@ -221,6 +223,7 @@ impl AppState {
             flash_tool_call: None,
             expanded_calls: HashSet::new(),
             claude_importable: Vec::new(),
+            expanded_preview: HashSet::new(),
             claude_preview: None,
             claude_exported: None,
             confirm: None,
@@ -314,7 +317,10 @@ impl AppState {
                 self.claude_importable = list;
             }
             CoreUpdate::ClaudePreview(preview) => {
-                self.claude_preview = Some(*preview);
+                // 换一条预览就清掉展开态：下标对不上，留着会让新对话里
+                // 莫名其妙有几条是展开的。
+                self.expanded_preview.clear();
+                self.claude_preview = Some(std::rc::Rc::from(preview));
             }
             CoreUpdate::ClaudeExported { resume_command } => {
                 self.claude_exported = Some(resume_command);

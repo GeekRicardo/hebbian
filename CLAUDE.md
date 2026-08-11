@@ -123,11 +123,12 @@
 
 ```bash
 # Rust 编译
+./scripts/check-all.sh           # 两个 workspace 一起过（推荐）
+
+# 或者分开跑：
 cargo check --workspace          # 注意：**不含 apps/gpui**，它自成一个 workspace
 cargo check -p agent-core --tests
 cargo test -p agent-core --lib
-
-# gpui surface 单独跑（在它自己的 workspace 里）
 cd apps/gpui && cargo check && cargo test && cd -
 
 # TS 类型检查

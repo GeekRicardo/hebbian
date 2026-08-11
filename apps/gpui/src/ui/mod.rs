@@ -129,6 +129,9 @@ pub struct HebbianApp {
     /// 所以先存起来，render 时再写进去。
     pub pending_composer_text: Option<String>,
 
+    /// 预览消息列表的虚拟化状态。见 `import_preview_view` 里为什么必须虚拟化。
+    pub preview_list: Option<gpui::ListState>,
+
     /// 聊天区消息列表的滚动句柄。「跳到这次工具调用」要用它把对应消息滚进视野。
     pub messages_scroll: gpui::ScrollHandle,
 
@@ -334,6 +337,7 @@ impl HebbianApp {
             right_width: right_panel::DEFAULT_WIDTH,
             editors: std::collections::HashMap::new(),
             pending_composer_text: None,
+            preview_list: None,
             messages_scroll: gpui::ScrollHandle::new(),
             composer,
             search,
@@ -745,7 +749,7 @@ impl Render for HebbianApp {
             .child(right_panel::render(self, window, cx))
             .children(session_settings::render(self, cx))
             .children(settings::render(self, cx))
-            .children(self.import_claude_open.then(|| import_claude_dialog(self, cx)))
+            .children(if self.import_claude_open { Some(import_claude_dialog(self, cx)) } else { None })
             .children(
                 self.state
                     .claude_exported
@@ -856,9 +860,9 @@ pub fn hover_popup(
 /// 为什么要先预览：Claude 的会话标题是从第一条消息截出来的，光看标题经常分不清
 /// 哪个是想找的那段；而导入是有副作用的（会多出一个会话）。原前端也是
 /// 「点击预览内容，满意了再导入」。
-fn import_claude_dialog(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
+fn import_claude_dialog(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();
-    if let Some(preview) = app.state.claude_preview.as_ref() {
+    if let Some(preview) = app.state.claude_preview.clone() {
         return import_preview_view(app, preview, cx).into_any_element();
     }
 
@@ -1005,106 +1009,59 @@ fn import_claude_dialog(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl 
 
 /// 预览视图：返回列表 + 导入按钮 + 消息正文。
 fn import_preview_view(
-    app: &HebbianApp,
-    preview: &crate::core::ClaudePreview,
+    app: &mut HebbianApp,
+    preview: std::rc::Rc<crate::core::ClaudePreview>,
     cx: &mut Context<HebbianApp>,
 ) -> impl IntoElement {
     let theme = app.theme.clone();
     let path = preview.path.clone();
+    let count = preview.messages.len();
 
-    let mut body = div()
-        .id("claude-preview-body")
-        .flex()
-        .flex_col()
-        .gap(px(10.))
-        .max_h(px(320.))
-        .overflow_y_scroll();
-    if preview.messages.is_empty() {
-        body = body.child(
-            div()
-                .py(px(20.))
-                .text_size(px(12.))
-                .text_color(theme.muted)
-                .child("这段对话是空的"),
-        );
-    }
-    // 预览必须封顶。真实的 Claude 会话动辄上千条消息，全画出来会把 UI 线程占死——
-    // 实测一段 1190 条的对话点开后 CPU 一直吃着、界面几十秒都出不来。
-    // 头尾各留一段：开头决定「这是哪段对话」，结尾决定「进行到哪了」，
-    // 中间那截对「是不是我要找的那段」帮不上忙。
-    const HEAD: usize = 8;
-    const TAIL: usize = 24;
-    let total = preview.messages.len();
-    let omitted = total.saturating_sub(HEAD + TAIL);
+    // **必须虚拟化**。真实对话里一段 33 条消息能带 439 次工具调用，
+    // 一次性把它们全画出来（哪怕每张卡片都是收起的）就够让弹窗几十秒出不来。
+    // `list` 只渲染视口内那几条，多大的对话都是常数开销——这样才用不着
+    // 靠「只显示前 N 条」这种把信息藏起来的办法。
+    let list_state = match app.preview_list.as_ref() {
+        Some(state) if state.item_count() == count => state.clone(),
+        _ => {
+            let state = gpui::ListState::new(count, gpui::ListAlignment::Top, px(600.));
+            app.preview_list = Some(state.clone());
+            state
+        }
+    };
 
-    for (mi, message) in preview.messages.iter().enumerate() {
-        if omitted > 0 && mi == HEAD {
-            body = body.child(
-                div()
-                    .py(px(6.))
-                    .text_size(px(10.))
-                    .text_color(theme.faint)
-                    .child(format!("…… 中间 {omitted} 条略过 ……")),
-            );
-        }
-        if omitted > 0 && mi >= HEAD && mi < HEAD + omitted {
-            continue;
-        }
-        let is_user = matches!(message.role, agent_core::storage::sessions::Role::User);
-        let text = message.content.trim();
-        if text.is_empty() && message.tool_calls.is_empty() {
-            continue;
-        }
-        let mut bubble = div()
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .child(
-                div()
-                    .text_size(px(10.))
-                    .text_color(theme.faint)
-                    .child(if is_user { "我" } else { "助手" }),
-            );
-        if !text.is_empty() {
-            // 单条也要封顶。真实对话里常有一条就几十 KB 的消息（贴日志、贴整份文件），
-            // 光排版这一条就够卡住一帧——限住条数还不够，还得限住每条的长度。
-            const MAX_CHARS: usize = 600;
-            let shown = if text.chars().count() > MAX_CHARS {
-                let head: String = text.chars().take(MAX_CHARS).collect();
-                format!("{head}…（这条还有更多，导入后看全文）")
-            } else {
-                text.to_string()
-            };
-            bubble = bubble.child(
-                div()
-                    .p(px(8.))
-                    .rounded(px(8.))
-                    .bg(if is_user { theme.accent_soft } else { theme.surface_veil })
-                    .text_size(px(11.))
-                    .text_color(theme.text)
-                    .child(shown),
-            );
-        }
-        // 工具调用也要画出来，用的就是聊天区那张卡片。
-        // 只显示正文的话，一段「读了五个文件再改了两处」的对话在预览里会缩成
-        // 一句「我看看」，根本认不出是不是要找的那段。
-        // 工具卡片最多画三张：一条消息里连着二十次工具调用的情况不少见，
-        // 预览没必要把它们全铺开。
-        for (ci, call) in message.tool_calls.iter().take(3).enumerate() {
-            bubble = bubble.child(crate::ui::chat::tool_card(
-                app,
-                cx,
-                &format!("preview-{mi}-{ci}"),
-                None,
-                &call.name,
-                &call.input,
-                call.result.as_deref(),
-                call.duration_ms,
-                call.is_error,
-            ));
-        }
-        body = body.child(bubble);
-    }
+    let entity = cx.entity().downgrade();
+    // 每条「有没有被点开看全文」在**建元素时就算好**，交给闭包按下标取。
+    // 别在闭包里回头读 entity：那份读发生在布局阶段，和这一帧的状态对不对得上
+    // 不好保证（实测点了「展开全文」没反应，就是卡在这儿）。
+    let unfolded: std::rc::Rc<Vec<bool>> = std::rc::Rc::new(
+        (0..count)
+            .map(|ix| app.state.expanded_preview.contains(&ix))
+            .collect(),
+    );
+    let body = if count == 0 {
+        div()
+            .py(px(20.))
+            .text_size(px(12.))
+            .text_color(theme.muted)
+            .child("这段对话是空的")
+            .into_any_element()
+    } else {
+        gpui::list(list_state, {
+            let preview = preview.clone();
+            let theme = theme.clone();
+            let unfolded = unfolded.clone();
+            move |ix, window, cx| {
+                let Some(app) = entity.upgrade() else {
+                    return div().into_any_element();
+                };
+                let is_unfolded = unfolded.get(ix).copied().unwrap_or(false);
+                preview_message(&preview, ix, is_unfolded, &theme, &app, window, cx)
+            }
+        })
+        .flex_1()
+        .into_any_element()
+    };
 
     dialog_frame(
         &theme,
@@ -1114,12 +1071,14 @@ fn import_preview_view(
             .flex()
             .flex_col()
             .gap(px(10.))
+            .h(px(380.))
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap(px(8.))
+                    .flex_none()
                     .child(
                         div()
                             .id("preview-back")
@@ -1133,6 +1092,7 @@ fn import_preview_view(
                             .child("返回列表")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.state.claude_preview = None;
+                                this.preview_list = None;
                                 cx.notify();
                             })),
                     )
@@ -1152,6 +1112,7 @@ fn import_preview_view(
                                 let project = this.import_claude_project.clone();
                                 this.state.core.import_claude_session(path.clone(), project);
                                 this.state.claude_preview = None;
+                                this.preview_list = None;
                                 this.import_claude_open = false;
                                 cx.notify();
                             })),
@@ -1162,6 +1123,7 @@ fn import_preview_view(
                     .flex()
                     .flex_row()
                     .gap(px(10.))
+                    .flex_none()
                     .text_size(px(10.))
                     .text_color(theme.faint)
                     .child(preview.model.clone())
@@ -1173,10 +1135,127 @@ fn import_preview_view(
                             .whitespace_nowrap()
                             .child(preview.cwd.clone()),
                     )
-                    .child(format!("{} 条消息", preview.messages.len())),
+                    .child(format!("{count} 条消息")),
             )
             .child(body),
     )
+}
+
+/// 预览里的一条消息。虚拟化列表按需调它，所以这里只画一条，不碰别的。
+#[allow(clippy::too_many_arguments)]
+fn preview_message(
+    preview: &crate::core::ClaudePreview,
+    ix: usize,
+    unfolded: bool,
+    theme: &Theme,
+    app: &Entity<HebbianApp>,
+    _window: &mut Window,
+    _cx: &mut App,
+) -> gpui::AnyElement {
+    let Some(message) = preview.messages.get(ix) else {
+        return div().into_any_element();
+    };
+    let is_user = matches!(message.role, agent_core::storage::sessions::Role::User);
+    let text = message.content.trim();
+
+    let mut bubble = div()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .pb(px(10.))
+        .child(
+            div()
+                .text_size(px(10.))
+                .text_color(theme.faint)
+                .child(if is_user { "我" } else { "助手" }),
+        );
+
+    if !text.is_empty() {
+        // 长消息默认只铺一段，点一下看全文。折叠是渲染时机的问题，不是信息取舍。
+        const FOLD_CHARS: usize = 600;
+        let char_count = text.chars().count();
+        let shown = if char_count > FOLD_CHARS && !unfolded {
+            text.chars().take(FOLD_CHARS).collect::<String>()
+        } else {
+            text.to_string()
+        };
+        bubble = bubble.child(
+            div()
+                .p(px(8.))
+                .rounded(px(8.))
+                .bg(if is_user { theme.accent_soft } else { theme.surface_veil })
+                .text_size(px(11.))
+                .text_color(theme.text)
+                .child(shown),
+        );
+        if char_count > FOLD_CHARS {
+            let app = app.downgrade();
+            bubble = bubble.child(
+                div()
+                    .id(gpui::SharedString::from(format!("unfold-{ix}")))
+                    .text_size(px(10.))
+                    .text_color(theme.accent)
+                    .cursor_pointer()
+                    .child(if unfolded {
+                        "收起".to_string()
+                    } else {
+                        format!("展开全文（还有 {} 字）", char_count - FOLD_CHARS)
+                    })
+                    .on_click(move |_, _, cx| {
+                        if let Some(app) = app.upgrade() {
+                            app.update(cx, |this, cx| {
+                                if !this.state.expanded_preview.remove(&ix) {
+                                    this.state.expanded_preview.insert(ix);
+                                }
+                                // 展开后这一条的高度变了，得让虚拟化列表重新量。
+                                // `splice(ix..ix+1, 1)` 不行——实测点了没反应，
+                                // 列表还是拿缓存的那份画。`reset` 才会真的重量一遍。
+                                if let Some(list) = this.preview_list.as_ref() {
+                                    let count = list.item_count();
+                                    list.reset(count);
+                                }
+                                cx.notify();
+                            });
+                        }
+                    }),
+            );
+        }
+    }
+
+    // 工具调用画成一行摘要。预览要回答的是「是不是我要找的那段对话」，
+    // 一句「读取文件 main.rs」就够了；真要看入参出参，导入后在对话里展开。
+    for call in &message.tool_calls {
+        bubble = bubble.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(6.))
+                .px(px(8.))
+                .py(px(3.))
+                .rounded(px(5.))
+                .border_1()
+                .border_color(theme.line)
+                .text_size(px(10.))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(if call.is_error { theme.danger } else { theme.muted })
+                        .child(call.name.clone()),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .font_family("monospace")
+                        .text_color(theme.faint)
+                        .child(crate::tool_label::call_summary(&call.name, &call.input)),
+                ),
+        );
+    }
+    bubble.into_any_element()
 }
 
 /// 导出成功后把 resume 命令摆出来给用户复制。
@@ -1192,47 +1271,46 @@ fn exported_dialog(
         "已导出到 Claude",
         cx,
         div()
-        .flex()
-        .flex_col()
-        .gap(px(10.))
-        .child(
-            div()
-                .text_size(px(11.))
-                .text_color(theme.muted)
-                .child("在终端里执行这条命令就能接着聊："),
-        )
-        .child(
-            div()
-                .p(px(10.))
-                .rounded(px(8.))
-                .bg(theme.surface_veil)
-                .font_family("monospace")
-                .text_size(px(11.))
-                .child(resume_command),
-        )
-        .child(
-            div().flex().flex_row().justify_end().child(
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
                 div()
-                    .id("copy-resume")
-                    .px(px(12.))
-                    .py(px(6.))
+                    .text_size(px(11.))
+                    .text_color(theme.muted)
+                    .child("在终端里执行这条命令就能接着聊："),
+            )
+            .child(
+                div()
+                    .p(px(10.))
                     .rounded(px(8.))
-                    .text_size(px(12.))
-                    .text_color(theme.accent)
-                    .cursor_pointer()
-                    .hover(|this| this.bg(theme.accent_soft))
-                    .child("复制命令")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(to_copy.clone()));
-                        this.state.claude_exported = None;
-                        cx.notify();
-                    })),
+                    .bg(theme.surface_veil)
+                    .font_family("monospace")
+                    .text_size(px(11.))
+                    .child(resume_command),
+            )
+            .child(
+                div().flex().flex_row().justify_end().child(
+                    div()
+                        .id("copy-resume")
+                        .px(px(12.))
+                        .py(px(6.))
+                        .rounded(px(8.))
+                        .text_size(px(12.))
+                        .text_color(theme.accent)
+                        .cursor_pointer()
+                        .hover(|this| this.bg(theme.accent_soft))
+                        .child("复制命令")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(to_copy.clone()));
+                            this.state.claude_exported = None;
+                            cx.notify();
+                        })),
+                ),
             ),
-        ),
     )
 }
 
-/// 居中弹窗的外壳：遮罩 + 卡片 + 标题 + 右上角关闭。返回的卡片可以继续 `.child()`。
 fn dialog_frame(
     theme: &Theme,
     title: &'static str,
