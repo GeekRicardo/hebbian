@@ -93,6 +93,9 @@ pub struct AppState {
     pub search_regex: bool,
     pub collapsed: HashSet<String>,
 
+    /// 展开着的那个后台任务的输出（任务编号 + 正文）。一次只展开一个。
+    pub task_output: Option<(String, String)>,
+
     /// 用户 Claude 目录下可以导入的对话（导入弹窗打开时才拉）。
     pub claude_importable: Vec<crate::core::ClaudeImportable>,
     /// 刚导出成功的那条 `claude --resume` 命令，等用户复制走。
@@ -191,6 +194,7 @@ impl AppState {
             search_case: false,
             search_regex: false,
             collapsed: HashSet::new(),
+            task_output: None,
             claude_importable: Vec::new(),
             claude_exported: None,
             confirm: None,
@@ -271,6 +275,9 @@ impl AppState {
             }
             CoreUpdate::SessionCreated(id) => {
                 self.core.open_session(id);
+            }
+            CoreUpdate::TaskOutput { task_id, text } => {
+                self.task_output = Some((task_id, text));
             }
             CoreUpdate::ClaudeImportable(list) => {
                 self.claude_importable = list;
@@ -501,6 +508,9 @@ impl AppState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackgroundTask {
     pub kind: BackgroundKind,
+    /// 后台 Bash 的任务编号，从工具结果里解析（形如 `[bash_001] 已在后台启动`）。
+    /// 用来和注册表里那份活的记录对上号，只有一个的时候不至于显示两遍。
+    pub task_id: Option<String>,
     /// 命令原文 / 唤醒原因 / 子 agent 描述，取决于 kind。
     pub label: String,
     /// 有 result 就算跑完了；没有就是还在跑（或这轮没跑完就结束了）。
@@ -524,6 +534,14 @@ pub struct LiveTask {
     pub command: String,
     pub running: bool,
     pub exit_code: Option<i32>,
+}
+
+/// 从 `[bash_001] 已在后台启动` 这样的结果里抠出任务编号。
+fn parse_task_id(result: &str) -> Option<String> {
+    let rest = result.trim_start().strip_prefix('[')?;
+    let (id, _) = rest.split_once(']')?;
+    let id = id.trim();
+    (!id.is_empty()).then(|| id.to_string())
 }
 
 /// 从消息里挑出后台任务。
@@ -570,7 +588,11 @@ pub fn derive_background_tasks(messages: &[Message]) -> Vec<BackgroundTask> {
             };
             out.push(BackgroundTask {
                 kind,
+                task_id: call.result.as_deref().and_then(parse_task_id),
                 label: label.to_string(),
+                // 后台任务的「有 result」只代表**启动成功**（结果就是一句
+                // 「已在后台启动」），不代表命令跑完了。真实状态得看注册表，
+                // 所以这里同 id 的会被注册表那条顶掉（见 tasks_panel）。
                 finished: call.result.is_some(),
                 is_error: call.is_error,
                 duration_ms: call.duration_ms,
@@ -830,6 +852,42 @@ mod tests {
             Some("ok"),
         )];
         assert!(derive_background_tasks(&msgs).is_empty());
+    }
+
+    /// 后台 Bash 的工具结果是 `[bash_001] 已在后台启动`——只说明**启动**成功。
+    /// 必须把编号解析出来，否则面板没法和注册表里那份活记录对上号，
+    /// 同一个任务会并排显示成一条「运行中」加一条「已完成」，自相矛盾。
+    #[test]
+    fn background_bash_task_id_is_parsed_for_dedupe() {
+        let msgs = vec![tool_call(
+            "Bash",
+            serde_json::json!({"command": "sleep 300", "run_in_background": true}),
+            Some("[bash_001] 已在后台启动"),
+        )];
+        let tasks = derive_background_tasks(&msgs);
+        assert_eq!(tasks[0].task_id.as_deref(), Some("bash_001"));
+
+        // 还没返回结果时自然没有编号，这条会照常列出来。
+        let msgs = vec![tool_call(
+            "Bash",
+            serde_json::json!({"command": "sleep 300", "run_in_background": true}),
+            None,
+        )];
+        assert_eq!(derive_background_tasks(&msgs)[0].task_id, None);
+    }
+
+    /// 结果文本不是那个格式时不要瞎解析出一个假编号——
+    /// 假编号会把一条无关的活任务错误地顶掉。
+    #[test]
+    fn malformed_result_yields_no_task_id() {
+        for bad in ["已在后台启动", "[] 空的", "no brackets here"] {
+            let msgs = vec![tool_call(
+                "Bash",
+                serde_json::json!({"command": "x", "run_in_background": true}),
+                Some(bad),
+            )];
+            assert_eq!(derive_background_tasks(&msgs)[0].task_id, None, "{bad}");
+        }
     }
 
     #[test]

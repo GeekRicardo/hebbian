@@ -12302,3 +12302,34 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 **影响范围**：只动 `apps/gpui`。
 
 **留尾巴**：导入前预览仍未做（原前端有 `read_claude_session_preview`）；后台任务面板「展开看实时输出」仍未做。
+
+---
+
+## 2026-08-11 — gpui surface：后台任务面板补「展开看输出」，并修同一个任务显示成两条自相矛盾的记录
+
+**Why**：上一轮给后台任务面板补了任务编号和「停止」，真跑起来才发现两件事：
+
+1. **看不到输出**。原 `BackgroundTaskPanel.tsx` 展开卡片会 polling `read_background_task_output`。后台任务最常被问的就是「它现在跑到哪了」，只显示一行命令回答不了这个问题
+2. **同一个任务显示成两条，状态还互相打架**。面板把两个来源直接拼在一起：注册表里那份活的（`bash_001 运行中`）和从 transcript 派生的那份（`命令 已完成 1.5s`）。根因是**后台 Bash 的工具结果只代表「启动成功」**——结果原文就是一句 `[bash_001] 已在后台启动`，而派生逻辑按「有 result 就算跑完」判定，于是一个还在跑的任务被写成「已完成」。原前端是按 `task_id` join 两个来源的，不是拼接
+
+**改动**：
+- `apps/gpui/src/core.rs`：新增 `read_task_output`（每次从 cursor=0 全量读，不在 UI 侧维护游标——面板一次只展开一个任务，输出本来就有环形缓冲上限，全量读更简单也不会因为漏掉一次刷新就永远缺一段）与 `CoreUpdate::TaskOutput`
+- `apps/gpui/src/state.rs`：`BackgroundTask` 加 `task_id`，从结果文本 `[bash_001] …` 里解析；`AppState` 加 `task_output`
+- `apps/gpui/src/ui/right_panel.rs`：活任务行加「查看输出 / 收起输出」与输出区；派生列表里凡是注册表已有同 id 的一律跳过（活的那份严格更有信息量：真实状态 + 能停 + 能看输出）
+- `apps/gpui/dev/mock-provider.py`：加 `MOCK_TOOL=bg`，发一个 `run_in_background: true` 的长跑命令——这三样（编号 / 停止 / 看输出）没有真任务根本试不出来
+
+**回归测试**（`cargo test -p hebbian-gpui`，35 passed）：
+- `background_bash_task_id_is_parsed_for_dedupe`：`[bash_001] 已在后台启动` → `Some("bash_001")`；还没返回结果时是 `None`
+- `malformed_result_yields_no_task_id`：结果文本不是那个格式时不许瞎解析出假编号——假编号会把一条无关的活任务错误地顶掉
+
+**怎么验的**：
+- 修前（bg1.png）：面板上并排两条，一条 `bash_001 运行中`、一条「命令 已完成 1.5s」，指的是同一个任务
+- 修后（bg4.png）：同样的操作只剩一条 `bash_001 运行中`
+- 看输出：点「查看输出」实时列出 tick 1…12
+- 停止：点「停止」后徽章变「已结束」、按钮消失，`ps` 确认进程真的没了（第一次用 `pgrep -f` 判断得到了相反结论，那是 pgrep 匹配到了我自己那条命令行，不是没停掉）
+
+**影响范围**：只动 `apps/gpui`。
+
+**留尾巴**：
+- 输出不自动刷新，要手动收起再展开。原前端展开时是持续 polling 的
+- 导入 Claude 对话前的预览仍未做

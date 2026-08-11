@@ -6,8 +6,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TARGET = os.environ.get("MOCK_EDIT_FILE", "/root/code/chroma/revert-target.txt")
 EDIT_MODE = os.environ.get("MOCK_TOOL") == "edit"
-FIRST_TEXT = "我来改一行。" if EDIT_MODE else "我来清理一下。"
-DONE_TEXT = "改好了。" if EDIT_MODE else "清理完成了。"
+BG_MODE = os.environ.get("MOCK_TOOL") == "bg"
+FIRST_TEXT = "我来改一行。" if EDIT_MODE else ("我起个后台任务。" if BG_MODE else "我来清理一下。")
+DONE_TEXT = "改好了。" if EDIT_MODE else ("已经在后台跑了。" if BG_MODE else "清理完成了。")
 
 state = {"turn": 0}
 lock = threading.Lock()
@@ -60,6 +61,14 @@ class H(BaseHTTPRequestHandler):
                            "old_string":"原始内容",
                            "new_string":"被 agent 改过的内容",
                            "description":"改一行做回退测试"})}}
+            elif BG_MODE:
+                # 起一个会持续吐东西的后台命令，用来验「后台任务」面板：
+                # 任务编号 / 停止 / 展开看输出这三样都得有真任务才试得出来。
+                tc = {"index":0,"id":"call_mock_1","type":"function",
+                      "function":{"name":"Bash","arguments":json.dumps(
+                          {"command":"for i in $(seq 1 300); do echo \"tick $i\"; sleep 1; done",
+                           "description":"数数用的后台任务",
+                           "run_in_background": True})}}
             else:
                 tc = {"index":0,"id":"call_mock_1","type":"function",
                       "function":{"name":"Bash","arguments":json.dumps(

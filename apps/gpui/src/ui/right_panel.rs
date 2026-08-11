@@ -499,6 +499,14 @@ fn tasks_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEleme
     let theme = app.theme.clone();
     let tasks = crate::state::derive_background_tasks(&app.state.messages);
     let live = &app.state.live_tasks;
+    let expanded_task = app.state.task_output.as_ref().map(|(id, _)| id.clone());
+    let output_text = app
+        .state
+        .task_output
+        .as_ref()
+        .map(|(_, text)| text.clone())
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_else(|| "还没有输出".to_string());
     if tasks.is_empty() && live.is_empty() {
         return div()
             .p(px(14.))
@@ -587,12 +595,70 @@ fn tasks_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEleme
                         .text_ellipsis()
                         .whitespace_nowrap()
                         .child(t.command.clone()),
+                )
+                // 点一下展开这个任务到目前为止的输出。后台任务最常问的问题
+                // 就是「它现在跑到哪了」，只显示一行命令回答不了。
+                .child({
+                    let expand_id = t.task_id.clone();
+                    div()
+                        .id(gpui::SharedString::from(format!("open-{}", t.task_id)))
+                        .text_size(px(11.))
+                        .text_color(theme.accent)
+                        .cursor_pointer()
+                        .child(if expanded_task.as_deref() == Some(t.task_id.as_str()) {
+                            "收起输出"
+                        } else {
+                            "查看输出"
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let already = this
+                                .state
+                                .task_output
+                                .as_ref()
+                                .is_some_and(|(id, _)| id == &expand_id);
+                            if already {
+                                this.state.task_output = None;
+                            } else if let Some(sid) =
+                                this.state.current_id().map(str::to_string)
+                            {
+                                this.state.core.read_task_output(sid, expand_id.clone());
+                            }
+                            cx.notify();
+                        }))
+                })
+                .when(
+                    expanded_task.as_deref() == Some(t.task_id.as_str()),
+                    |this| {
+                        this.child(
+                            div()
+                                .id(gpui::SharedString::from(format!("out-{}", t.task_id)))
+                                .max_h(px(220.))
+                                .overflow_y_scroll()
+                                .p(px(8.))
+                                .rounded(px(6.))
+                                .bg(theme.surface_veil)
+                                .font_family("monospace")
+                                .text_size(px(11.))
+                                .text_color(theme.text)
+                                .child(output_text.clone()),
+                        )
+                    },
                 ),
         );
     }
 
     for task in &tasks {
         use crate::state::BackgroundKind;
+        // 注册表里已经有这个任务了就别再列一遍：那份是活的（真实状态 + 能停 +
+        // 能看输出），这份只知道「启动成功」，两条并排会一个写「运行中」
+        // 一个写「已完成」，自相矛盾。
+        if task
+            .task_id
+            .as_ref()
+            .is_some_and(|id| live.iter().any(|t| &t.task_id == id))
+        {
+            continue;
+        }
         let (icon, tag) = match task.kind {
             BackgroundKind::Bash => (Icon::Terminal, "命令"),
             BackgroundKind::Cron => (Icon::Clock, "定时"),

@@ -58,6 +58,8 @@ pub enum CoreUpdate {
     },
     /// 注册表里还活着的后台任务。
     LiveTasks(Vec<crate::state::LiveTask>),
+    /// 某个后台任务到目前为止的输出。
+    TaskOutput { task_id: String, text: String },
     /// 运行模式改好了。
     RunModeChanged(agent_core::run_mode::RunMode),
     /// 全局设置读完了。
@@ -787,6 +789,29 @@ impl Core {
                     shell_quote(&export.cwd),
                     export.session_uuid
                 ),
+            });
+        });
+    }
+
+    /// 读一个后台任务到目前为止的输出。
+    ///
+    /// 每次从头读（cursor = 0）而不是增量拼：面板一次只展开一个任务，
+    /// 输出本来就有环形缓冲上限，全量读一次比在 UI 侧维护游标简单得多，
+    /// 也不会因为漏掉一次刷新就永远缺一段。
+    pub fn read_task_output(&self, session_id: String, task_id: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let registry = agent_core::tools::background::registry_for_session(&session_id);
+            let Some(shell) = registry.get(&task_id) else {
+                return this.emit(CoreUpdate::TaskOutput {
+                    task_id,
+                    text: "这个任务已经不在了，输出也一并清掉了".to_string(),
+                });
+            };
+            let snap = shell.read_at(0);
+            this.emit(CoreUpdate::TaskOutput {
+                task_id,
+                text: snap.content,
             });
         });
     }
