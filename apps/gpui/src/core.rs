@@ -40,6 +40,8 @@ pub enum CoreUpdate {
     Settings(Box<agent_core::storage::settings::Settings>),
     /// 供应商列表刷新完成（模型选择器用）。
     Providers(Vec<model_gateway::config::Provider>),
+    /// 某个文件读完了（编辑区打开）。
+    FileLoaded { path: PathBuf, text: String },
     /// 某个目录读完了（文件树按需展开）。
     DirListed {
         path: PathBuf,
@@ -151,6 +153,31 @@ impl Core {
             match this.local_client().list_providers() {
                 Ok(file) => this.emit(CoreUpdate::Providers(file.providers)),
                 Err(err) => this.emit_err(err),
+            }
+        });
+    }
+
+    /// 读一个文件的文本内容，给编辑区用。
+    ///
+    /// 二进制文件不往编辑区塞——UTF-8 解不出来就直接报错，比塞一堆乱码好。
+    /// 同样拒绝超大文件：编辑区一次性载入，几十 MB 会把界面卡住。
+    pub fn read_file(&self, path: PathBuf) {
+        const MAX_BYTES: u64 = 2 * 1024 * 1024;
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            match std::fs::metadata(&path) {
+                Ok(meta) if meta.len() > MAX_BYTES => {
+                    return this.emit_err("这个文件太大了，编辑区暂时打不开");
+                }
+                Err(err) => return this.emit_err(format!("打不开这个文件：{err}")),
+                _ => {}
+            }
+            match std::fs::read(&path) {
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(text) => this.emit(CoreUpdate::FileLoaded { path, text }),
+                    Err(_) => this.emit_err("这是个二进制文件，编辑区显示不了"),
+                },
+                Err(err) => this.emit_err(format!("读不了这个文件：{err}")),
             }
         });
     }

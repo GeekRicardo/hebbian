@@ -373,6 +373,8 @@ fn node_row(app: &HebbianApp, cx: &mut Context<HebbianApp>, row: TreeRow) -> imp
         )
         .on_click(cx.listener(move |this, _, _, cx| {
             if !is_dir {
+                this.state.core.read_file(path.clone());
+                cx.notify();
                 return;
             }
             if this.state.expanded_dirs.remove(&path) {

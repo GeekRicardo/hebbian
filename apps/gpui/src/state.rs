@@ -88,6 +88,9 @@ pub struct AppState {
     pub search_regex: bool,
     pub collapsed: HashSet<String>,
 
+    /// 编辑区当前打开的文件（路径 + 正文）。
+    pub open_file: Option<(PathBuf, String)>,
+
     /// 当前会话的 todo 列表。由 `TodoListUpdated` 事件驱动，不落单独的盘。
     pub todos: Vec<protocol::WireTodoItem>,
 
@@ -125,6 +128,7 @@ impl AppState {
             search_case: false,
             search_regex: false,
             collapsed: HashSet::new(),
+            open_file: None,
             todos: Vec::new(),
             expanded_parts: HashSet::new(),
             dirs: HashMap::new(),
@@ -175,6 +179,9 @@ impl AppState {
             }
             CoreUpdate::Providers(providers) => {
                 self.providers = providers;
+            }
+            CoreUpdate::FileLoaded { path, text } => {
+                self.open_file = Some((path, text));
             }
             CoreUpdate::DirListed { path, entries } => {
                 self.dirs.insert(path, entries);

@@ -174,7 +174,7 @@ fn toolbar(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEleme
                     )),
             )
         })
-        .child(search_box(app))
+        .child(search_box(app, cx))
 }
 
 /// `.dsp-project-actions button`：h 26 / 圆角 8 / 图标 13。
@@ -220,7 +220,7 @@ fn toolbar_action(
 }
 
 /// `.dsp-project-search`：一个 28px 高的搜索输入。
-fn search_box(app: &HebbianApp) -> impl IntoElement {
+fn search_box(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();
     h_flex()
         .w_full()
@@ -241,6 +241,41 @@ fn search_box(app: &HebbianApp) -> impl IntoElement {
                 .text_color(theme.input_text)
                 .child(gpui_component::input::Input::new(&app.search).appearance(false)),
         )
+        .child(search_toggle(app, cx, "Aa", app.state.search_case, true))
+        .child(search_toggle(app, cx, ".*", app.state.search_regex, false))
+}
+
+/// 搜索框右侧的两个小开关：区分大小写 / 正则。与原前端 `.dsp-search-options` 一致。
+fn search_toggle(
+    app: &HebbianApp,
+    cx: &mut Context<HebbianApp>,
+    label: &'static str,
+    active: bool,
+    is_case: bool,
+) -> impl IntoElement {
+    let theme = app.theme.clone();
+    div()
+        .id(label)
+        .h(px(22.))
+        .min_w(px(22.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.))
+        .text_size(px(10.))
+        .cursor_pointer()
+        .when(active, |this| this.bg(theme.accent_soft).text_color(theme.accent))
+        .when(!active, |this| this.text_color(theme.faint))
+        .hover(|this| this.bg(theme.accent_soft).text_color(theme.accent))
+        .child(label)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if is_case {
+                this.state.search_case = !this.state.search_case;
+            } else {
+                this.state.search_regex = !this.state.search_regex;
+            }
+            cx.notify();
+        }))
 }
 
 /// `.dsp-project-groups`：可滚动的项目 / 会话列表。

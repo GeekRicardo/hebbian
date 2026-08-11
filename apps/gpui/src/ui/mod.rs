@@ -2,6 +2,7 @@
 //! `DesktopShell` = 左侧栏 + 聊天列 + 右侧工作台，弹层挂在最外层。
 
 mod chat;
+mod editor;
 mod hue;
 mod right_panel;
 mod settings;
@@ -41,6 +42,9 @@ pub struct HebbianApp {
     pub settings_tab: settings::SettingsTab,
     /// 右侧工作台当前显示哪个面板。
     pub workbench: right_panel::Workbench,
+
+    /// 编辑区的代码编辑器实体。语言在建实例时定死，所以换文件要换实例。
+    pub editor: Option<Entity<InputState>>,
 
     pub composer: Entity<InputState>,
     pub search: Entity<InputState>,
@@ -89,10 +93,16 @@ impl HebbianApp {
 
         // core → UI 的唯一事件泵。mpsc 的 recv 不需要 tokio 运行时上下文，
         // 可以直接在 gpui 执行器上 await。
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             while let Some(update) = updates.recv().await {
                 let alive = this
-                    .update(cx, |this, cx| {
+                    .update_in(cx, |this, window, cx| {
+                        // 打开文件要建带语法高亮的编辑器实体，那需要 window，
+                        // 所以这条更新在进 state 之前先截下来处理。
+                        if let CoreUpdate::FileLoaded { path, text } = &update {
+                            let (path, text) = (path.clone(), text.clone());
+                            editor::open(this, &path, &text, window, cx);
+                        }
                         if this.state.apply(update) {
                             cx.notify();
                         }
@@ -129,6 +139,7 @@ impl HebbianApp {
             settings_open: false,
             settings_tab: settings::SettingsTab::General,
             workbench: right_panel::Workbench::Files,
+            editor: None,
             composer,
             search,
             focus: cx.focus_handle(),
@@ -206,6 +217,7 @@ impl Render for HebbianApp {
             .text_size(px(13.))
             .child(sidebar::render(self, window, cx))
             .child(chat::render(self, window, cx))
+            .children(editor::render(self, window, cx))
             .child(right_panel::render(self, window, cx))
             .children(settings::render(self, cx))
             .children(self.state.error.clone().map(|message| toast(&theme, message, cx)))
