@@ -56,14 +56,13 @@ pub fn render(
     _window: &mut Window,
     cx: &mut Context<HebbianApp>,
 ) -> Option<impl IntoElement> {
-    let (path, _) = app.state.open_file.as_ref()?;
-    let editor = app.editor.as_ref()?;
+    if app.state.open_files.is_empty() {
+        return None;
+    }
+    let active = app.state.active_file.as_ref()?;
+    let editor = app.editors.get(active)?;
     let theme = app.theme.clone();
-    let name = path
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let dir = path
+    let dir = active
         .parent()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
@@ -101,7 +100,7 @@ pub fn render(
                         },
                     )),
             )
-            .child(tab_bar(&theme, name, dir, cx))
+            .child(tab_bar(app, &theme, dir, cx))
             .child(
                 div()
                     .flex_1()
@@ -115,11 +114,67 @@ pub fn render(
 
 /// 顶部标签条：文件名 + 所在目录 + 关闭。
 fn tab_bar(
+    app: &HebbianApp,
     theme: &crate::theme::Theme,
-    name: String,
     dir: String,
     cx: &mut Context<HebbianApp>,
 ) -> impl IntoElement {
+    let mut tabs = h_flex()
+        .id("editor-tabs")
+        .flex_1()
+        .min_w_0()
+        .overflow_x_scroll()
+        .gap(px(2.));
+
+    for path in &app.state.open_files {
+        let active = app.state.active_file.as_ref() == Some(path);
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let switch_to = path.clone();
+        let close = path.clone();
+        tabs = tabs.child(
+            h_flex()
+                .id(gpui::SharedString::from(format!("tab-{}", path.display())))
+                .h(px(28.))
+                .px(px(8.))
+                .gap(px(6.))
+                .rounded(px(6.))
+                .text_size(px(12.))
+                .cursor_pointer()
+                .when(active, |this| {
+                    this.bg(theme.card_strong).text_color(theme.text)
+                })
+                .when(!active, |this| {
+                    this.text_color(theme.muted)
+                        .hover(|this| this.bg(theme.accent_soft))
+                })
+                .child(Icon::FileText.el(px(12.), theme.faint))
+                .child(name)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.state.active_file = Some(switch_to.clone());
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .id("x")
+                        .size(px(16.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .hover(|this| this.bg(theme.line))
+                        .child(Icon::X.el(px(10.), theme.faint))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.close_file(&close);
+                            cx.notify();
+                        })),
+                ),
+        );
+    }
+
     h_flex()
         .h(px(36.))
         .flex_none()
@@ -128,44 +183,17 @@ fn tab_bar(
         .justify_between()
         .border_b_1()
         .border_color(theme.line)
-        .child(
-            h_flex()
-                .gap(px(6.))
-                .min_w_0()
-                .child(Icon::FileText.el(px(13.), theme.muted))
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme.text)
-                        .child(name),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .text_size(px(11.))
-                        .text_color(theme.faint)
-                        .child(dir),
-                ),
-        )
+        .child(tabs)
         .child(
             div()
-                .id("close-editor")
-                .size(px(22.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.))
-                .cursor_pointer()
-                .hover(|this| this.bg(theme.accent_soft))
-                .child(Icon::X.el(px(12.), theme.faint))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.state.open_file = None;
-                    this.editor = None;
-                    cx.notify();
-                })),
+                .flex_none()
+                .max_w(px(220.))
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .text_size(px(11.))
+                .text_color(theme.faint)
+                .child(dir),
         )
 }
 
@@ -178,6 +206,10 @@ pub fn open(
     window: &mut Window,
     cx: &mut Context<HebbianApp>,
 ) {
+    // 重复打开同一个文件直接复用已有实例。
+    if app.editors.contains_key(path) {
+        return;
+    }
     let language = language_for(path);
     let text = text.to_string();
     let editor = cx.new(|cx| {
@@ -185,7 +217,7 @@ pub fn open(
         state.set_value(text, window, cx);
         state
     });
-    app.editor = Some(editor);
+    app.editors.insert(path.to_path_buf(), editor);
 }
 
 #[cfg(test)]

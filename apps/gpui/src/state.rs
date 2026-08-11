@@ -94,8 +94,9 @@ pub struct AppState {
     /// 工作目录的 git 状态。`None` = 还没读或不是仓库。
     pub git: Option<agent_core::git_scm::GitProjectStatus>,
 
-    /// 编辑区当前打开的文件（路径 + 正文）。
-    pub open_file: Option<(PathBuf, String)>,
+    /// 编辑区打开的文件列表（多标签），以及当前活动的那个。
+    pub open_files: Vec<PathBuf>,
+    pub active_file: Option<PathBuf>,
 
     /// 当前会话的 todo 列表。由 `TodoListUpdated` 事件驱动，不落单独的盘。
     pub todos: Vec<protocol::WireTodoItem>,
@@ -136,7 +137,8 @@ impl AppState {
             collapsed: HashSet::new(),
             skills: Vec::new(),
             git: None,
-            open_file: None,
+            open_files: Vec::new(),
+            active_file: None,
             todos: Vec::new(),
             expanded_parts: HashSet::new(),
             dirs: HashMap::new(),
@@ -196,8 +198,12 @@ impl AppState {
             CoreUpdate::GitStatus(status) => {
                 self.git = status.map(|s| *s);
             }
-            CoreUpdate::FileLoaded { path, text } => {
-                self.open_file = Some((path, text));
+            CoreUpdate::FileLoaded { path, .. } => {
+                // 已经开过就只切过去，不重复加标签。
+                if !self.open_files.contains(&path) {
+                    self.open_files.push(path.clone());
+                }
+                self.active_file = Some(path);
             }
             CoreUpdate::DirListed { path, entries } => {
                 self.dirs.insert(path, entries);

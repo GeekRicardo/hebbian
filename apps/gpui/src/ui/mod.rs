@@ -38,6 +38,10 @@ pub struct HebbianApp {
     /// 模型选择器是否展开，以及展开着哪个供应商。
     pub model_picker_open: bool,
     pub model_picker_provider: Option<String>,
+    /// 正在改标题（点头部标题进入）。
+    pub title_editing: bool,
+    /// 标题输入框。
+    pub title_input: Entity<InputState>,
     /// `//` 命令面板是否展开。
     pub slash_open: bool,
     /// 对话设置弹窗是否打开。
@@ -57,8 +61,8 @@ pub struct HebbianApp {
     pub editor_width: f32,
     pub right_width: f32,
 
-    /// 编辑区的代码编辑器实体。语言在建实例时定死，所以换文件要换实例。
-    pub editor: Option<Entity<InputState>>,
+    /// 编辑区的代码编辑器实体表：一个文件一个（语言在建实例时定死）。
+    pub editors: std::collections::HashMap<std::path::PathBuf, Entity<InputState>>,
 
     /// 下一帧要写进输入框的文本。异步回调里拿不到 `Window`，
     /// 所以先存起来，render 时再写进去。
@@ -85,6 +89,7 @@ impl HebbianApp {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索"));
         let shell_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("留空 = 用系统默认 shell"));
+        let title_input = cx.new(|cx| InputState::new(window, cx).placeholder("对话标题"));
 
         // 输入框回车即发送。Shift+Enter 由 InputState 自己插换行，不会走到这里。
         cx.subscribe_in(
@@ -123,6 +128,25 @@ impl HebbianApp {
                             if value.trim().is_empty() { None } else { Some(value) };
                         cx.notify();
                     }
+                }
+            },
+        )
+        .detach();
+
+        // 标题输入框回车 = 提交改名。
+        cx.subscribe_in(
+            &title_input,
+            window,
+            |this, state, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    let title = state.read(cx).value().trim().to_string();
+                    if let Some(id) = this.state.current_id().map(str::to_string) {
+                        if !title.is_empty() {
+                            this.state.core.rename_session(id, title);
+                        }
+                    }
+                    this.title_editing = false;
+                    cx.notify();
                 }
             },
         )
@@ -173,6 +197,8 @@ impl HebbianApp {
             right_collapsed: false,
             model_picker_open: false,
             model_picker_provider: None,
+            title_editing: false,
+            title_input,
             slash_open: false,
             session_settings_open: false,
             settings_open: false,
@@ -182,7 +208,7 @@ impl HebbianApp {
             workbench: right_panel::Workbench::Files,
             editor_width: editor::DEFAULT_WIDTH,
             right_width: right_panel::DEFAULT_WIDTH,
-            editor: None,
+            editors: std::collections::HashMap::new(),
             pending_composer_text: None,
             composer,
             search,
@@ -221,6 +247,35 @@ impl HebbianApp {
             });
         })
         .detach();
+    }
+
+    /// 关掉一个编辑器标签。关的是当前活动标签时，焦点顺延到相邻的那个。
+    pub fn close_file(&mut self, path: &std::path::Path) {
+        self.editors.remove(path);
+        if let Some(index) = self.state.open_files.iter().position(|p| p == path) {
+            self.state.open_files.remove(index);
+            if self.state.active_file.as_deref() == Some(path) {
+                self.state.active_file = self
+                    .state
+                    .open_files
+                    .get(index.saturating_sub(1))
+                    .or_else(|| self.state.open_files.last())
+                    .cloned();
+            }
+        }
+    }
+
+    /// 进入标题编辑：把当前标题填进输入框。
+    pub fn start_title_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(title) = self.state.current.as_ref().map(|s| s.title.clone()) else {
+            return;
+        };
+        self.title_editing = true;
+        self.title_input
+            .update(cx, |state, cx| state.set_value(title, window, cx));
+        self.title_input
+            .update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
     }
 
     /// 打开设置面板：拷一份草稿，并把 shell 输入框填上当前值。

@@ -51,16 +51,39 @@ fn header(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
             h_flex()
                 .gap(px(8.))
                 .min_w_0()
-                .child(
+                .child(if app.title_editing {
                     div()
+                        .w(px(260.))
+                        .px(px(8.))
+                        .py(px(3.))
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(theme.accent)
+                        .text_size(px(14.))
+                        .child(
+                            gpui_component::input::Input::new(&app.title_input)
+                                .appearance(false),
+                        )
+                        .into_any_element()
+                } else {
+                    div()
+                        .id("session-title")
                         .max_w(px(260.))
+                        .px(px(4.))
+                        .rounded(px(4.))
                         .overflow_hidden()
                         .text_ellipsis()
                         .whitespace_nowrap()
                         .text_size(px(14.))
                         .font_weight(gpui::FontWeight(500.))
-                        .child(title),
-                )
+                        .cursor_text()
+                        .hover(|this| this.bg(theme.accent_soft))
+                        .child(title)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.start_title_edit(window, cx);
+                        }))
+                        .into_any_element()
+                })
                 .child(
                     div()
                         .id("regen-title")

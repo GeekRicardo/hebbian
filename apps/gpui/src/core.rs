@@ -161,6 +161,20 @@ impl Core {
         });
     }
 
+    /// 改对话标题。改完刷新列表，让侧栏与头部同步。
+    pub fn rename_session(&self, session_id: String, title: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            match this.local_client().rename_session(&session_id, title) {
+                Ok(session) => {
+                    this.emit(CoreUpdate::SessionLoaded(Box::new(session)));
+                    this.refresh_catalog();
+                }
+                Err(err) => this.emit_err(err),
+            }
+        });
+    }
+
     /// 保存全局设置，写完再回读一次让 UI 与磁盘对齐。
     pub fn save_settings(&self, settings: agent_core::storage::settings::Settings) {
         let this = self.clone();

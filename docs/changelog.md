@@ -11929,3 +11929,13 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。写的是 `~/.hebbian/settings.json`，与 Desktop / hebweb 同一份文件、同一个 `CoreClient::save_settings` 实现。
 - **验证**: xdotool 在界面上把语言切成 English、打开「开机启动」，点保存后直接读磁盘——`settings.json` 里 `language: en` / `launch_at_login: true` / `shell: /usr/bin/zsh`，UI→草稿→core→磁盘整条链打通。
 - **留尾巴**: 只有「通用」页可写，对话 / 角色 / 记忆 / 权限等页仍是只读或占位；没有「改动未保存」的离开提醒。
+
+### 2026-08-11 — gpui surface：对话标题可改 + 编辑区多标签
+
+- **Why**: 标题只能看不能改（原前端点标题就地编辑）；编辑区一次只能开一个文件，点第二个直接顶掉第一个，与原前端的多 tab 差距明显。
+- **改动**:
+  - `apps/gpui/src/ui/chat.rs` / `mod.rs` / `core.rs`: 点头部标题就地变输入框，回车提交走 `CoreClient::rename_session`，改完刷新列表让侧栏同步。
+  - `apps/gpui/src/ui/editor.rs` / `state.rs` / `mod.rs`: 编辑器实体从「一个」改成「一个文件一个」的表（语言在建 `InputState` 时定死，所以不能复用同一个实例换内容）。标签条可横向滚动，活动标签白底，每个标签带关闭；关掉当前标签时焦点顺延到相邻的那个。重复打开同一个文件只切过去、不重复加标签。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: xdotool 点标题改名并回车——头部与侧栏同步、`session.jsonl` 追加了新标题行（jsonl 是追加式的，最新一行才是当前值，第一次我读了第 0 行误判成没保存）。依次点开三个文件——三个标签并列、活动标签高亮、关闭按钮就位。
+- **留尾巴**: 编辑区仍只读、没有保存；标签不能拖动排序；改标题没有 Esc 取消。
