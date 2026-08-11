@@ -52,6 +52,8 @@ pub enum CoreUpdate {
     Skills(Vec<agent_core::tools::skill::Skill>),
     /// git 状态读完了。`None` 表示这个目录不是 git 仓库。
     GitStatus(Option<Box<agent_core::git_scm::GitProjectStatus>>),
+    /// 某个文件存好了。
+    FileSaved(PathBuf),
     /// 某个文件读完了（编辑区打开）。
     FileLoaded { path: PathBuf, text: String },
     /// 某个目录读完了（文件树按需展开）。
@@ -259,6 +261,23 @@ impl Core {
             match agent_core::git_scm::status(&workdir) {
                 Ok(status) => this.emit(CoreUpdate::GitStatus(Some(Box::new(status)))),
                 Err(_) => this.emit(CoreUpdate::GitStatus(None)),
+            }
+        });
+    }
+
+    /// 把编辑区的内容写回磁盘。
+    ///
+    /// 只写已经存在的文件——编辑区是从文件树打开的，路径必然存在；
+    /// 拒绝创建新文件是为了避免手滑把内容写到某个拼错的路径上。
+    pub fn write_file(&self, path: PathBuf, text: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            if !path.is_file() {
+                return this.emit_err("这个文件不在了，没法保存");
+            }
+            match std::fs::write(&path, text) {
+                Ok(()) => this.emit(CoreUpdate::FileSaved(path)),
+                Err(err) => this.emit_err(format!("保存失败：{err}")),
             }
         });
     }

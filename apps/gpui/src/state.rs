@@ -116,6 +116,9 @@ pub struct AppState {
     /// 展开着的目录。
     pub expanded_dirs: HashSet<PathBuf>,
 
+    /// 刚保存了哪个文件（编辑区状态条上一闪而过的提示）。
+    pub saved_notice: Option<String>,
+
     /// 最近一次失败信息，渲染成顶部 toast。
     pub error: Option<String>,
 }
@@ -151,6 +154,7 @@ impl AppState {
             expanded_parts: HashSet::new(),
             dirs: HashMap::new(),
             expanded_dirs: HashSet::new(),
+            saved_notice: None,
             error: None,
         }
     }
@@ -219,6 +223,11 @@ impl AppState {
             }
             CoreUpdate::GitStatus(status) => {
                 self.git = status.map(|s| *s);
+            }
+            CoreUpdate::FileSaved(path) => {
+                self.saved_notice = path
+                    .file_name()
+                    .map(|n| format!("{} 已保存", n.to_string_lossy()));
             }
             CoreUpdate::FileLoaded { path, .. } => {
                 // 已经开过就只切过去，不重复加标签。

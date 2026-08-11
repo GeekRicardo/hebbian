@@ -101,6 +101,14 @@ pub fn render(
                     )),
             )
             .child(tab_bar(app, &theme, dir, cx))
+            // Cmd/Ctrl+S 保存当前标签。
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                let k = &event.keystroke;
+                let save = k.key == "s" && (k.modifiers.platform || k.modifiers.control);
+                if save {
+                    this.save_active_file(cx);
+                }
+            }))
             .child(
                 div()
                     .flex_1()
@@ -184,6 +192,13 @@ fn tab_bar(
         .border_b_1()
         .border_color(theme.line)
         .child(tabs)
+        .children(app.state.saved_notice.clone().map(|notice| {
+            div()
+                .flex_none()
+                .text_size(px(11.))
+                .text_color(theme.green)
+                .child(notice)
+        }))
         .child(
             div()
                 .flex_none()

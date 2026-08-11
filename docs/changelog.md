@@ -11981,3 +11981,11 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。新增两个依赖 `alacritty_terminal` / `portable-pty`（后者本就是 desktop 的依赖）。
 - **验证**: 打开终端面板 → 点一下 → 敲 `echo hello-from-gpui` 回车。截图显示真实 zsh 会话：带色的 `→ chroma git:(master) ✗` 提示符、命令回显、输出、新提示符，颜色与命令行里一致。**顺带修掉一个自己的布局错**：状态行没写 `flex_none`，被 `flex_1` 的屏幕区挤成 0 高，导致第一次截图整个面板看着是空的。
 - **留尾巴**: 尺寸写死 100×30，不跟面板宽度联动（需要按字符宽度算列数再 `resize`）；没有选中 / 复制 / 粘贴；没有多标签；关闭面板不会杀 shell（进程留到退出应用）。
+
+### 2026-08-11 — gpui surface 编辑区可保存（Cmd/Ctrl+S）
+
+- **Why**: 编辑区只读，看得到改不了——上一条自己列的留尾巴。
+- **改动**: `apps/gpui/src/core.rs` 加 `write_file`，`ui/editor.rs` 接 Cmd/Ctrl+S，标签条上给一条绿色「xxx 已保存」。**只写已存在的文件**：编辑区是从文件树打开的，路径必然存在；拒绝创建新文件是为了避免手滑把内容写到某个拼错的路径上。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: 打开 `tools/probe.txt`、在编辑区敲入内容、按 Ctrl+S——磁盘内容确实变了，标签条显示「probe.txt 已保存」。
+- **留尾巴**: 没有「有未保存改动」的标记与关闭时确认；没有外部改动检测（别处改了同一个文件不会提示冲突）。

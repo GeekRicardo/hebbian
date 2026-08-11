@@ -331,6 +331,19 @@ impl HebbianApp {
         self.save_prefs();
     }
 
+    /// 保存当前标签的内容。编辑器里的文本才是准的——用户可能改过。
+    pub fn save_active_file(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.state.active_file.clone() else {
+            return;
+        };
+        let Some(editor) = self.editors.get(&path) else {
+            return;
+        };
+        let text = editor.read(cx).value().to_string();
+        self.state.core.write_file(path, text);
+        cx.notify();
+    }
+
     /// 关掉一个编辑器标签。关的是当前活动标签时，焦点顺延到相邻的那个。
     pub fn close_file(&mut self, path: &std::path::Path) {
         self.editors.remove(path);
