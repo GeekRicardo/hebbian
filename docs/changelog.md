@@ -11910,3 +11910,11 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: 造两个 skill 后 xdotool 点 `/` → 面板列出 3 条内置命令 + 2 个 skill（带描述）；点 `//goal` → 输入框变成 `//goal `、面板关闭。
 - **留尾巴**: 命令只是填进输入框，本地派发（`//hands-off` 真正切 force_automode 等）还没接；`@路径` 只是文本，没有附件 chip 的可视化与删除。
+
+### 2026-08-11 — 修 gpui surface 色系弹窗被侧栏卡片裁掉
+
+- **Why**: 弹窗原本挂在 30px 的调色盘按钮上、宽 232px 向左展开，但侧栏卡片是 `overflow: hidden`，左半边被整块裁掉，预设名只剩一半。
+- **改动**: `apps/gpui/src/ui/hue.rs` / `sidebar.rs`——弹窗改为挂在 footer 上横跨整个 footer 宽度（`left: 0; right: 0; bottom: 56px`），与原 CSS `.dsp-sidebar-footer .dsp-hue-popover` 的做法一致，这样它始终在卡片内、不触发裁剪。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: xdotool 点调色盘后截图——五个预设、色相条、当前色值都完整可见。
+- **留尾巴**: 弹窗底色 96% 不透明（与原 CSS 同值），原 Web 版另有 `backdrop-filter: blur(18px)` 把透出的内容糊掉，gpui 没有背景模糊，透出的项目名比原版明显一点。

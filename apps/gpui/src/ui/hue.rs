@@ -34,7 +34,19 @@ pub fn control(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoE
                     cx.notify();
                 })),
         )
-        .when(open, |this| this.child(popover(app, cx)))
+        .when(open, |_| div())
+}
+
+/// 弹窗单独挂在 footer 上：侧栏卡片是 `overflow: hidden`，
+/// 挂在 30px 的按钮上会被裁掉左半边，所以按原 CSS 的做法让它横跨整个 footer。
+pub fn popover_for_footer(
+    app: &HebbianApp,
+    cx: &mut Context<HebbianApp>,
+) -> Option<impl IntoElement> {
+    if !app.hue_popover_open {
+        return None;
+    }
+    Some(popover(app, cx))
 }
 
 fn popover(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
@@ -53,9 +65,9 @@ fn popover(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
 
     v_flex()
         .absolute()
-        .bottom(px(38.))
+        .bottom(px(56.))
+        .left(px(0.))
         .right(px(0.))
-        .w(px(232.))
         .p(px(12.))
         .rounded(px(22.))
         .border_1()

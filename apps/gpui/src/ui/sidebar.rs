@@ -533,4 +533,5 @@ fn footer(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElemen
                 })),
         )
         .child(hue::control(app, cx))
+        .children(hue::popover_for_footer(app, cx))
 }
