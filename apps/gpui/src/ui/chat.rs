@@ -1078,30 +1078,165 @@ fn approval_card(
             })
     };
 
+    // 段级状态：badge + 指纹逐段列出。四种状态的配色与措辞照原版
+    // （只读 / ✓ 已允许 / 危险·不可记 / 待批），让用户一眼看清「为什么这条还要批」。
+    let mut segment_rows = v_flex().gap(px(3.));
+    for seg in &pending.segments {
+        use protocol::ApprovalSegmentStatus as St;
+        let (label, badge_bg, badge_fg, text_color, strike) = match seg.status {
+            St::Readonly => ("只读", theme.line, theme.muted, theme.faint, false),
+            St::Whitelisted => (
+                "✓ 已允许",
+                crate::theme::with_alpha(theme.green, 0.15),
+                theme.green,
+                theme.muted,
+                true,
+            ),
+            St::Unmemorable => (
+                "危险·不可记",
+                crate::theme::with_alpha(theme.danger, 0.15),
+                theme.danger,
+                theme.danger,
+                false,
+            ),
+            St::NeedsApproval => (
+                "待批",
+                crate::theme::with_alpha(theme.amber, 0.15),
+                theme.amber,
+                theme.text,
+                false,
+            ),
+        };
+        segment_rows = segment_rows.child(
+            h_flex()
+                .gap(px(8.))
+                .text_size(px(12.))
+                .child(
+                    div()
+                        .flex_none()
+                        .px(px(6.))
+                        .py(px(1.))
+                        .rounded(px(4.))
+                        .bg(badge_bg)
+                        .text_size(px(10.))
+                        .font_weight(gpui::FontWeight(500.))
+                        .text_color(badge_fg)
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .font_family("monospace")
+                        .text_color(text_color)
+                        .when(strike, |this| this.line_through())
+                        .child(seg.fingerprint.clone()),
+                ),
+        );
+    }
+
+    let (risk_label, risk_color) = risk_badge(&pending.risk, &theme);
+
     v_flex()
         .mx_auto()
         .mb(px(20.))
         .w_full()
         .max_w(px(720.))
-        .p(px(14.))
-        .gap(px(10.))
-        .rounded(px(16.))
+        .rounded(px(12.))
         .border_1()
-        .border_color(theme.amber)
+        .border_color(theme.line)
         .bg(theme.card_strong)
+        .overflow_hidden()
+        // 头部：盾牌 + 「AI 请求执行 <工具>」 + 右侧风险徽章。整条有底色和下边线。
         .child(
-            div()
-                .text_size(px(13.))
-                .font_weight(gpui::FontWeight(650.))
-                .child(format!("需要确认：{}", pending.tool_name)),
+            h_flex()
+                .gap(px(8.))
+                .px(px(12.))
+                .py(px(8.))
+                .items_center()
+                .border_b_1()
+                .border_color(theme.line)
+                .bg(theme.right_bg_top)
+                .child(Icon::Shield.el(px(15.), theme.accent))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(13.))
+                        .font_weight(gpui::FontWeight(500.))
+                        .child(format!("AI 请求执行 {}", pending.tool_name)),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .px(px(6.))
+                        .py(px(2.))
+                        .rounded(px(4.))
+                        .bg(crate::theme::with_alpha(risk_color, 0.12))
+                        .text_size(px(11.))
+                        .font_weight(gpui::FontWeight(500.))
+                        .text_color(risk_color)
+                        .child(risk_label),
+                ),
         )
+        // 正文：模型写的意图 + 命令原文。
+        .child(
+            v_flex()
+                .px(px(12.))
+                .py(px(8.))
+                .gap(px(4.))
+                .children(pending.description.clone().map(|d| {
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.muted)
+                        .child(d)
+                }))
+                .children(pending.command.clone().map(|c| {
+                    div()
+                        .font_family("monospace")
+                        .text_size(px(12.))
+                        .text_color(theme.text)
+                        .child(format!("$ {c}"))
+                }))
+                .when(pending.command.is_none(), |this| {
+                    this.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.muted)
+                            .child(pending.summary.clone()),
+                    )
+                }),
+        )
+        // 段级状态。
+        .when(!pending.segments.is_empty() && !ctx.deny_feedback_open, |this| {
+            this.child(
+                div()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .border_t_1()
+                    .border_color(theme.line)
+                    .child(segment_rows),
+            )
+        })
+        // 危险复合模式：任何作用域都记不住，明说别白点。
+        .when(pending.refuse_remember && !ctx.deny_feedback_open, |this| {
+            this.child(
+                h_flex()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .gap(px(6.))
+                    .items_start()
+                    .border_t_1()
+                    .border_color(theme.line)
+                    .text_size(px(12.))
+                    .text_color(theme.amber)
+                    .child(Icon::MessageSquare.el(px(13.), theme.amber))
+                    .child("此命令含危险复合模式，出于安全每次都需确认，无法加入白名单。"),
+            )
+        })
         .children(remember)
-        .child(
-            div()
-                .text_size(px(12.))
-                .text_color(theme.muted)
-                .child(pending.summary.clone()),
-        )
         // 「拒绝并说明」展开后先填理由再提交——这段话会回灌给模型。
         .when(ctx.deny_feedback_open, |this| {
             this.child(
@@ -1222,6 +1357,17 @@ fn approval_card(
         )
 }
 
+/// 风险档徽章的文字与配色。四档与 core 的 `RiskLevel` 一一对应。
+fn risk_badge(risk: &str, theme: &crate::theme::Theme) -> (&'static str, gpui::Hsla) {
+    match risk {
+        "low" => ("低风险", theme.green),
+        "high" => ("高风险", theme.amber),
+        "critical" => ("高危", theme.danger),
+        // 缺省当中风险：core 没给档位时不该显得比实际更安全。
+        _ => ("中风险", theme.amber),
+    }
+}
+
 /// 审批卡片的「记住」二级区：勾选要记的 pattern，再选生效范围写规则。
 ///
 /// **候选 pattern 与它们的状态全部由 core 随事件发来**（`segments`），UI 不自己解析
@@ -1233,7 +1379,16 @@ fn remember_section(
     pending: &crate::state::PendingApproval,
 ) -> Option<impl IntoElement> {
     use protocol::ApprovalSegmentStatus as St;
-    if pending.refuse_remember || pending.segments.is_empty() {
+    // **只列真正记得住的那些段**。只读段和 rm 这类不可记段，上面的段级状态区
+    // 已经标过一遍了；再在「以后不用再问我」里灰着列一遍是重复信息，
+    // 原版这里根本不出现（后端给的 command_segments 本来就已经滤过）。
+    // 一条都记不住时整个区不出现——不是灰掉，是根本不给。
+    let memorable: Vec<&protocol::ApprovalSegment> = pending
+        .segments
+        .iter()
+        .filter(|seg| matches!(seg.status, St::NeedsApproval))
+        .collect();
+    if pending.refuse_remember || memorable.is_empty() {
         return None;
     }
     let theme = ctx.theme.clone();
@@ -1241,16 +1396,11 @@ fn remember_section(
     let entity = ctx.entity.clone();
 
     let mut list = v_flex().gap(px(4.));
-    for seg in &pending.segments {
+    for seg in memorable {
         let fp = seg.fingerprint.clone();
         let picked = ctx.approval_picked.contains(&fp);
-        let selectable = matches!(seg.status, St::NeedsApproval);
-        let (color, note) = match seg.status {
-            St::Readonly => (theme.faint, "只读，免审"),
-            St::Whitelisted => (theme.green, "已允许"),
-            St::Unmemorable => (theme.danger, "每次都要确认，不能记住"),
-            St::NeedsApproval => (theme.text, ""),
-        };
+        let selectable = true;
+        let (color, note) = (theme.text, "");
         let fp_click = fp.clone();
         list = list.child(
             h_flex()

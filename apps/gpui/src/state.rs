@@ -21,6 +21,11 @@ pub struct PendingApproval {
     pub request_id: String,
     pub tool_name: String,
     pub summary: String,
+    /// core 判的风险档（low / medium / high / critical）。卡片右上角那个徽章。
+    pub risk: String,
+    /// 模型给这次调用写的一句意图，以及命令原文。卡片正文显示它们。
+    pub description: Option<String>,
+    pub command: Option<String>,
     /// 可记忆的候选 pattern 及其状态。**由 core 算好随事件发来**，
     /// UI 不自己解析命令——段级判定的规则在 core，前端再推一遍必然走样。
     pub segments: Vec<protocol::ApprovalSegment>,
@@ -453,6 +458,8 @@ impl AppState {
                 request_id,
                 tool_name,
                 summary,
+                risk,
+                input,
                 segments,
                 command_segments,
                 refuse_remember,
@@ -484,6 +491,16 @@ impl AppState {
                         request_id,
                         tool_name,
                         summary,
+                        risk,
+                        // 模型写的意图与命令原文都在工具入参里，卡片正文要显示它们。
+                        description: input
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        command: input
+                            .get("command")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
                         segments,
                         refuse_remember,
                     },
