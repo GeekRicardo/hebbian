@@ -172,7 +172,7 @@ fn panel(
             Workbench::Files => file_panel(app, cx, workdir).into_any_element(),
             Workbench::Todos => todo_panel(app).into_any_element(),
             Workbench::Git => git_panel(app, cx).into_any_element(),
-            Workbench::Edits => edits_panel(app).into_any_element(),
+            Workbench::Edits => edits_panel(app, cx).into_any_element(),
             Workbench::Tasks => tasks_panel(app).into_any_element(),
             Workbench::Branches => branches_panel(app, cx).into_any_element(),
             Workbench::Plans => plan_panel(app, window, cx).into_any_element(),
@@ -589,7 +589,7 @@ fn tasks_panel(app: &HebbianApp) -> impl IntoElement {
 }
 
 /// 修改文件面板：这个会话每个 run 改了哪些文件（edits-worktree 的记录）。
-fn edits_panel(app: &HebbianApp) -> impl IntoElement {
+fn edits_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();
     if app.state.edits.is_empty() {
         return div()
@@ -629,6 +629,33 @@ fn edits_panel(app: &HebbianApp) -> impl IntoElement {
                             .bg(theme.line)
                             .text_color(theme.muted)
                             .child("已回退"),
+                    )
+                })
+                // 没回退过的才给回退入口——回退会真的改工作区里的文件。
+                .when(!run.reverted, |this| {
+                    let run_id = run.run_id.clone();
+                    this.child(
+                        div()
+                            .id(gpui::SharedString::from(format!("revert-{}", run.run_id)))
+                            .px(px(6.))
+                            .rounded(px(999.))
+                            .border_1()
+                            .border_color(theme.line)
+                            .text_color(theme.muted)
+                            .cursor_pointer()
+                            .hover(|this| {
+                                this.bg(gpui::rgba(0xd35b5b1a)).text_color(theme.danger)
+                            })
+                            .child("回退这轮")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let Some(session) = this.state.current.as_ref() else {
+                                    return;
+                                };
+                                let (sid, workdir) =
+                                    (session.id.clone(), session.workdir.clone());
+                                this.state.core.revert_run(sid, workdir, run_id.clone());
+                                cx.notify();
+                            })),
                     )
                 }),
         );

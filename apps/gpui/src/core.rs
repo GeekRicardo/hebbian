@@ -421,6 +421,49 @@ impl Core {
         });
     }
 
+    /// 回退一整个 run 的改动。
+    ///
+    /// 这是**破坏性操作**：它会把工作区里的真实文件改回去。所以只回退在清单里
+    /// 明确存在、且还没回退过的那一条；成功后立刻重读清单，让「已回退」徽章即时出现。
+    pub fn revert_run(&self, session_id: String, workdir: Option<PathBuf>, run_id: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let Some(workdir) = workdir else {
+                return this.emit_err("这个对话没有工作目录，没法回退");
+            };
+            let workspace = agent_core::Workspace::new(workdir.clone(), Vec::new());
+            let tree = agent_core::edits::EditsWorktree::new(
+                &this.inner.data_dir,
+                &session_id,
+                &workspace,
+            );
+            let runs = match tree.list_runs() {
+                Ok(runs) => runs,
+                Err(err) => return this.emit_err(err),
+            };
+            let Some(entry) = runs.iter().find(|r| r.run_id == run_id) else {
+                return this.emit_err("找不到这次改动，可能已经被清理了");
+            };
+            if entry.reverted {
+                return this.emit_err("这次改动已经回退过了");
+            }
+            if let Err(err) = tree.revert_run(entry).await {
+                // git 的原始报错对用户没意义（里面全是内部镜像路径），
+                // 但完全吞掉又让人不知道为什么失败——给一句人话，细节留日志。
+                // 用 error 而不是 warn：默认日志级别看得到。回退是用户主动发起的
+                // 破坏性操作，失败了却查不到原因，比多打一行日志糟糕得多。
+                tracing::error!(error = %err, run_id = %run_id, "回退失败");
+                return this.emit_err(
+                    "这轮改动回退不了：改动快照不完整或已被清理，只能手动改回去",
+                );
+            }
+            if let Err(err) = tree.mark_run_reverted(&run_id) {
+                return this.emit_err(err);
+            }
+            this.refresh_edits(session_id, Some(workdir));
+        });
+    }
+
     /// 找从这个会话分叉出去的旁支。
     ///
     /// `forked_from` 只写在每个 session.jsonl 的第一行（meta），`SessionMeta` 不带它，

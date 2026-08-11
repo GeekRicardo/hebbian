@@ -12080,3 +12080,15 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: 点开下拉 → 四个模式与说明齐全、当前项高亮；点「全速模式」→ `session.jsonl` 的 `run_mode` 变成 `Yolo`，chip 同步变成「全速模式」+ 闪电图标。
 - **留尾巴**: AutoMode 的「全自动 / hands-off」子开关还没做；`//run-mode` 命令仍只是填进输入框，没有本地派发。
+
+### 2026-08-11 — gpui surface 的「修改文件」面板可整轮回退
+
+- **Why**: 面板能看不能动。整轮回退是 edits-worktree 存在的意义（架构 §4.13），core 里 `revert_run` 早就有了，缺的只是入口。
+- **改动**: `apps/gpui/src/core.rs` 加 `revert_run`，`ui/right_panel.rs` 给**未回退过的**那些 run 加「回退这轮」按钮（已回退的只显示徽章、不给按钮）。
+- **对破坏性操作的几条约束**（它会真的改工作区里的文件）:
+  - 只回退清单里确实存在、且 `reverted == false` 的那一条；找不到或已回退都直接拒绝并说明。
+  - `mark_run_reverted` 只在 `revert_run` 成功后才写——失败时状态不翻转，不会出现「标着已回退但文件没变」。
+  - 失败给人话（「这轮改动回退不了：改动快照不完整或已被清理，只能手动改回去」），git 的原始报错（里面全是内部镜像路径）**不进 UI**。
+  - 原始报错用 `tracing::error!` 而非 `warn!` 落日志——**默认日志级别就看得到**。用户主动发起的破坏性操作失败了却查不到原因，比多打一行日志糟糕得多（实测 warn 在默认 filter 下不输出）。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: 用一份没有真 git worktree 的 fixture 点「回退这轮」——UI 弹人话提示、应用存活、`reverted` 保持 false、真实文件未被改动，同时默认日志里能看到 git 的具体报错。**成功回退这条路径没验**：需要一个真实跑过 run、有完整改动快照的会话。
