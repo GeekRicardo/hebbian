@@ -14,7 +14,7 @@ mod widgets;
 use gpui::{
     div, prelude::*, px, App, Context, Entity, FocusHandle, Focusable, Window,
 };
-use gpui_component::input::{InputEvent, InputState};
+use gpui_component::input::{Input, InputEvent, InputState};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::core::{Core, CoreUpdate};
@@ -67,9 +67,13 @@ pub struct HebbianApp {
     /// 悬停浮窗当前挂在哪个锚点上。与原前端一样是「悬停浮出」而不是「点开菜单」：
     /// 它只有一个按钮，为一个按钮多要一次点击不值当。
     pub hover_popup: Option<HoverPopup>,
+
     /// 「从 Claude 导入」弹窗是否打开，以及限定导进哪个项目。
     pub import_claude_open: bool,
     pub import_claude_project: Option<String>,
+    /// 导入弹窗里的搜索框与它当前的关键词。
+    pub claude_search: Entity<InputState>,
+    pub claude_query: String,
 
     /// 正在改标题（点头部标题进入）。
     pub title_editing: bool,
@@ -131,6 +135,8 @@ impl HebbianApp {
                 .placeholder("输入消息，Enter 发送，Shift+Enter 换行…")
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索"));
+        let claude_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("搜标题…"));
         let shell_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("留空 = 用系统默认 shell"));
         let title_input = cx.new(|cx| InputState::new(window, cx).placeholder("对话标题"));
@@ -165,6 +171,19 @@ impl HebbianApp {
             |this, state, event: &InputEvent, _window, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.state.query = state.read(cx).value().to_string();
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+
+        // 导入弹窗的搜索框：改一个字就重新过滤列表。
+        cx.subscribe_in(
+            &claude_search,
+            window,
+            |this, state, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.claude_query = state.read(cx).value().to_string();
                     cx.notify();
                 }
             },
@@ -276,6 +295,8 @@ impl HebbianApp {
             hover_popup: None,
             import_claude_open: false,
             import_claude_project: None,
+            claude_search,
+            claude_query: String::new(),
             title_editing: false,
             title_input,
             question_picked: Vec::new(),
@@ -386,6 +407,16 @@ impl HebbianApp {
     pub fn save_prefs(&mut self) {
         self.prefs.collapsed = self.state.collapsed.clone();
         crate::prefs::save(self.state.core.data_dir(), &self.prefs);
+    }
+
+    /// 悬停到锚点就显示浮窗；换一个锚点就换一个浮窗。
+    ///
+    /// **离开锚点时不收**，收的时机交给浮窗自己的 `on_mouse_down_out`（点别处才收）。
+    /// 试过「离开锚点后延时 220ms 再收」：不行——浮窗是 `deferred` 画的，
+    /// 挂在它上面的 `on_hover` 根本不触发，没法在鼠标挪进来时续命，
+    /// 于是浮窗总在半路消失，那个按钮肉眼看着在、就是点不到。
+    pub fn open_hover_popup(&mut self, popup: HoverPopup) {
+        self.hover_popup = Some(popup);
     }
 
     /// 发起一次需要确认的破坏性操作。
@@ -687,6 +718,12 @@ pub fn hover_popup(
                     .whitespace_nowrap()
                     .cursor_pointer()
                     .hover(|this| this.text_color(theme.accent).bg(theme.accent_soft))
+                    // 点到浮窗以外的任何地方就收起来。这是它唯一的关闭路径——
+                    // 见上面 `open_hover_popup` 里为什么不能靠「离开锚点」来收。
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        this.hover_popup = None;
+                        cx.notify();
+                    }))
                     .child(icon.el(px(11.), theme.muted))
                     .child(label)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -717,75 +754,117 @@ pub fn hover_popup(
     )
 }
 
-/// 「从 Claude 导入」弹窗：列出用户 Claude 目录里的对话，点一条就导进来。
+/// 「从 Claude 导入」弹窗。两个视图：列表 → 预览 → 确认导入。
+///
+/// 为什么要先预览：Claude 的会话标题是从第一条消息截出来的，光看标题经常分不清
+/// 哪个是想找的那段；而导入是有副作用的（会多出一个会话）。原前端也是
+/// 「点击预览内容，满意了再导入」。
 fn import_claude_dialog(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();
-    let list = &app.state.claude_importable;
+    if let Some(preview) = app.state.claude_preview.as_ref() {
+        return import_preview_view(app, preview, cx).into_any_element();
+    }
+
+    let query = app.claude_query.to_lowercase();
+    // 按工作目录分组：同一个项目下的对话挨在一起，比一长串标题好找得多。
+    // 用 Vec 而不是 HashMap 保持列表本来的时间顺序（新的在前）。
+    let mut groups: Vec<(String, Vec<&crate::core::ClaudeImportable>)> = Vec::new();
+    for item in &app.state.claude_importable {
+        if !query.is_empty() && !item.title.to_lowercase().contains(&query) {
+            continue;
+        }
+        let dir = if item.cwd.is_empty() {
+            "没记录工作目录".to_string()
+        } else {
+            item.cwd.clone()
+        };
+        match groups.iter_mut().find(|(d, _)| d == &dir) {
+            Some((_, list)) => list.push(item),
+            None => groups.push((dir, vec![item])),
+        }
+    }
 
     let mut rows = div()
         .id("claude-import-list")
         .flex()
         .flex_col()
-        .max_h(px(360.))
+        .gap(px(10.))
+        .max_h(px(340.))
         .overflow_y_scroll();
-    if list.is_empty() {
+    if groups.is_empty() {
         rows = rows.child(
             div()
                 .py(px(20.))
                 .text_size(px(12.))
                 .text_color(theme.muted)
-                .child("这台机器上没找到 Claude 的对话记录"),
+                .child(if app.claude_query.is_empty() {
+                    "这台机器上没找到 Claude 的对话记录"
+                } else {
+                    "没有匹配的对话"
+                }),
         );
     }
-    for item in list {
-        let path = item.path.clone();
-        let stamp = chrono::DateTime::from_timestamp_millis(item.modified_ms)
-            .map(|dt| dt.format("%m/%d %H:%M").to_string())
-            .unwrap_or_default();
-        rows = rows.child(
+    for (dir, list) in groups {
+        // 目录只显示末段，全路径挂 tooltip——弹窗里铺绝对路径会把标题挤没。
+        let leaf = dir.rsplit(['/', '\\']).next().unwrap_or(&dir).to_string();
+        let mut group = div().flex().flex_col().gap(px(2.)).child(
             div()
-                .id(gpui::SharedString::from(format!("imp-{}", item.path)))
+                .id(gpui::SharedString::from(format!("grp-{dir}")))
                 .flex()
-                .flex_col()
-                .gap(px(2.))
-                .px(px(8.))
-                .py(px(7.))
-                .rounded(px(8.))
-                .cursor_pointer()
-                .hover(|this| this.bg(theme.accent_soft))
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .child(item.title.clone()),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap(px(8.))
-                        .text_size(px(10.))
-                        .text_color(theme.faint)
-                        .child(stamp)
-                        .child(format!("{} 条消息", item.message_count))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .child(item.cwd.clone()),
-                        ),
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let project = this.import_claude_project.clone();
-                    this.state.core.import_claude_session(path.clone(), project);
-                    this.import_claude_open = false;
-                    cx.notify();
-                })),
+                .flex_row()
+                .gap(px(6.))
+                .text_size(px(10.))
+                .text_color(theme.faint)
+                .tooltip({
+                    let dir = dir.clone();
+                    move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(dir.clone()).build(window, cx)
+                    }
+                })
+                .child(leaf)
+                .child(format!("· {}", list.len())),
         );
+        for item in list {
+            let path = item.path.clone();
+            let stamp = chrono::DateTime::from_timestamp_millis(item.modified_ms)
+                .map(|dt| dt.format("%m/%d %H:%M").to_string())
+                .unwrap_or_default();
+            group = group.child(
+                div()
+                    .id(gpui::SharedString::from(format!("imp-{}", item.path)))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .px(px(8.))
+                    .py(px(6.))
+                    .rounded(px(8.))
+                    .cursor_pointer()
+                    .hover(|this| this.bg(theme.accent_soft))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(item.title.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(8.))
+                            .text_size(px(10.))
+                            .text_color(theme.faint)
+                            .child(stamp)
+                            .child(format!("{} 条消息", item.message_count)),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.state.core.preview_claude_session(path.clone());
+                        cx.notify();
+                    })),
+            );
+        }
+        rows = rows.child(group);
     }
 
     dialog_frame(
@@ -796,13 +875,163 @@ fn import_claude_dialog(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl 
             .flex()
             .flex_col()
             .gap(px(10.))
+            .child(
+                div()
+                    .h(px(30.))
+                    .px(px(8.))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(theme.line)
+                    .bg(theme.surface_veil)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(12.))
+                            .text_color(theme.input_text)
+                            .child(Input::new(&app.claude_search).appearance(false)),
+                    ),
+            )
             .child(rows)
             .child(
                 div()
                     .text_size(px(11.))
                     .text_color(theme.muted)
-                    .child("导进来的对话还没选模型，想接着聊的话先在对话设置里挑一个"),
+                    .child("点一条先看看内容，确认了再导入"),
             ),
+    )
+    .into_any_element()
+}
+
+/// 预览视图：返回列表 + 导入按钮 + 消息正文。
+fn import_preview_view(
+    app: &HebbianApp,
+    preview: &crate::core::ClaudePreview,
+    cx: &mut Context<HebbianApp>,
+) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let path = preview.path.clone();
+
+    let mut body = div()
+        .id("claude-preview-body")
+        .flex()
+        .flex_col()
+        .gap(px(10.))
+        .max_h(px(320.))
+        .overflow_y_scroll();
+    if preview.messages.is_empty() {
+        body = body.child(
+            div()
+                .py(px(20.))
+                .text_size(px(12.))
+                .text_color(theme.muted)
+                .child("这段对话是空的"),
+        );
+    }
+    for message in &preview.messages {
+        let is_user = matches!(message.role, agent_core::storage::sessions::Role::User);
+        // 预览只看正文，不复刻聊天区那一整套工具卡片：这里要回答的问题只有
+        // 「是不是我要找的那段对话」，堆细节反而更难扫。
+        let text = message.content.trim();
+        if text.is_empty() {
+            continue;
+        }
+        body = body.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(3.))
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(theme.faint)
+                        .child(if is_user { "我" } else { "助手" }),
+                )
+                .child(
+                    div()
+                        .p(px(8.))
+                        .rounded(px(8.))
+                        .bg(if is_user { theme.accent_soft } else { theme.surface_veil })
+                        .text_size(px(11.))
+                        .text_color(theme.text)
+                        .child(text.to_string()),
+                ),
+        );
+    }
+
+    dialog_frame(
+        &theme,
+        "预览这段对话",
+        cx,
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .id("preview-back")
+                            .px(px(8.))
+                            .py(px(4.))
+                            .rounded(px(6.))
+                            .text_size(px(11.))
+                            .text_color(theme.muted)
+                            .cursor_pointer()
+                            .hover(|this| this.bg(theme.surface_veil))
+                            .child("返回列表")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.claude_preview = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .id("preview-import")
+                            .px(px(12.))
+                            .py(px(5.))
+                            .rounded(px(8.))
+                            .bg(theme.accent)
+                            .text_size(px(11.))
+                            .text_color(gpui::white())
+                            .cursor_pointer()
+                            .child("导入此对话")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let project = this.import_claude_project.clone();
+                                this.state.core.import_claude_session(path.clone(), project);
+                                this.state.claude_preview = None;
+                                this.import_claude_open = false;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(10.))
+                    .text_size(px(10.))
+                    .text_color(theme.faint)
+                    .child(preview.model.clone())
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(preview.cwd.clone()),
+                    )
+                    .child(format!("{} 条消息", preview.messages.len())),
+            )
+            .child(body),
     )
 }
 
@@ -869,6 +1098,9 @@ fn dialog_frame(
     div()
         .absolute()
         .inset_0()
+        // 遮罩必须吃掉鼠标事件：不 occlude 的话点击会穿到下面的聊天区，
+        // 表现为「点弹窗里的搜索框没反应，打的字全跑到别处」。
+        .occlude()
         .flex()
         .items_center()
         .justify_center()
@@ -910,6 +1142,9 @@ fn dialog_frame(
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.import_claude_open = false;
                                     this.state.claude_exported = None;
+                                    // 预览与搜索词一起清掉：下次打开不该停在上次的状态
+                                    this.state.claude_preview = None;
+                                    this.claude_query.clear();
                                     cx.notify();
                                 })),
                         ),
@@ -931,6 +1166,7 @@ fn confirm_dialog(
     div()
         .absolute()
         .inset_0()
+        .occlude()
         .flex()
         .items_center()
         .justify_center()

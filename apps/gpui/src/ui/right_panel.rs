@@ -618,10 +618,11 @@ fn tasks_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEleme
                                 .is_some_and(|(id, _)| id == &expand_id);
                             if already {
                                 this.state.task_output = None;
+                                this.state.core.unwatch_task_output();
                             } else if let Some(sid) =
                                 this.state.current_id().map(str::to_string)
                             {
-                                this.state.core.read_task_output(sid, expand_id.clone());
+                                this.state.core.watch_task_output(sid, expand_id.clone());
                             }
                             cx.notify();
                         }))

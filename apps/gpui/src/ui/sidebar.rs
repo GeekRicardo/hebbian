@@ -131,9 +131,7 @@ fn new_chat_button(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl I
         .child("新建对话")
         .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
             if *hovered {
-                this.hover_popup = Some(crate::ui::HoverPopup::GlobalImport);
-            } else if matches!(this.hover_popup, Some(crate::ui::HoverPopup::GlobalImport)) {
-                this.hover_popup = None;
+                this.open_hover_popup(crate::ui::HoverPopup::GlobalImport);
             }
             cx.notify();
         }))
@@ -453,14 +451,9 @@ fn project_group(
                     .child(Icon::Plus.el(px(13.), theme.faint))
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         if *hovered {
-                            this.hover_popup = Some(crate::ui::HoverPopup::ImportToProject(
+                            this.open_hover_popup(crate::ui::HoverPopup::ImportToProject(
                                 import_project.clone(),
                             ));
-                        } else if matches!(
-                            this.hover_popup,
-                            Some(crate::ui::HoverPopup::ImportToProject(_))
-                        ) {
-                            this.hover_popup = None;
                         }
                         cx.notify();
                     }))
@@ -615,13 +608,9 @@ fn session_row(
                 // 挂在删除键上看着别扭，但它是这一行里唯一常驻的锚点。
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     if *hovered {
-                        this.hover_popup =
-                            Some(crate::ui::HoverPopup::ExportSession(export_id.clone()));
-                    } else if matches!(
-                        this.hover_popup,
-                        Some(crate::ui::HoverPopup::ExportSession(_))
-                    ) {
-                        this.hover_popup = None;
+                        this.open_hover_popup(crate::ui::HoverPopup::ExportSession(
+                            export_id.clone(),
+                        ));
                     }
                     cx.notify();
                 }))

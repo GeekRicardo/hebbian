@@ -38,6 +38,8 @@ pub enum CoreUpdate {
     SessionCreated(String),
     /// 用户 Claude 目录下可导入的对话列表。
     ClaudeImportable(Vec<ClaudeImportable>),
+    /// 某条 Claude 对话的预览（只解析不落盘）。
+    ClaudePreview(Box<ClaudePreview>),
     /// 导出到 Claude 完成，附带可直接粘贴执行的 resume 命令。
     ClaudeExported { resume_command: String },
     /// 这个会话改过的文件（按 run 分组，新的在前）。
@@ -113,6 +115,16 @@ pub struct ClaudeImportable {
     pub modified_ms: i64,
 }
 
+/// 一条 Claude 对话的预览内容。只在内存里，不落盘。
+#[derive(Debug, Clone)]
+pub struct ClaudePreview {
+    pub path: String,
+    pub title: String,
+    pub model: String,
+    pub cwd: String,
+    pub messages: Vec<agent_core::storage::sessions::Message>,
+}
+
 /// 把字符串包成单引号 shell 字面量，路径里有空格 / 引号也不会把命令拆坏。
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
@@ -138,6 +150,9 @@ struct CoreInner {
     /// run_continue 都会订阅，同一个 session 起多个 reader 会让每条事件被投递多次，
     /// 表现为助手回复重复一遍（实测就是这样发现的）。
     subscribed: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// 面板当前展开着哪个后台任务的输出。轮询循环每轮都比对它，
+    /// 对不上就自己退出——这样「收起」和「换一个任务展开」都不用额外发信号。
+    watched_task: std::sync::Mutex<Option<String>>,
     data_dir: PathBuf,
     permission_store: Option<Arc<PermissionStore>>,
     runtimes: RuntimeRegistry,
@@ -172,6 +187,7 @@ impl Core {
                 inner: Arc::new(CoreInner {
                     rt,
                     subscribed: std::sync::Mutex::new(std::collections::HashSet::new()),
+                    watched_task: std::sync::Mutex::new(None),
                     data_dir,
                     permission_store,
                     runtimes,
@@ -712,6 +728,31 @@ impl Core {
         });
     }
 
+    /// 解析一条 Claude 对话给用户先看一眼。**不落盘**——
+    /// 导入是有副作用的（会多出一个会话），让用户确认过再动手。
+    pub fn preview_claude_session(&self, path: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let content = match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(err) => return this.emit_err(format!("读不了这个文件：{err}")),
+            };
+            match agent_core::storage::import_claude::parse_claude_jsonl(&content) {
+                Ok(parsed) => this.emit(CoreUpdate::ClaudePreview(Box::new(ClaudePreview {
+                    path,
+                    title: parsed.title,
+                    model: parsed.model,
+                    cwd: parsed
+                        .workdir
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    messages: parsed.messages,
+                }))),
+                Err(err) => this.emit_err(err),
+            }
+        });
+    }
+
     /// 把一个 Claude 对话文件导进来，成功后直接打开它。
     pub fn import_claude_session(&self, path: String, project_id: Option<String>) {
         let this = self.clone();
@@ -793,27 +834,55 @@ impl Core {
         });
     }
 
-    /// 读一个后台任务到目前为止的输出。
+    /// 盯住一个后台任务的输出，每秒刷一次，直到面板收起或换看别的任务。
     ///
-    /// 每次从头读（cursor = 0）而不是增量拼：面板一次只展开一个任务，
-    /// 输出本来就有环形缓冲上限，全量读一次比在 UI 侧维护游标简单得多，
-    /// 也不会因为漏掉一次刷新就永远缺一段。
-    pub fn read_task_output(&self, session_id: String, task_id: String) {
+    /// 每次从头读（cursor = 0）而不是增量拼：面板一次只展开一个任务，输出本来就有
+    /// 环形缓冲上限，全量读一次比在 UI 侧维护游标简单得多，也不会因为漏掉一次刷新
+    /// 就永远缺一段。
+    ///
+    /// 任务跑完之后还要再读一次才停：最后那几行往往是退出码和收尾输出，
+    /// 恰恰是用户最想看的，停早了就永远看不到。
+    pub fn watch_task_output(&self, session_id: String, task_id: String) {
+        *self.inner.watched_task.lock().unwrap() = Some(task_id.clone());
         let this = self.clone();
         self.inner.rt.spawn(async move {
-            let registry = agent_core::tools::background::registry_for_session(&session_id);
-            let Some(shell) = registry.get(&task_id) else {
-                return this.emit(CoreUpdate::TaskOutput {
-                    task_id,
-                    text: "这个任务已经不在了，输出也一并清掉了".to_string(),
+            loop {
+                // 面板收起 / 改看别的任务了，这轮循环就该退休。
+                let still_watched = this
+                    .inner
+                    .watched_task
+                    .lock()
+                    .unwrap()
+                    .as_deref()
+                    == Some(task_id.as_str());
+                if !still_watched {
+                    return;
+                }
+
+                let registry = agent_core::tools::background::registry_for_session(&session_id);
+                let Some(shell) = registry.get(&task_id) else {
+                    this.emit(CoreUpdate::TaskOutput {
+                        task_id,
+                        text: "这个任务已经不在了，输出也一并清掉了".to_string(),
+                    });
+                    return;
+                };
+                let finished = shell.state().is_terminal();
+                this.emit(CoreUpdate::TaskOutput {
+                    task_id: task_id.clone(),
+                    text: shell.read_at(0).content,
                 });
-            };
-            let snap = shell.read_at(0);
-            this.emit(CoreUpdate::TaskOutput {
-                task_id,
-                text: snap.content,
-            });
+                if finished {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
         });
+    }
+
+    /// 面板收起输出时调用，让轮询循环下一轮自己退出。
+    pub fn unwatch_task_output(&self) {
+        *self.inner.watched_task.lock().unwrap() = None;
     }
 
     /// 停掉一个还在跑的后台命令。

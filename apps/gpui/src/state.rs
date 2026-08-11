@@ -96,6 +96,9 @@ pub struct AppState {
     /// 展开着的那个后台任务的输出（任务编号 + 正文）。一次只展开一个。
     pub task_output: Option<(String, String)>,
 
+    /// 正在预览的那条 Claude 对话（点列表里某一条后才有）。
+    pub claude_preview: Option<crate::core::ClaudePreview>,
+
     /// 用户 Claude 目录下可以导入的对话（导入弹窗打开时才拉）。
     pub claude_importable: Vec<crate::core::ClaudeImportable>,
     /// 刚导出成功的那条 `claude --resume` 命令，等用户复制走。
@@ -196,6 +199,7 @@ impl AppState {
             collapsed: HashSet::new(),
             task_output: None,
             claude_importable: Vec::new(),
+            claude_preview: None,
             claude_exported: None,
             confirm: None,
             plans: Vec::new(),
@@ -260,6 +264,10 @@ impl AppState {
                     .refresh_plans(session.id.clone(), session.workdir.clone());
                 self.edits.clear();
                 self.branches.clear();
+                // 后台任务的输出是按会话取的，切走了还留着就会把上一个会话的
+                // 输出挂在新会话的面板上；同时把轮询也停掉。
+                self.task_output = None;
+                self.core.unwatch_task_output();
                 self.core
                     .refresh_edits(session.id.clone(), session.workdir.clone());
                 self.core.refresh_branches(session.id.clone());
@@ -281,6 +289,9 @@ impl AppState {
             }
             CoreUpdate::ClaudeImportable(list) => {
                 self.claude_importable = list;
+            }
+            CoreUpdate::ClaudePreview(preview) => {
+                self.claude_preview = Some(*preview);
             }
             CoreUpdate::ClaudeExported { resume_command } => {
                 self.claude_exported = Some(resume_command);
