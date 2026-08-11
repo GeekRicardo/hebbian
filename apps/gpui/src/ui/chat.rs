@@ -1091,7 +1091,55 @@ fn model_picker(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> Option<impl I
                     .bg(theme.right_bg_top)
                     .child("选择模型"),
             )
-            .child(list),
+            .child(list)
+            .children(thinking_toggle(app, cx)),
+    )
+}
+
+/// 模型菜单底部的「思考」开关。原 UI 把它放在这儿（`.model-picker-selected-controls`）
+/// 而不是强度 pill 上——pill 关掉后自己就不可点了，开关必须在别处才回得来。
+fn thinking_toggle(
+    app: &HebbianApp,
+    cx: &mut Context<HebbianApp>,
+) -> Option<impl IntoElement> {
+    let theme = app.theme.clone();
+    let session = app.state.current.as_ref()?;
+    let provider_kind = app
+        .state
+        .providers
+        .iter()
+        .find(|p| p.id == session.provider_id)
+        .map(|p| format!("{:?}", p.kind).to_ascii_lowercase())
+        .unwrap_or_default();
+    if !common::reasoning::model_supports_reasoning(&provider_kind, &session.model) {
+        return None;
+    }
+    let reasoning = session.reasoning.clone().unwrap_or_default();
+    let on = reasoning.enabled.unwrap_or(true);
+
+    Some(
+        h_flex()
+            .px(px(12.))
+            .py(px(8.))
+            .justify_between()
+            .border_t_1()
+            .border_color(theme.line)
+            .bg(theme.right_bg_top)
+            .text_size(px(12.))
+            .child("思考")
+            .child(
+                gpui_component::switch::Switch::new("thinking-toggle")
+                    .checked(on)
+                    .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                        let Some(id) = this.state.current_id().map(str::to_string) else {
+                            return;
+                        };
+                        let mut next = reasoning.clone();
+                        next.enabled = Some(*checked);
+                        this.state.core.set_reasoning(id, Some(next));
+                        cx.notify();
+                    })),
+            ),
     )
 }
 
@@ -1156,10 +1204,21 @@ fn reasoning_pill(
 ) -> Option<impl IntoElement> {
     use common::ReasoningEffort;
     let theme = app.theme.clone();
-    let reasoning = app.state.current.as_ref()?.reasoning.as_ref()?;
-    if reasoning.enabled == Some(false) {
+    let session = app.state.current.as_ref()?;
+    // 隐藏与否只看**模型支不支持推理**（与原前端一致）。thinking 被关掉时
+    // 不能隐藏——那样就再也点不开、没法重新打开了；原前端是置灰不可点。
+    let provider_kind = app
+        .state
+        .providers
+        .iter()
+        .find(|p| p.id == session.provider_id)
+        .map(|p| format!("{:?}", p.kind).to_ascii_lowercase())
+        .unwrap_or_default();
+    if !common::reasoning::model_supports_reasoning(&provider_kind, &session.model) {
         return None;
     }
+    let reasoning = session.reasoning.clone().unwrap_or_default();
+    let thinking_on = reasoning.enabled.unwrap_or(true);
     let label = match reasoning.effort.unwrap_or_default() {
         ReasoningEffort::Low => "低",
         ReasoningEffort::Medium => "中",
@@ -1226,17 +1285,22 @@ fn reasoning_pill(
                     .gap(px(4.))
                     .pr(px(8.))
                     .min_h(px(20.))
-                    .cursor_pointer()
-                    .hover(|this| this.text_color(theme.text))
+                    // thinking 关掉时置灰且不可点，鼠标移上去也没有反馈——
+                    // 与原前端 `disabled:opacity-40 disabled:pointer-events-none` 一致。
+                    .when(thinking_on, |this| {
+                        this.cursor_pointer()
+                            .hover(|this| this.text_color(theme.text))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.reasoning_open = !this.reasoning_open;
+                                cx.notify();
+                            }))
+                    })
+                    .when(!thinking_on, |this| this.opacity(0.4))
                     .child(Icon::Gauge.el(px(12.), theme.muted))
                     .child(label)
-                    .child(Icon::ChevronDown.el(px(10.), theme.faint))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.reasoning_open = !this.reasoning_open;
-                        cx.notify();
-                    })),
+                    .child(Icon::ChevronDown.el(px(10.), theme.faint)),
             )
-            .when(app.reasoning_open, |this| this.child(menu)),
+            .when(app.reasoning_open && thinking_on, |this| this.child(menu)),
     )
 }
 

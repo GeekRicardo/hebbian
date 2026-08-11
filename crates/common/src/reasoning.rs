@@ -217,6 +217,43 @@ pub fn anthropic_thinking_mode(model: &str) -> Option<AnthropicThinkingMode> {
 }
 
 /// 兼容老 API：是否支持 thinking。
+/// DeepSeek 家族里支持 thinking 的那些（`deepseek-v4-*` / `deepseek-reasoner` /
+/// `deepseek-r1`；带 `nothinking` 的变体明确不支持）。
+///
+/// 与前端 `lib/reasoning.ts::deepseekSupportsReasoning` 同一套判定——放在这里是为了
+/// 让各 surface 共用一份，不要每个前端各写各的。
+pub fn deepseek_supports_reasoning(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    if !m.contains("deepseek") {
+        return false;
+    }
+    if m.contains("nothinking") {
+        return false;
+    }
+    m.contains("v4") || m.contains("reasoner") || m.contains("r1")
+}
+
+/// 这个模型该不该显示「思考强度」选择器。
+///
+/// 判定顺序与前端 `modelSupportsReasoning` 一致：先按模型名认家族，认不出来
+/// 再退到 provider kind。`provider_kind` 传 `"anthropic"` / `"openai"` / `"deepseek"`。
+pub fn model_supports_reasoning(provider_kind: &str, model: &str) -> bool {
+    if deepseek_supports_reasoning(model)
+        || anthropic_supports_thinking(model)
+        // fable-5 / mythos-5 等：thinking 模式表里没列，但支持 effort 档位
+        || anthropic_supports_max_effort(model)
+        || openai_supports_reasoning(model)
+    {
+        return true;
+    }
+    match provider_kind {
+        "anthropic" => anthropic_supports_thinking(model),
+        "openai" => openai_supports_reasoning(model),
+        "deepseek" => deepseek_supports_reasoning(model),
+        _ => false,
+    }
+}
+
 pub fn anthropic_supports_thinking(model: &str) -> bool {
     anthropic_thinking_mode(model).is_some()
 }
@@ -549,5 +586,29 @@ mod tests {
         let s = serde_json::to_string(&cfg).unwrap();
         let back: ReasoningConfig = serde_json::from_str(&s).unwrap();
         assert_eq!(cfg, back);
+    }
+}
+
+#[cfg(test)]
+mod supports_reasoning_tests {
+    use super::*;
+
+    #[test]
+    fn deepseek_thinking_families_are_recognized() {
+        assert!(deepseek_supports_reasoning("deepseek-v4-flash"));
+        assert!(deepseek_supports_reasoning("deepseek-reasoner"));
+        assert!(deepseek_supports_reasoning("deepseek-r1"));
+        // 明确关掉 thinking 的变体不算
+        assert!(!deepseek_supports_reasoning("deepseek-v4-nothinking"));
+        // 非 deepseek 一律不算
+        assert!(!deepseek_supports_reasoning("gpt-4o"));
+    }
+
+    #[test]
+    fn falls_back_to_provider_kind_when_model_name_is_unknown() {
+        // 认不出的模型名 + 非推理 provider → false
+        assert!(!model_supports_reasoning("openai", "some-unknown-model"));
+        // 认得出的模型名，即便 provider kind 对不上也应为 true
+        assert!(model_supports_reasoning("", "deepseek-r1"));
     }
 }

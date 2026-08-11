@@ -12122,3 +12122,13 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 两个共享 crate 各加一个方法 / 一个 variant，均 additive；`cargo check -p agent-core` / `-p core-rpc` / `-p hebbian-web-server` 均通过。
 - **验证**: 点开菜单五档齐全、当前档高亮；选「极高」后 `session.jsonl` 里 `reasoning.effort` 变成 `extra` **且追加了一条 `reasoning_switch` marker（from: high）**，pill 同步变成「极高」。
 - **留尾巴**: 思考的开关（enabled）还不能在这里关；`apps/desktop` 的 `update_session_config` 仍是自己那份实现，没改成调这个新入口（同切模型，需要能编 tauri 的环境）。
+
+### 2026-08-11 — 思考开关落到模型菜单；修掉我把 pill「隐藏」而非「置灰」的错
+
+- **Why**: 补最后一个可调项（思考开 / 关）。对源码时发现我上一条埋了个坑：thinking 关掉时我把强度 pill **整个隐藏**了——那样它就再也点不开，用户没有任何入口把思考重新打开。原前端是**置灰不可点**（`disabled:opacity-40 disabled:pointer-events-none`），开关另放在模型菜单里。
+- **改动**:
+  - `crates/common/src/reasoning.rs`: 新增 `deepseek_supports_reasoning` 与 `model_supports_reasoning(provider_kind, model)`，判定顺序与前端 `lib/reasoning.ts::modelSupportsReasoning` 一致（先按模型名认家族，认不出再退到 provider kind）。**放进 common 而不是在 gpui 里再写一份**——这是各 surface 都要用的判定，不该每个前端各写各的。配 2 条单测（deepseek 家族识别含 `nothinking` 反例 / 认不出模型名时退回 kind）。
+  - `apps/gpui/src/ui/chat.rs`: pill 的显隐改为**只看模型支不支持推理**；thinking 关掉时置灰 + 不可点 + 不弹菜单，但仍然可见（状态要看得见）。思考开关做成模型菜单底部的 Switch——原 UI 就放在那儿（`.model-picker-selected-controls`），pill 上放不了，因为它关掉后自己就不可点了。
+- **影响范围**: `common` 加两个函数（additive）+ `apps/gpui`。`hebbian-common` 18 条单测通过，gpui 25 条通过。
+- **验证**: 模型菜单底部出现「思考」开关；关掉后 `session.jsonl` 里 `reasoning.enabled = false`，强度 pill 变灰且点不动、但没消失，可从模型菜单再打开。
+- **留尾巴**: `long_context`（Anthropic 1M 上下文）开关还没做；`apps/desktop` 与 `hebweb` 还没改用 `model_supports_reasoning`（各自仍有判定逻辑）。
