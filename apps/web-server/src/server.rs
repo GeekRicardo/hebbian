@@ -1941,63 +1941,13 @@ async fn cmd_switch_provider_model(state: &ServerState, args: Value) -> Result<V
         .ok_or_else(|| anyhow!("missing `newProviderId`"))?;
     let new_model =
         arg_str(&args, &["newModel", "new_model"]).ok_or_else(|| anyhow!("missing `newModel`"))?;
-    let dd = &state.data_dir;
-    let cur = sessions_store::load(dd, &id).map_err(|e| anyhow!("{e}"))?;
-    let cur_provider = model_gateway::config::get(dd, &cur.provider_id).ok();
-    let new_provider = model_gateway::config::get(dd, &new_provider_id).ok();
-    let from_provider = cur_provider
-        .as_ref()
-        .map(|p| p.name.clone())
-        .unwrap_or_else(|| cur.provider_id.clone());
-    let to_provider = new_provider
-        .as_ref()
-        .map(|p| p.name.clone())
-        .unwrap_or_else(|| new_provider_id.clone());
-    if cur.provider_id == new_provider_id && cur.model == new_model {
-        return Ok(serde_json::to_value(cur)?);
-    }
-    // 模型系列锁定：有真实对话后 DeepSeek 与其他系列不可互切（web 编码与协议不同）。
-    let has_real_turn = cur.messages.iter().any(|m| {
-        matches!(
-            m.role,
-            sessions_store::Role::User | sessions_store::Role::Assistant
-        )
-    });
-    if has_real_turn {
-        if let (Some(c), Some(n)) = (cur_provider.as_ref(), new_provider.as_ref()) {
-            let cur_ds = matches!(c.kind, model_gateway::config::ProviderKind::Deepseek);
-            let new_ds = matches!(n.kind, model_gateway::config::ProviderKind::Deepseek);
-            if cur_ds != new_ds {
-                return Err(anyhow!(
-                    "本会话已锁定模型系列：DeepSeek 与其他模型之间不可互相切换，请新建会话。"
-                ));
-            }
-        }
-    }
-    let meta = sessions_store::MessageMeta::Switch {
-        from_provider,
-        from_model: cur.model.clone(),
-        to_provider,
-        to_model: new_model.clone(),
-    };
-    sessions_store::insert_switch_marker(dd, &id, meta).map_err(|e| anyhow!("{e}"))?;
-    let mut updated = sessions_store::load(dd, &id).map_err(|e| anyhow!("{e}"))?;
-    updated.provider_id = new_provider_id;
-    updated.model = new_model;
-    let supports = common::reasoning::anthropic_supports_thinking(&updated.model)
-        || common::reasoning::openai_supports_reasoning(&updated.model);
-    if supports {
-        if updated.reasoning.is_none() {
-            updated.reasoning = Some(common::ReasoningConfig {
-                enabled: Some(true),
-                effort: Some(common::ReasoningEffort::Extra),
-                long_context: None,
-            });
-        }
-    } else {
-        updated.reasoning = None;
-    }
-    let saved = sessions_store::save(dd, updated).map_err(|e| anyhow!("{e}"))?;
+
+    // 切模型的业务规则（switch marker / DeepSeek 系列锁定 / 推理参数按新模型重置）
+    // 只有 CoreClient 一份实现，这里只做参数解析（架构 §7.3）。
+    let saved = state
+        .core
+        .switch_session_model(&id, new_provider_id, new_model)
+        .map_err(map_core_err)?;
     Ok(serde_json::to_value(saved)?)
 }
 

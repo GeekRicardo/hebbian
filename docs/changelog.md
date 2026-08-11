@@ -12046,3 +12046,12 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。全部只读。
 - **验证**: 造 subagent 与 prompt fixture 后逐页截图——Agents 页正确列出内置 `code-reviewer` 与 fixture `explore` 及其描述；日志页显示文件名与末尾行。
 - **留尾巴**: 这六页全部只读，不能增删改；「连接器」页仍是说明页（渠道配置在 `channel-core`，接它要先想清楚 gpui 侧要不要管渠道生命周期）。
+
+### 2026-08-11 — hebweb 的切模型改调 core 唯一实现（消掉一份重复），desktop 暂不动并说明原因
+
+- **Why**: 上一条把切模型收进了 `CoreClient::switch_session_model`，但 `apps/web-server` 仍留着自己那份，等于「core 一份 + 两个 surface 各一份」。§7.3 要求这类业务只有一份实现。
+- **改动**: `apps/web-server/src/server.rs` 的 `cmd_switch_provider_model` 从 60 行削到 12 行，只做参数解析（兼容原来的 camelCase / snake_case 两种入参名），业务全部交给 `state.core.switch_session_model(...)`。
+- **行为是否变化：没有**。逐条比对过两份实现——「未变则原样返回」「有真实对话后 DeepSeek 与其他系列互锁（连报错文案都一致）」「插 switch marker」「重新 load 再改字段避免覆盖 marker」四步完全相同；推理参数那步 hebweb 原本手写了 `anthropic_supports_thinking(m) || openai_supports_reasoning(m)` 再手工拼 `{enabled:true, effort:Extra}`，而 `common::reasoning::default_reasoning_for_model` 的函数体**与之逐字相同**，所以换过去也不改行为。
+- **desktop 为什么不一起改**: `cargo check -p hebbian` 在本机（Linux）**编不过**——`tauri-runtime-wry` 在 Linux 路径上有 API 不匹配（E0046 / E0277），与本次改动无关。CLAUDE.md 要求「commit 前本次涉及的 surface 至少跑过 cargo check」，我没法验证就不改：desktop 目前是你在用的那套 UI，盲改一个我编不了的 crate，风险远大于消掉一份重复的收益。**这一处重复仍在，留给能编 desktop 的环境去收**。
+- **影响范围**: 仅 `apps/web-server`。`cargo check -p hebbian-web-server` 通过（hebweb 无单测）。
+- **留尾巴**: `apps/desktop/src/lib.rs` 的 `switch_provider_model` 仍是独立实现，需在 macOS 上改并验证。
