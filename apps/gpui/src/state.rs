@@ -117,6 +117,9 @@ pub struct AppState {
     pub open_files: Vec<PathBuf>,
     pub active_file: Option<PathBuf>,
 
+    /// 当前会话的运行模式。切会话时从 session 读，切模式时即时更新。
+    pub run_mode: agent_core::run_mode::RunMode,
+
     /// 这个会话改过的文件（按 run 分组，新的在前）。
     pub edits: Vec<agent_core::edits::metadata::RunEditEntry>,
     /// 从这个会话分叉出去的旁支。
@@ -173,6 +176,7 @@ impl AppState {
             file_baselines: HashMap::new(),
             open_files: Vec::new(),
             active_file: None,
+            run_mode: agent_core::run_mode::RunMode::Default,
             edits: Vec::new(),
             branches: Vec::new(),
             todos: Vec::new(),
@@ -211,6 +215,7 @@ impl AppState {
                     .cloned()
                     .collect();
                 self.streaming = StreamingTurn::default();
+                self.run_mode = session.run_mode;
                 self.todos.clear();
                 self.plans.clear();
                 self.diff = None;
@@ -247,6 +252,9 @@ impl AppState {
             CoreUpdate::Permissions { allow, deny } => {
                 self.perm_allow = allow;
                 self.perm_deny = deny;
+            }
+            CoreUpdate::RunModeChanged(mode) => {
+                self.run_mode = mode;
             }
             CoreUpdate::Settings(settings) => {
                 self.settings = *settings;

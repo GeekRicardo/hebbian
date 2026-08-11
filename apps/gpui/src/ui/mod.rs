@@ -57,6 +57,8 @@ pub struct HebbianApp {
     pub title_editing: bool,
     /// 标题输入框。
     pub title_input: Entity<InputState>,
+    /// 运行模式下拉是否展开。
+    pub run_mode_open: bool,
     /// `//` 命令面板是否展开。
     pub slash_open: bool,
     /// 对话设置弹窗是否打开。
@@ -238,6 +240,7 @@ impl HebbianApp {
             dragging_project: None,
             title_editing: false,
             title_input,
+            run_mode_open: false,
             slash_open: false,
             session_settings_open: false,
             settings_open: false,

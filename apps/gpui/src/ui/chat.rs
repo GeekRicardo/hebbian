@@ -851,7 +851,7 @@ fn composer(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement 
                 )
                 .child(toolbar(app, cx, running, model)),
         )
-        .child(info_row(app))
+        .child(info_row(app, cx))
 }
 
 /// 输入框工具条上的一个小按钮。
@@ -1131,20 +1131,8 @@ fn project_chip(app: &HebbianApp) -> Option<impl IntoElement> {
 
 /// `.dsp-composer-info`：输入框下面那行「全速模式 / 极高 / cache·ctx」。
 /// 三个都是当前 run 的只读指示，点开的下拉还没接上。
-fn info_row(app: &HebbianApp) -> impl IntoElement {
+fn info_row(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();
-
-    let chip = |icon: Icon, label: &'static str| {
-        h_flex()
-            .gap(px(4.))
-            .pr(px(8.))
-            .min_h(px(20.))
-            .text_size(px(11.))
-            .text_color(theme.muted)
-            .child(icon.el(px(12.), theme.muted))
-            .child(label)
-            .child(Icon::ChevronDown.el(px(10.), theme.faint))
-    };
 
     h_flex()
         .w_full()
@@ -1153,8 +1141,16 @@ fn info_row(app: &HebbianApp) -> impl IntoElement {
         .items_center()
         .text_size(px(11.))
         .text_color(theme.muted)
-        .child(chip(Icon::Zap, "全速模式"))
-        .child(chip(Icon::Gauge, "极高"))
+        .child(run_mode_chip(app, cx))
+        .child(
+            h_flex()
+                .gap(px(4.))
+                .pr(px(8.))
+                .min_h(px(20.))
+                .child(Icon::Gauge.el(px(12.), theme.muted))
+                .child("极高")
+                .child(Icon::ChevronDown.el(px(10.), theme.faint)),
+        )
         .child(div().flex_1())
         .child(
             h_flex()
@@ -1177,6 +1173,113 @@ fn info_row(app: &HebbianApp) -> impl IntoElement {
                         .unwrap_or(0)
                 )),
         )
+}
+
+/// 运行模式 chip + 下拉。四个模式的名字与说明逐字取自原前端 `RunModeChip`。
+fn run_mode_chip(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
+    use agent_core::run_mode::RunMode;
+    let theme = app.theme.clone();
+
+    /// (模式, 图标, 名字, 一句说明)
+    const MODES: [(RunMode, &str, &str); 4] = [
+        (RunMode::Default, "默认", "工作区内改文件直接执行，运行命令前会询问"),
+        (RunMode::PlanMode, "计划模式", "只读模式，先规划再动手"),
+        (RunMode::AutoMode, "自动模式", "让 AI 自己判断哪些操作可以放行"),
+        (
+            RunMode::Yolo,
+            "全速模式",
+            "全部自动执行、不打断，只拦最危险的不可逆操作",
+        ),
+    ];
+
+    let current = app.state.run_mode;
+    let icon_for = |mode: RunMode| match mode {
+        RunMode::Default => Icon::Gauge,
+        RunMode::PlanMode => Icon::List,
+        RunMode::AutoMode => Icon::Sparkles,
+        RunMode::Yolo => Icon::Zap,
+    };
+    let label = MODES
+        .iter()
+        .find(|(m, _, _)| *m == current)
+        .map(|(_, l, _)| *l)
+        .unwrap_or("默认");
+
+    let mut menu = v_flex()
+        .absolute()
+        .bottom(px(24.))
+        .left(px(0.))
+        .w(px(300.))
+        .p(px(4.))
+        .rounded(px(12.))
+        .border_1()
+        .border_color(theme.card_line)
+        .bg(theme.card_strong)
+        .shadow(shadow_lifted(gpui::rgba(0x2d3d5324).into()));
+    for (mode, name, desc) in MODES {
+        let active = mode == current;
+        menu = menu.child(
+            h_flex()
+                .id(name)
+                .items_start()
+                .gap(px(8.))
+                .p(px(8.))
+                .rounded(px(8.))
+                .cursor_pointer()
+                .when(active, |this| this.bg(theme.accent_soft))
+                .hover(|this| this.bg(theme.accent_soft))
+                .child(icon_for(mode).el(
+                    px(13.),
+                    if active { theme.accent } else { theme.muted },
+                ))
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(if active { theme.accent } else { theme.text })
+                                .child(name),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(theme.muted)
+                                .child(desc),
+                        ),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(id) = this.state.current_id().map(str::to_string) {
+                        this.state.core.set_run_mode(id, mode);
+                    }
+                    // 切到自动模式不关面板——原 UI 在这里还要接着调「全自动」开关。
+                    if mode != RunMode::AutoMode {
+                        this.run_mode_open = false;
+                    }
+                    cx.notify();
+                })),
+        );
+    }
+
+    div()
+        .relative()
+        .child(
+            h_flex()
+                .id("run-mode-chip")
+                .gap(px(4.))
+                .pr(px(8.))
+                .min_h(px(20.))
+                .cursor_pointer()
+                .hover(|this| this.text_color(theme.text))
+                .child(icon_for(current).el(px(12.), theme.muted))
+                .child(label)
+                .child(Icon::ChevronDown.el(px(10.), theme.faint))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.run_mode_open = !this.run_mode_open;
+                    cx.notify();
+                })),
+        )
+        .when(app.run_mode_open, |this| this.child(menu))
 }
 
 /// 上下文占用的粗略估计：消息条数占 200 条软上限的比例。

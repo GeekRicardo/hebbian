@@ -46,6 +46,8 @@ pub enum CoreUpdate {
     LogTail { name: String, lines: Vec<String> },
     /// 权限规则读完了（全局层的 allow / deny）。
     Permissions { allow: Vec<String>, deny: Vec<String> },
+    /// 运行模式改好了。
+    RunModeChanged(agent_core::run_mode::RunMode),
     /// 全局设置读完了。
     Settings(Box<agent_core::storage::settings::Settings>),
     /// 供应商列表刷新完成（模型选择器用）。
@@ -188,6 +190,37 @@ impl Core {
                 Ok(file) => this.emit(CoreUpdate::Providers(file.providers)),
                 Err(err) => this.emit_err(err),
             }
+        });
+    }
+
+    /// 切运行模式。落两处：会话文件（跨重启保留）+ 活运行时（当前 run 立即生效）。
+    /// 只落一处的话，要么重启就丢、要么当前这轮不生效。
+    pub fn set_run_mode(&self, session_id: String, mode: agent_core::run_mode::RunMode) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            if let Err(err) = agent_core::storage::sessions::update_meta(
+                &this.inner.data_dir,
+                &session_id,
+                |session| {
+                    session.run_mode = mode;
+                    Ok(())
+                },
+            ) {
+                return this.emit_err(err);
+            }
+            if let Ok(runtime) = this
+                .inner
+                .runtimes
+                .ensure(
+                    &this.inner.data_dir,
+                    this.inner.permission_store.clone(),
+                    &session_id,
+                )
+                .await
+            {
+                runtime.state.set_run_mode(mode);
+            }
+            this.emit(CoreUpdate::RunModeChanged(mode));
         });
     }
 

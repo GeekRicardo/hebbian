@@ -12069,3 +12069,14 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: 三个面板各造 fixture 后逐个截图确认。**过程中踩到两个自己的错**：① edits 的 fixture 我猜的路径不对（真实位置是 `sessions/<sid>/edits-worktree/.hebbian-edits.json`），且 metadata 有 `version: 3` 的版本守卫，我写 v1 被正确丢弃——是守卫在按设计工作，不是 bug；② 旁支的 fixture 我用 pretty-JSON 写，被 storage 的老格式迁移重写后 `forked_from` 丢了，改用真 jsonl 首行才验通。顺带给 `refresh_branches` 加了「首行解析失败就整份读一次」的兜底——仓库里确实还兼容老 pretty-JSON 会话，不兜底那类会话的旁支会静默漏掉。
 - **留尾巴**: 后台任务没有实时输出与倒计时（要 join 运行期注册表，gpui 侧还没暴露那个接口）；修改文件不能逐个回退；旁支不能在面板里新建。
+
+### 2026-08-11 — gpui surface 的运行模式 chip 变成真的能切
+
+- **Why**: 输入框下面那个「全速模式」此前是**写死的装饰文字**——照截图抄的，既不反映当前模式也点不动。运行模式是 agent 行为的总开关（Default / 计划 / 自动 / 全速），这个不能只是个标签。
+- **改动**:
+  - `apps/gpui/src/ui/chat.rs`: chip 显示当前模式（图标 + 名字随之变），点开是四选一下拉。**四个模式的名字与那句说明逐字取自原前端 `RunModeChip`**，不是我自己编的措辞。切到「自动模式」时不关面板——原 UI 在这里还要接着调「全自动」开关，保持同样的手感。
+  - `apps/gpui/src/core.rs`: `set_run_mode` **落两处**——会话文件（跨重启保留）+ 活运行时 `SessionRuntimeState`（当前这轮立即生效）。只落一处的话，要么重启就丢、要么这轮不生效。
+  - `apps/gpui/src/state.rs`: 切会话时从 session 读回当前模式。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: 点开下拉 → 四个模式与说明齐全、当前项高亮；点「全速模式」→ `session.jsonl` 的 `run_mode` 变成 `Yolo`，chip 同步变成「全速模式」+ 闪电图标。
+- **留尾巴**: AutoMode 的「全自动 / hands-off」子开关还没做；`//run-mode` 命令仍只是填进输入框，没有本地派发。
