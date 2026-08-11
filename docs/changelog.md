@@ -12169,3 +12169,13 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
   - 空串入参当作「没有」——否则卡片上会出现一段空白摘要。
 - **影响范围**: 仅 `apps/gpui`。新增 6 条单测（shell 家族共用标签 / Read 的 basename+offset / Edit·Write 取文件名 / TodoWrite 统计含「无进行中」分支 / 未知工具的兜底顺序 / 空串入参），共 32 条通过。
 - **验证**: 截图确认卡片变成「运行命令 du -sh target/」「读取文件 args.gn」。
+
+### 2026-08-11 — 补上「还没选会话」那块画面（我此前把两种「空」混成了一个）
+
+- **Why**: 三处待审的最后一处。对源码发现原前端有**两种不同的空态**，我混成了一个：
+  - `!currentSession`（压根没选会话）→ `ChatView` 自己那块：56px 渐变圆角方块 + 「开始一场新的对话」+ 一句说明 + **「新建对话 / 供应商配置」两个按钮**。
+  - 选了会话但还没消息（`isNewConversationLayout`）→ `DesktopShell` 传进去的 `emptyState`，也就是那张品牌卡片 + 「你想用 Hebbian 做什么」。
+  我之前只实现了后者，并且把它用在了「没选会话」上——等于**前者从来没出现过**，而它恰恰是新用户第一次打开时看到的画面，还带着唯一的「去配 API Key」入口。
+- **改动**: `apps/gpui/src/ui/chat.rs` 按条件分流两种空态；新增 `no_session_state`，两个按钮都接真动作（新建对话 → `create_session`；供应商配置 → 打开设置并直接切到「供应商」页）。
+- **影响范围**: 仅 `apps/gpui`。32 条单测通过。
+- **验证**: 不带 `HEBBIAN_GPUI_OPEN` 启动 → 出现渐变方块 + 标题 + 说明 + 两个按钮；点「供应商配置」→ 设置面板打开且停在「供应商」页。

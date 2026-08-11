@@ -7,7 +7,7 @@ mod editor;
 mod hue;
 mod right_panel;
 mod session_settings;
-mod settings;
+pub mod settings;
 mod sidebar;
 mod widgets;
 

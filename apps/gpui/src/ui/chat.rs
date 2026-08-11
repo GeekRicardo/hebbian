@@ -131,7 +131,13 @@ fn canvas(
     window: &mut Window,
     cx: &mut Context<HebbianApp>,
 ) -> AnyElement {
-    if app.state.current.is_none() {
+    // 两种「空」是不同的画面，原前端分得很清楚，我之前混成了一个：
+    // 压根没选会话 → ChatView 自己那块（渐变方块 + 两个按钮）；
+    // 选了会话但还没消息 → DesktopShell 传进来的品牌卡片。
+    let Some(session) = app.state.current.as_ref() else {
+        return no_session_state(app, cx).into_any_element();
+    };
+    if session.messages.is_empty() && app.state.streaming.is_empty() {
         return empty_state(app).into_any_element();
     }
 
@@ -176,6 +182,86 @@ fn canvas(
         }
     }
     list.into_any_element()
+}
+
+/// 还没选任何会话时的画面。对应 `ChatView` 里 `!currentSession` 那一段：
+/// 56px 渐变圆角方块 + 标题 + 一句说明 + 「新建对话 / 供应商配置」两个按钮。
+fn no_session_state(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let button = |label: &'static str, primary: bool, theme: crate::theme::Theme| {
+        h_flex()
+            .id(label)
+            .h(px(32.))
+            .px(px(14.))
+            .rounded(px(8.))
+            .text_size(px(13.))
+            .cursor_pointer()
+            .when(primary, |this| {
+                this.bg(theme.accent).text_color(gpui::white())
+            })
+            .when(!primary, |this| {
+                this.border_1().border_color(theme.line).text_color(theme.text)
+            })
+            .child(label)
+    };
+
+    v_flex()
+        .flex_1()
+        .min_h_0()
+        .items_center()
+        .justify_center()
+        .px(px(24.))
+        .child(
+            div()
+                .size(px(56.))
+                .mb(px(16.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(16.))
+                // 原前端是 sky-500 → indigo-600 的斜向渐变。
+                .bg(gpui::linear_gradient(
+                    135.,
+                    gpui::linear_color_stop(theme.accent, 0.),
+                    gpui::linear_color_stop(theme.accent_2, 1.),
+                ))
+                .child(Icon::Sparkles.el(px(28.), gpui::white())),
+        )
+        .child(
+            div()
+                .text_size(px(18.))
+                .font_weight(gpui::FontWeight(600.))
+                .child("开始一场新的对话"),
+        )
+        .child(
+            div()
+                .mt(px(4.))
+                .max_w(px(384.))
+                .text_size(px(13.))
+                .text_color(theme.muted)
+                .child("在左侧点击「新建对话」，或先前往供应商配置添加你的 API Key。"),
+        )
+        .child(
+            h_flex()
+                .mt(px(20.))
+                .gap(px(8.))
+                .child(
+                    button("新建对话", true, theme.clone()).on_click(cx.listener(
+                        |this, _, _, _| {
+                            this.state.core.create_session(None, None);
+                        },
+                    )),
+                )
+                .child(
+                    button("供应商配置", false, theme).on_click(cx.listener(
+                        |this, _, window, cx| {
+                            this.open_settings(window, cx);
+                            this.settings_tab = crate::ui::settings::SettingsTab::Providers;
+                            cx.notify();
+                        },
+                    )),
+                ),
+        )
 }
 
 /// `.dsp-empty-state`：品牌卡片 + 一行大标题。
