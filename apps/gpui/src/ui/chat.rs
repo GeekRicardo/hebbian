@@ -558,6 +558,7 @@ fn composer(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement 
                 .border_color(theme.card_line)
                 .bg(theme.card_strong)
                 .shadow(shadow_lifted(gpui::rgba(0x36475c17).into()))
+                .children(project_chip(app))
                 .child(
                     div()
                         .px(px(16.))
@@ -574,6 +575,40 @@ fn composer(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement 
                 .child(toolbar(app, cx, running, model)),
         )
         .child(info_row(app))
+}
+
+/// 输入框顶部的项目胶囊：当前对话绑在哪个项目 / 目录上。
+/// 没绑目录就不显示——原前端也是「有才画」，不占位。
+fn project_chip(app: &HebbianApp) -> Option<impl IntoElement> {
+    let theme = app.theme.clone();
+    let session = app.state.current.as_ref()?;
+    let name = session
+        .project_id
+        .as_ref()
+        .and_then(|pid| app.state.projects.iter().find(|p| &p.id == pid))
+        .map(|p| p.name.clone())
+        .or_else(|| {
+            session
+                .workdir
+                .as_ref()?
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+        })?;
+
+    Some(
+        h_flex().px(px(12.)).pt(px(10.)).child(
+            h_flex()
+                .gap(px(5.))
+                .px(px(8.))
+                .py(px(3.))
+                .rounded(px(7.))
+                .bg(theme.accent_soft)
+                .text_size(px(11.))
+                .text_color(theme.accent)
+                .child(Icon::Folder.el(px(12.), theme.accent))
+                .child(name),
+        ),
+    )
 }
 
 /// `.dsp-composer-info`：输入框下面那行「全速模式 / 极高 / cache·ctx」。

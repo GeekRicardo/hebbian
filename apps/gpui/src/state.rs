@@ -5,12 +5,13 @@
 //! 落盘消息接管，避免「实时拼的文本」与「jsonl 里的真消息」两份各自演化。
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use agent_core::storage::projects::WorkspaceProject;
 use agent_core::storage::sessions::{Message, Role, Session, SessionMeta};
 use protocol::{QuestionOption, WireEvent};
 
-use crate::core::{Core, CoreUpdate};
+use crate::core::{Core, CoreUpdate, DirEntry};
 
 /// 一条待处理的工具审批。
 #[derive(Debug, Clone)]
@@ -85,6 +86,12 @@ pub struct AppState {
     pub search_regex: bool,
     pub collapsed: HashSet<String>,
 
+    // ── 文件树 ──────────────────────────────────────────────────
+    /// 已读过的目录：路径 → 这一层的条目。
+    pub dirs: HashMap<PathBuf, Vec<DirEntry>>,
+    /// 展开着的目录。
+    pub expanded_dirs: HashSet<PathBuf>,
+
     /// 最近一次失败信息，渲染成顶部 toast。
     pub error: Option<String>,
 }
@@ -108,6 +115,8 @@ impl AppState {
             search_case: false,
             search_regex: false,
             collapsed: HashSet::new(),
+            dirs: HashMap::new(),
+            expanded_dirs: HashSet::new(),
             error: None,
         }
     }
@@ -139,10 +148,17 @@ impl AppState {
                     .cloned()
                     .collect();
                 self.streaming = StreamingTurn::default();
+                if let Some(workdir) = session.workdir.clone() {
+                    self.expanded_dirs.insert(workdir.clone());
+                    self.core.list_dir(workdir);
+                }
                 self.current = Some(session);
             }
             CoreUpdate::SessionCreated(id) => {
                 self.core.open_session(id);
+            }
+            CoreUpdate::DirListed { path, entries } => {
+                self.dirs.insert(path, entries);
             }
             CoreUpdate::Failed(message) => {
                 self.error = Some(message);

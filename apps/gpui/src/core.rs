@@ -36,8 +36,21 @@ pub enum CoreUpdate {
     SessionLoaded(Box<Session>),
     /// 新建会话成功，附带要打开的 id。
     SessionCreated(String),
+    /// 某个目录读完了（文件树按需展开）。
+    DirListed {
+        path: PathBuf,
+        entries: Vec<DirEntry>,
+    },
     /// 任何一步失败。文案直接进 toast。
     Failed(String),
+}
+
+/// 文件树的一个条目。
+#[derive(Debug, Clone)]
+pub struct DirEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub is_dir: bool,
 }
 
 /// 常驻的 core 句柄。克隆代价只有几个 Arc。
@@ -312,6 +325,42 @@ impl Core {
                 }
                 Err(err) => this.emit_err(err),
             }
+        });
+    }
+
+    /// 读一层目录，结果回推 UI。文件树按需展开，不预读整棵树。
+    ///
+    /// 排序与原前端一致：目录在前、同类按名字（大小写不敏感）排。隐藏文件跟着
+    /// `.gitignore` 之外的常识过滤——只滤掉 `.git`，其余点开头的仍然显示，
+    /// 因为 agent 的工作目录里 `.env` / `.claude` 这类文件用户是要看见的。
+    pub fn list_dir(&self, path: PathBuf) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let read = std::fs::read_dir(&path);
+            let mut entries = Vec::new();
+            match read {
+                Ok(iter) => {
+                    for entry in iter.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name == ".git" {
+                            continue;
+                        }
+                        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                        entries.push(DirEntry {
+                            name,
+                            path: entry.path(),
+                            is_dir,
+                        });
+                    }
+                }
+                Err(err) => return this.emit_err(format!("读不了这个文件夹：{err}")),
+            }
+            entries.sort_by(|a, b| {
+                b.is_dir
+                    .cmp(&a.is_dir)
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            });
+            this.emit(CoreUpdate::DirListed { path, entries });
         });
     }
 

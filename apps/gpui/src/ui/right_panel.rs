@@ -3,9 +3,12 @@
 //! 对应 `RightSidebar.tsx` / `FileTreePanel.tsx`。图标条上每个按钮切换一个工作台
 //! 面板（文件 / 编辑 / 目标 / Git / 待办 / 计划 / 对话 / 浏览器 / 终端）。
 
+use std::path::PathBuf;
+
 use gpui::{div, prelude::*, px, Context, Window};
 
 use crate::assets::Icon;
+use crate::core::DirEntry;
 use crate::ui::widgets::{h_flex, v_flex};
 use crate::ui::HebbianApp;
 
@@ -81,12 +84,7 @@ pub fn render(app: &mut HebbianApp, _window: &mut Window, cx: &mut Context<Hebbi
 /// 文件目录面板本体。
 fn panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();
-    let workdir = app
-        .state
-        .current
-        .as_ref()
-        .and_then(|s| s.workdir.clone())
-        .map(|p| p.to_string_lossy().to_string());
+    let workdir = app.state.current.as_ref().and_then(|s| s.workdir.clone());
 
     v_flex()
         .w(px(260.))
@@ -133,7 +131,7 @@ fn panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
                 .child(Icon::RefreshCw.el(px(12.), theme.faint)),
         )
         .child(match workdir {
-            Some(dir) => tree_placeholder(app, dir).into_any_element(),
+            Some(dir) => tree(app, cx, dir).into_any_element(),
             None => div()
                 .p(px(14.))
                 .text_size(px(12.))
@@ -143,25 +141,122 @@ fn panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
         })
 }
 
-/// 文件树。真正的按需读盘还没接上，先把根目录名按树的样式画出来，
-/// 保证布局与真实结构一致，接上目录读取时只换数据源。
-fn tree_placeholder(app: &HebbianApp, dir: String) -> impl IntoElement {
+/// 文件树。按需读盘：只有展开过的目录才会被读，读到的结果缓存在 state 里。
+fn tree(app: &HebbianApp, cx: &mut Context<HebbianApp>, dir: PathBuf) -> impl IntoElement {
     let theme = app.theme.clone();
-    let leaf = std::path::Path::new(&dir)
+    let leaf = dir
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or(dir);
+        .unwrap_or_else(|| dir.to_string_lossy().to_string());
 
-    v_flex().id("file-tree").flex_1().min_h_0().overflow_y_scroll().px(px(8.)).child(
-        h_flex()
-            .h(px(24.))
-            .gap(px(4.))
-            .text_size(px(12.))
-            .text_color(theme.text)
-            .child(Icon::ChevronDown.el(px(12.), theme.faint))
-            .child(Icon::Folder.el(px(13.), theme.muted))
-            .child(leaf),
-    )
+    let mut list = v_flex()
+        .id("file-tree")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .px(px(8.))
+        .pb(px(8.))
+        // 根节点：始终展开，代表这个对话的工作目录。
+        .child(
+            h_flex()
+                .h(px(24.))
+                .gap(px(4.))
+                .text_size(px(12.))
+                .text_color(theme.text)
+                .child(Icon::ChevronDown.el(px(12.), theme.faint))
+                .child(Icon::Folder.el(px(13.), theme.muted))
+                .child(leaf),
+        );
+
+    for row in flatten(app, &dir, 1) {
+        list = list.child(node_row(app, cx, row));
+    }
+    list
+}
+
+/// 展开状态下的一行。`depth` 决定缩进。
+struct TreeRow {
+    entry: DirEntry,
+    depth: usize,
+    expanded: bool,
+}
+
+/// 把「已展开的目录树」压平成一串可渲染的行。深度优先，与文件树的视觉顺序一致。
+fn flatten(app: &HebbianApp, dir: &PathBuf, depth: usize) -> Vec<TreeRow> {
+    let Some(entries) = app.state.dirs.get(dir) else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    for entry in entries {
+        let expanded = entry.is_dir && app.state.expanded_dirs.contains(&entry.path);
+        let child_path = entry.path.clone();
+        rows.push(TreeRow {
+            entry: entry.clone(),
+            depth,
+            expanded,
+        });
+        if expanded {
+            rows.extend(flatten(app, &child_path, depth + 1));
+        }
+    }
+    rows
+}
+
+fn node_row(app: &HebbianApp, cx: &mut Context<HebbianApp>, row: TreeRow) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let path = row.entry.path.clone();
+    let is_dir = row.entry.is_dir;
+    let indent = 12. + row.depth as f32 * 12.;
+
+    h_flex()
+        .id(gpui::SharedString::from(format!("node-{}", path.display())))
+        .h(px(24.))
+        .pl(px(indent))
+        .pr(px(6.))
+        .gap(px(4.))
+        .rounded(px(6.))
+        .text_size(px(12.))
+        .text_color(theme.text)
+        .cursor_pointer()
+        .hover(|this| this.bg(theme.accent_soft))
+        .child(if is_dir {
+            if row.expanded {
+                Icon::ChevronDown.el(px(12.), theme.faint)
+            } else {
+                Icon::ChevronRight.el(px(12.), theme.faint)
+            }
+        } else {
+            // 文件没有折叠箭头，但要占同样的位置，否则同层的名字对不齐。
+            Icon::ChevronRight.el(px(12.), gpui::transparent_black())
+        })
+        .child(if is_dir {
+            Icon::Folder.el(px(13.), theme.muted)
+        } else {
+            Icon::File.el(px(13.), theme.faint)
+        })
+        .child(
+            div()
+                .min_w_0()
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(row.entry.name.clone()),
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if !is_dir {
+                return;
+            }
+            if this.state.expanded_dirs.remove(&path) {
+                cx.notify();
+                return;
+            }
+            this.state.expanded_dirs.insert(path.clone());
+            // 没读过才读；已缓存的直接展开，避免每次点都打一次盘。
+            if !this.state.dirs.contains_key(&path) {
+                this.state.core.list_dir(path.clone());
+            }
+            cx.notify();
+        }))
 }
 
 /// 最右侧的图标竖条。
