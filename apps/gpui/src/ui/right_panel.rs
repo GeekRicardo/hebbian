@@ -9,8 +9,13 @@ use gpui::{div, prelude::*, px, Context, Window};
 
 use crate::assets::Icon;
 use crate::core::DirEntry;
-use crate::ui::widgets::{h_flex, v_flex};
+use crate::ui::widgets::{h_flex, v_flex, NoDragPreview, RightDivider};
 use crate::ui::HebbianApp;
+
+/// 右侧工作台的默认 / 最小 / 最大宽度，与原前端 RightSidebar 的 props 一致。
+pub const DEFAULT_WIDTH: f32 = 260.0;
+pub const MIN_WIDTH: f32 = 200.0;
+pub const MAX_WIDTH: f32 = 960.0;
 
 /// 工作台可选的面板。顺序与截图里的图标条自上而下一致。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +107,8 @@ fn panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let workdir = app.state.current.as_ref().and_then(|s| s.workdir.clone());
 
     v_flex()
-        .w(px(260.))
+        .relative()
+        .w(px(app.right_width))
         .h_full()
         .bg(gpui::linear_gradient(
             180.,
@@ -134,6 +140,29 @@ fn panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
                                 })),
                         ),
                 ),
+        )
+        .child(
+            div()
+                .id("right-resize")
+                .absolute()
+                .left(px(0.))
+                .top(px(0.))
+                .w(px(4.))
+                .h_full()
+                .cursor_col_resize()
+                .hover(|this| this.bg(theme.accent_soft))
+                .on_drag(RightDivider, |_, _, _, cx| cx.new(|_| NoDragPreview))
+                .on_drag_move(cx.listener(
+                    |this, e: &gpui::DragMoveEvent<RightDivider>, _, cx| {
+                        let delta = e.bounds.origin.x - e.event.position.x;
+                        let next =
+                            (this.right_width + f32::from(delta)).clamp(MIN_WIDTH, MAX_WIDTH);
+                        if (next - this.right_width).abs() > 0.5 {
+                            this.right_width = next;
+                            cx.notify();
+                        }
+                    },
+                )),
         )
         .child(match app.workbench {
             Workbench::Files => file_panel(app, cx, workdir).into_any_element(),

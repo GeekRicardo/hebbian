@@ -9,11 +9,13 @@ use gpui::{div, prelude::*, px, Context, Window};
 use gpui_component::input::{Input, InputState};
 
 use crate::assets::Icon;
-use crate::ui::widgets::{h_flex, v_flex};
+use crate::ui::widgets::{h_flex, v_flex, EditorDivider, NoDragPreview};
 use crate::ui::HebbianApp;
 
-/// 编辑区默认宽度，与原前端 `VIEWER_DEFAULT_WIDTH` 一致。
-const DEFAULT_WIDTH: f32 = 700.0;
+/// 编辑区默认 / 最小 / 最大宽度，与原前端的 VIEWER_* 常量一致。
+pub const DEFAULT_WIDTH: f32 = 700.0;
+pub const MIN_WIDTH: f32 = 360.0;
+pub const MAX_WIDTH: f32 = 1100.0;
 
 /// 按扩展名猜语言。猜不出来就按纯文本走——高亮不对不如不高亮。
 pub fn language_for(path: &Path) -> &'static str {
@@ -68,12 +70,37 @@ pub fn render(
 
     Some(
         v_flex()
-            .w(px(DEFAULT_WIDTH))
+            .relative()
+            .w(px(app.editor_width))
             .flex_none()
             .h_full()
             .border_l_1()
             .border_color(theme.line)
             .bg(theme.card_strong)
+            // 左边缘拖拽改宽：右边缘固定，往左拖变宽（与原前端方向一致）。
+            .child(
+                div()
+                    .id("editor-resize")
+                    .absolute()
+                    .left(px(0.))
+                    .top(px(0.))
+                    .w(px(4.))
+                    .h_full()
+                    .cursor_col_resize()
+                    .hover(|this| this.bg(theme.accent_soft))
+                    .on_drag(EditorDivider, |_, _, _, cx| cx.new(|_| NoDragPreview))
+                    .on_drag_move(cx.listener(
+                        |this, e: &gpui::DragMoveEvent<EditorDivider>, _, cx| {
+                            let delta = e.bounds.origin.x - e.event.position.x;
+                            let next = (this.editor_width + f32::from(delta))
+                                .clamp(MIN_WIDTH, MAX_WIDTH);
+                            if (next - this.editor_width).abs() > 0.5 {
+                                this.editor_width = next;
+                                cx.notify();
+                            }
+                        },
+                    )),
+            )
             .child(tab_bar(&theme, name, dir, cx))
             .child(
                 div()

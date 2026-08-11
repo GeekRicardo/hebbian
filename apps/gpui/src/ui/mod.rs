@@ -42,6 +42,10 @@ pub struct HebbianApp {
     pub settings_tab: settings::SettingsTab,
     /// 右侧工作台当前显示哪个面板。
     pub workbench: right_panel::Workbench,
+    /// 编辑区与右侧工作台的宽度。只活在本次运行里，重启回默认——
+    /// 与原前端「宽度不持久化」一致。
+    pub editor_width: f32,
+    pub right_width: f32,
 
     /// 编辑区的代码编辑器实体。语言在建实例时定死，所以换文件要换实例。
     pub editor: Option<Entity<InputState>>,
@@ -139,6 +143,8 @@ impl HebbianApp {
             settings_open: false,
             settings_tab: settings::SettingsTab::General,
             workbench: right_panel::Workbench::Files,
+            editor_width: editor::DEFAULT_WIDTH,
+            right_width: right_panel::DEFAULT_WIDTH,
             editor: None,
             composer,
             search,
