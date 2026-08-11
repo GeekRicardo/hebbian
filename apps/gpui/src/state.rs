@@ -88,6 +88,9 @@ pub struct AppState {
     pub search_regex: bool,
     pub collapsed: HashSet<String>,
 
+    /// 可用 skill（`//` 命令面板）。
+    pub skills: Vec<agent_core::tools::skill::Skill>,
+
     /// 工作目录的 git 状态。`None` = 还没读或不是仓库。
     pub git: Option<agent_core::git_scm::GitProjectStatus>,
 
@@ -131,6 +134,7 @@ impl AppState {
             search_case: false,
             search_regex: false,
             collapsed: HashSet::new(),
+            skills: Vec::new(),
             git: None,
             open_file: None,
             todos: Vec::new(),
@@ -172,7 +176,8 @@ impl AppState {
                 if let Some(workdir) = session.workdir.clone() {
                     self.expanded_dirs.insert(workdir.clone());
                     self.core.list_dir(workdir.clone());
-                    self.core.refresh_git(workdir);
+                    self.core.refresh_git(workdir.clone());
+                    self.core.refresh_skills(workdir);
                 }
                 self.current = Some(session);
             }
@@ -184,6 +189,9 @@ impl AppState {
             }
             CoreUpdate::Providers(providers) => {
                 self.providers = providers;
+            }
+            CoreUpdate::Skills(skills) => {
+                self.skills = skills;
             }
             CoreUpdate::GitStatus(status) => {
                 self.git = status.map(|s| *s);

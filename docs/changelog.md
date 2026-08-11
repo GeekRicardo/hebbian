@@ -11899,3 +11899,14 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: xdotool 点齿轮后截图，弹窗内容与当前对话一致。
 - **留尾巴**: 只读，没有下拉/输入表单与保存；「允许访问的路径」只显示条数没有展开列表；Skills / 规则两段还没搬。
+
+### 2026-08-11 — gpui surface：输入框的 `//` 命令面板与文件引用按钮接上真实动作
+
+- **Why**: 输入框左侧的 `+` 与 `/` 两个按钮此前点了**静默无反应**——这是最糟的一类「看着能用其实不能」。
+- **改动**:
+  - `apps/gpui/src/ui/chat.rs`: `/` 打开命令面板，内置命令按架构 §8.2 表 A 列出（`//hands-off` / `//run-mode` / `//goal`，说明用人话写而不是抄字段名），下面是「Skills」分组，来自 `CoreClient::list_skills(workdir)` 的已启用 skill（显示 frontmatter 的 description）。选中只把命令填进输入框、不直接发——多数命令还要补参数，与原前端一致。
+  - `apps/gpui/src/ui/mod.rs`: `+` 打开系统文件选择器（可多选），选中的路径以 `@路径` 形式追加进输入框——这是 core 侧已支持的引用写法，不需要另开附件通道。异步回调里拿不到 `Window`，所以先把文本存进 `pending_composer_text`，下一次 render 落地。
+  - `apps/gpui/src/core.rs` / `state.rs`: 新增 `refresh_skills`，打开会话时连同目录树、git 一起预取。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: 造两个 skill 后 xdotool 点 `/` → 面板列出 3 条内置命令 + 2 个 skill（带描述）；点 `//goal` → 输入框变成 `//goal `、面板关闭。
+- **留尾巴**: 命令只是填进输入框，本地派发（`//hands-off` 真正切 force_automode 等）还没接；`@路径` 只是文本，没有附件 chip 的可视化与删除。

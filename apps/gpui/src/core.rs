@@ -40,6 +40,8 @@ pub enum CoreUpdate {
     Settings(Box<agent_core::storage::settings::Settings>),
     /// 供应商列表刷新完成（模型选择器用）。
     Providers(Vec<model_gateway::config::Provider>),
+    /// 可用的 skill 列表（`//` 命令面板用）。
+    Skills(Vec<agent_core::tools::skill::Skill>),
     /// git 状态读完了。`None` 表示这个目录不是 git 仓库。
     GitStatus(Option<Box<agent_core::git_scm::GitProjectStatus>>),
     /// 某个文件读完了（编辑区打开）。
@@ -156,6 +158,16 @@ impl Core {
                 Ok(file) => this.emit(CoreUpdate::Providers(file.providers)),
                 Err(err) => this.emit_err(err),
             }
+        });
+    }
+
+    /// 读一次可用 skill。三层目录（全局 / 项目 / 工作区）由 core 统一合并，
+    /// 这里只负责把结果搬给 UI。
+    pub fn refresh_skills(&self, workdir: PathBuf) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let skills = this.local_client().list_skills(&workdir);
+            this.emit(CoreUpdate::Skills(skills));
         });
     }
 

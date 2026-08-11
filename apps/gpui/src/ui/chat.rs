@@ -831,6 +831,127 @@ fn composer(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement 
         .child(info_row(app))
 }
 
+/// 输入框工具条上的一个小按钮。
+fn composer_tool(
+    theme: &crate::theme::Theme,
+    icon: Icon,
+    id: &'static str,
+) -> gpui::Stateful<gpui::Div> {
+    let theme = theme.clone();
+    h_flex()
+        .id(id)
+        .h(px(26.))
+        .px(px(4.))
+        .gap(px(5.))
+        .rounded(px(6.))
+        .text_color(theme.faint)
+        .cursor_pointer()
+        .hover(|this| this.bg(theme.accent_soft).text_color(theme.accent))
+        .child(icon.el(px(14.), theme.faint))
+}
+
+/// `//` 命令面板。内置控制命令（架构 §8.2 表 A）+ 已启用的 skill（表 B）。
+/// 选中后把命令文本填进输入框，让用户补参数再发——与原前端一致。
+fn slash_menu(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> Option<impl IntoElement> {
+    if !app.slash_open {
+        return None;
+    }
+    let theme = app.theme.clone();
+
+    /// (命令, 说明)。与架构 §8.2 表 A 登记的一致。
+    const BUILTINS: [(&str, &str); 3] = [
+        ("//hands-off", "放手跑：本对话内自动放行，跑完再回来看"),
+        ("//run-mode", "切换这个对话的运行模式"),
+        ("//goal", "给这个对话挂一个完成条件，没达成就自动接着跑"),
+    ];
+
+    let mut list = v_flex()
+        .id("slash-list")
+        .max_h(px(320.))
+        .overflow_y_scroll();
+
+    list = list.child(section_title(&theme, "命令"));
+    for (cmd, desc) in BUILTINS {
+        list = list.child(slash_row(app, cx, cmd.to_string(), desc.to_string()));
+    }
+
+    let enabled: Vec<_> = app.state.skills.iter().filter(|s| s.enabled).collect();
+    if !enabled.is_empty() {
+        list = list.child(section_title(&theme, "Skills"));
+        for skill in enabled {
+            let name = skill.alias.clone().unwrap_or_else(|| skill.name.clone());
+            list = list.child(slash_row(
+                app,
+                cx,
+                format!("//{name}"),
+                skill.description.clone(),
+            ));
+        }
+    }
+
+    Some(
+        v_flex()
+            .absolute()
+            .bottom(px(34.))
+            .left(px(0.))
+            .w(px(320.))
+            .rounded(px(14.))
+            .border_1()
+            .border_color(theme.card_line)
+            .bg(theme.card_strong)
+            .shadow(shadow_lifted(gpui::rgba(0x2d3d5324).into()))
+            .child(list),
+    )
+}
+
+fn section_title(theme: &crate::theme::Theme, label: &'static str) -> impl IntoElement {
+    div()
+        .px(px(12.))
+        .py(px(6.))
+        .text_size(px(10.))
+        .text_color(theme.faint)
+        .child(label)
+}
+
+fn slash_row(
+    app: &HebbianApp,
+    cx: &mut Context<HebbianApp>,
+    cmd: String,
+    desc: String,
+) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let fill = cmd.clone();
+    v_flex()
+        .id(gpui::SharedString::from(format!("slash-{cmd}")))
+        .px(px(12.))
+        .py(px(6.))
+        .cursor_pointer()
+        .hover(|this| this.bg(theme.accent_soft))
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(theme.text)
+                .child(cmd),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(theme.muted)
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(desc),
+        )
+        .on_click(cx.listener(move |this, _, window, cx| {
+            // 只填命令不直接发：多数命令还要补参数。
+            this.composer.update(cx, |state, cx| {
+                state.set_value(format!("{fill} "), window, cx);
+            });
+            this.slash_open = false;
+            cx.notify();
+        }))
+}
+
 /// 模型选择器弹窗。对应 `.model-picker-popup`：256px 宽、18px 圆角、
 /// 供应商一行 38px，展开后列出该供应商的模型（40px 一行）。
 fn model_picker(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> Option<impl IntoElement> {
@@ -1047,19 +1168,6 @@ fn toolbar(
 ) -> impl IntoElement {
     let theme = app.theme.clone();
 
-    let tool = |icon: Icon, id: &'static str| {
-        let theme = theme.clone();
-        h_flex()
-            .id(id)
-            .h(px(26.))
-            .px(px(4.))
-            .gap(px(5.))
-            .rounded(px(6.))
-            .text_color(theme.faint)
-            .cursor_pointer()
-            .hover(|this| this.bg(theme.accent_soft).text_color(theme.accent))
-            .child(icon.el(px(14.), theme.faint))
-    };
 
     h_flex()
         .min_h(px(36.))
@@ -1073,8 +1181,34 @@ fn toolbar(
             h_flex()
                 .gap(px(8.))
                 .min_w_0()
-                .child(tool(Icon::Plus, "attach"))
-                .child(tool(Icon::Slash, "slash"))
+                .child(
+                    composer_tool(&theme, Icon::Plus, "attach").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.pick_attachments(cx);
+                        },
+                    )),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .child(composer_tool(&theme, Icon::Slash, "slash").on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.slash_open = !this.slash_open;
+                                if this.slash_open {
+                                    if let Some(workdir) = this
+                                        .state
+                                        .current
+                                        .as_ref()
+                                        .and_then(|s| s.workdir.clone())
+                                    {
+                                        this.state.core.refresh_skills(workdir);
+                                    }
+                                }
+                                cx.notify();
+                            }),
+                        ))
+                        .children(slash_menu(app, cx)),
+                )
                 .child(
                     div()
                         .relative()

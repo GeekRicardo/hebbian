@@ -38,6 +38,8 @@ pub struct HebbianApp {
     /// 模型选择器是否展开，以及展开着哪个供应商。
     pub model_picker_open: bool,
     pub model_picker_provider: Option<String>,
+    /// `//` 命令面板是否展开。
+    pub slash_open: bool,
     /// 对话设置弹窗是否打开。
     pub session_settings_open: bool,
     /// 设置面板是否打开、停在哪一页。
@@ -52,6 +54,10 @@ pub struct HebbianApp {
 
     /// 编辑区的代码编辑器实体。语言在建实例时定死，所以换文件要换实例。
     pub editor: Option<Entity<InputState>>,
+
+    /// 下一帧要写进输入框的文本。异步回调里拿不到 `Window`，
+    /// 所以先存起来，render 时再写进去。
+    pub pending_composer_text: Option<String>,
 
     pub composer: Entity<InputState>,
     pub search: Entity<InputState>,
@@ -143,6 +149,7 @@ impl HebbianApp {
             right_collapsed: false,
             model_picker_open: false,
             model_picker_provider: None,
+            slash_open: false,
             session_settings_open: false,
             settings_open: false,
             settings_tab: settings::SettingsTab::General,
@@ -150,6 +157,7 @@ impl HebbianApp {
             editor_width: editor::DEFAULT_WIDTH,
             right_width: right_panel::DEFAULT_WIDTH,
             editor: None,
+            pending_composer_text: None,
             composer,
             search,
             focus: cx.focus_handle(),
@@ -189,6 +197,38 @@ impl HebbianApp {
         .detach();
     }
 
+    /// 选文件当附件。选中的路径以 `@路径` 形式追加进输入框——
+    /// 这是 core 侧已经支持的引用写法，不需要单独的附件通道。
+    pub fn pick_attachments(&mut self, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("选择要引用的文件".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                let refs = paths
+                    .iter()
+                    .map(|p| format!("@{}", p.display()))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let current = this.composer.read(cx).value().to_string();
+                let next = if current.trim().is_empty() {
+                    format!("{refs} ")
+                } else {
+                    format!("{current} {refs} ")
+                };
+                cx.notify();
+                this.pending_composer_text = Some(next);
+            });
+        })
+        .detach();
+    }
+
     /// 发送输入框里的内容。空白不发；发完清空。
     pub fn send_current_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(session_id) = self.state.current_id().map(str::to_string) else {
@@ -215,6 +255,11 @@ impl Focusable for HebbianApp {
 
 impl Render for HebbianApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 异步回调攒下来的输入框文本在这里落地——那边没有 Window 可用。
+        if let Some(text) = self.pending_composer_text.take() {
+            self.composer
+                .update(cx, |state, cx| state.set_value(text, window, cx));
+        }
         let theme = self.theme.clone();
         div()
             .id("dsp-shell")
