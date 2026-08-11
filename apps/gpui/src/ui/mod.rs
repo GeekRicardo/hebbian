@@ -57,6 +57,13 @@ pub struct HebbianApp {
     pub title_editing: bool,
     /// 标题输入框。
     pub title_input: Entity<InputState>,
+    /// 多选提问已勾选的选项（按勾选顺序）。
+    pub question_picked: Vec<String>,
+    /// 提问的「其他回答」自由输入。
+    pub question_custom: Entity<InputState>,
+    /// 审批卡片上「拒绝并说明」展开的反馈输入。
+    pub deny_feedback_open: bool,
+    pub deny_feedback: Entity<InputState>,
     /// 思考强度下拉是否展开。
     pub reasoning_open: bool,
     /// 运行模式下拉是否展开。
@@ -111,6 +118,15 @@ impl HebbianApp {
         let title_input = cx.new(|cx| InputState::new(window, cx).placeholder("对话标题"));
         let url_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("localhost:5173"));
+        let question_custom = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("或者直接写你的回答")
+        });
+        let deny_feedback = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .auto_grow(2, 4)
+                .placeholder("说明为什么拒绝，这段话会回给模型")
+        });
 
         // 输入框回车即发送。Shift+Enter 由 InputState 自己插换行，不会走到这里。
         cx.subscribe_in(
@@ -242,6 +258,10 @@ impl HebbianApp {
             dragging_project: None,
             title_editing: false,
             title_input,
+            question_picked: Vec::new(),
+            question_custom,
+            deny_feedback_open: false,
+            deny_feedback,
             reasoning_open: false,
             run_mode_open: false,
             slash_open: false,

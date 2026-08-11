@@ -741,6 +741,13 @@ fn tool_chip(app: &HebbianApp, name: &str, done: bool, is_error: bool) -> impl I
 }
 
 /// 工具审批卡片（架构 §4.5 HITL）。
+///
+/// 按钮集与原前端 `PermissionApprovalPopup` 的主行一致：**允许此次 / 拒绝并说明 / 拒绝**。
+///
+/// **刻意不放「本对话允许」那种一键记忆按钮**：原 UI 的「记住」走的是二级区——
+/// 先让用户勾选具体 pattern 再选 scope，就是为了避免在 Bash 上按工具名整体放行
+/// （那样后续 `rm -rf /` 也会免审批）。这里没实现 pattern 多选，就不提供退化成
+/// 工具名级的快捷放行，宁可少一个按钮也不放宽审批面。
 fn approval_card(
     app: &HebbianApp,
     cx: &mut Context<HebbianApp>,
@@ -749,22 +756,28 @@ fn approval_card(
     let theme = app.theme.clone();
     let session_id = app.state.current_id().unwrap_or_default().to_string();
 
-    let button = |label: &'static str, decision: protocol::ApprovalDecision, primary: bool| {
-        let theme = theme.clone();
-        let session_id = session_id.clone();
+    let button = |label: &'static str,
+                  decision: protocol::ApprovalDecision,
+                  primary: bool,
+                  danger: bool,
+                  theme: crate::theme::Theme,
+                  session_id: String| {
         h_flex()
             .id(label)
+            .h(px(32.))
             .px(px(12.))
-            .h(px(30.))
+            .gap(px(6.))
             .rounded(px(8.))
-            .text_size(px(12.))
+            .text_size(px(13.))
             .cursor_pointer()
             .when(primary, |this| {
                 this.bg(theme.accent).text_color(gpui::white())
             })
-            .when(!primary, |this| {
-                this.border_1().border_color(theme.line).text_color(theme.muted)
+            .when(danger, |this| {
+                this.bg(crate::theme::with_alpha(theme.danger, 0.12))
+                    .text_color(theme.danger)
             })
+            .when(!primary && !danger, |this| this.text_color(theme.muted))
             .child(label)
             .on_click(cx.listener(move |this, _, _, cx| {
                 if let Some(pending) = this.state.take_approval(&session_id) {
@@ -774,6 +787,7 @@ fn approval_card(
                         decision.clone(),
                     );
                 }
+                this.deny_feedback_open = false;
                 cx.notify();
             }))
     };
@@ -801,28 +815,113 @@ fn approval_card(
                 .text_color(theme.muted)
                 .child(pending.summary.clone()),
         )
+        // 「拒绝并说明」展开后先填理由再提交——这段话会回灌给模型。
+        .when(app.deny_feedback_open, |this| {
+            this.child(
+                div()
+                    .p(px(8.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(theme.line)
+                    .text_size(px(12.))
+                    .child(gpui_component::input::Input::new(&app.deny_feedback)),
+            )
+        })
         .child(
             h_flex()
                 .gap(px(8.))
-                .child(button(
-                    "允许一次",
-                    protocol::ApprovalDecision::AllowOnce,
-                    true,
-                ))
-                .child(button(
-                    "本对话允许",
-                    protocol::ApprovalDecision::AllowAndRemember {
-                        scope: protocol::PermissionScope::Session,
-                        pattern: None,
-                        extra_patterns: Vec::new(),
-                    },
-                    false,
-                ))
-                .child(button("拒绝", protocol::ApprovalDecision::Deny, false)),
+                .when(!app.deny_feedback_open, |row| {
+                    row.child(button(
+                        "允许此次",
+                        protocol::ApprovalDecision::AllowOnce,
+                        true,
+                        false,
+                        theme.clone(),
+                        session_id.clone(),
+                    ))
+                    .child(div().flex_1())
+                    .child(
+                        h_flex()
+                            .id("deny-with-feedback")
+                            .h(px(32.))
+                            .px(px(12.))
+                            .rounded(px(8.))
+                            .text_size(px(13.))
+                            .text_color(theme.muted)
+                            .cursor_pointer()
+                            .hover(|this| this.bg(theme.accent_soft))
+                            .child("拒绝并说明")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.deny_feedback_open = true;
+                                this.deny_feedback
+                                    .update(cx, |state, cx| state.focus(window, cx));
+                                cx.notify();
+                            })),
+                    )
+                    .child(button(
+                        "拒绝",
+                        protocol::ApprovalDecision::Deny,
+                        false,
+                        true,
+                        theme.clone(),
+                        session_id.clone(),
+                    ))
+                })
+                .when(app.deny_feedback_open, |row| {
+                    let sid = session_id.clone();
+                    let theme2 = theme.clone();
+                    row.child(
+                        h_flex()
+                            .id("cancel-feedback")
+                            .h(px(32.))
+                            .px(px(12.))
+                            .rounded(px(8.))
+                            .text_size(px(13.))
+                            .text_color(theme.muted)
+                            .cursor_pointer()
+                            .child("取消")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.deny_feedback_open = false;
+                                cx.notify();
+                            })),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        h_flex()
+                            .id("submit-feedback")
+                            .h(px(32.))
+                            .px(px(12.))
+                            .rounded(px(8.))
+                            .bg(crate::theme::with_alpha(theme2.danger, 0.12))
+                            .text_color(theme2.danger)
+                            .text_size(px(13.))
+                            .cursor_pointer()
+                            .child("提交拒绝")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let feedback =
+                                    this.deny_feedback.read(cx).value().trim().to_string();
+                                if let Some(pending) = this.state.take_approval(&sid) {
+                                    this.state.core.resolve_approval(
+                                        sid.clone(),
+                                        pending.request_id,
+                                        protocol::ApprovalDecision::DenyWithFeedback {
+                                            feedback,
+                                        },
+                                    );
+                                }
+                                this.deny_feedback_open = false;
+                                cx.notify();
+                            })),
+                    )
+                }),
         )
 }
 
 /// 模型提问卡片。
+///
+/// 按原前端 `UserQuestionPopup` 对齐：单选点一下即回答；多选勾完点「提交」；
+/// 另有「其他回答」自由输入与「取消」（取消 = `UserAnswer::Cancelled`，
+/// 让模型知道用户主动放弃了这轮提问，而不是干等）。
 fn question_card(
     app: &HebbianApp,
     cx: &mut Context<HebbianApp>,
@@ -830,37 +929,71 @@ fn question_card(
 ) -> impl IntoElement {
     let theme = app.theme.clone();
     let session_id = app.state.current_id().unwrap_or_default().to_string();
+    let multi = question.multi;
 
     let mut options = v_flex().gap(px(6.));
     for option in &question.options {
         let label = option.label.clone();
-        let session_id = session_id.clone();
+        let sid = session_id.clone();
+        let picked = app.question_picked.contains(&label);
+        let label_for_click = label.clone();
         options = options.child(
-            div()
+            h_flex()
                 .id(gpui::SharedString::from(format!("opt-{label}")))
                 .px(px(12.))
                 .py(px(8.))
+                .gap(px(8.))
                 .rounded(px(8.))
                 .border_1()
-                .border_color(theme.line)
+                .border_color(if picked { theme.accent } else { theme.line })
+                .when(picked, |this| this.bg(theme.accent_soft))
                 .text_size(px(12.))
                 .cursor_pointer()
                 .hover(|this| this.bg(theme.accent_soft))
+                // 多选时给一个勾选指示，否则看不出已选了哪些。
+                .when(multi, |this| {
+                    this.child(
+                        div()
+                            .size(px(12.))
+                            .flex_none()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(if picked { theme.accent } else { theme.line })
+                            .when(picked, |this| this.bg(theme.accent)),
+                    )
+                })
                 .child(label.clone())
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(pending) = this.state.take_question(&session_id) {
+                    if multi {
+                        // 多选只切换勾选状态，等用户点「提交」再一次性回答。
+                        if let Some(i) =
+                            this.question_picked.iter().position(|l| l == &label_for_click)
+                        {
+                            this.question_picked.remove(i);
+                        } else {
+                            this.question_picked.push(label_for_click.clone());
+                        }
+                        cx.notify();
+                        return;
+                    }
+                    if let Some(pending) = this.state.take_question(&sid) {
                         this.state.core.answer_question(
-                            session_id.clone(),
+                            sid.clone(),
                             pending.request_id,
                             protocol::UserAnswer::Selected {
-                                label: label.clone(),
+                                label: label_for_click.clone(),
                             },
                         );
                     }
+                    this.question_picked.clear();
                     cx.notify();
                 })),
         );
     }
+
+    let sid_submit = session_id.clone();
+    let sid_custom = session_id.clone();
+    let sid_cancel = session_id.clone();
 
     v_flex()
         .mx_auto()
@@ -880,6 +1013,107 @@ fn question_card(
                 .child(question.question.clone()),
         )
         .child(options)
+        .child(
+            h_flex()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .flex_1()
+                        .px(px(10.))
+                        .py(px(6.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(theme.line)
+                        .text_size(px(12.))
+                        .child(gpui_component::input::Input::new(&app.question_custom)),
+                )
+                .child(
+                    h_flex()
+                        .id("answer-custom")
+                        .h(px(30.))
+                        .px(px(12.))
+                        .rounded(px(8.))
+                        .bg(theme.accent)
+                        .text_color(gpui::white())
+                        .text_size(px(12.))
+                        .cursor_pointer()
+                        .child("发送")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let text = this.question_custom.read(cx).value().trim().to_string();
+                            if text.is_empty() {
+                                return;
+                            }
+                            if let Some(pending) = this.state.take_question(&sid_custom) {
+                                this.state.core.answer_question(
+                                    sid_custom.clone(),
+                                    pending.request_id,
+                                    protocol::UserAnswer::Custom { text },
+                                );
+                            }
+                            this.question_custom
+                                .update(cx, |state, cx| state.set_value("", window, cx));
+                            this.question_picked.clear();
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(
+            h_flex()
+                .gap(px(8.))
+                .child(
+                    h_flex()
+                        .id("answer-cancel")
+                        .h(px(30.))
+                        .px(px(12.))
+                        .rounded(px(8.))
+                        .text_size(px(12.))
+                        .text_color(theme.muted)
+                        .cursor_pointer()
+                        .hover(|this| this.bg(theme.accent_soft))
+                        .child("取消")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(pending) = this.state.take_question(&sid_cancel) {
+                                this.state.core.answer_question(
+                                    sid_cancel.clone(),
+                                    pending.request_id,
+                                    protocol::UserAnswer::Cancelled,
+                                );
+                            }
+                            this.question_picked.clear();
+                            cx.notify();
+                        })),
+                )
+                .child(div().flex_1())
+                .when(multi, |row| {
+                    row.child(
+                        h_flex()
+                            .id("answer-submit")
+                            .h(px(30.))
+                            .px(px(14.))
+                            .rounded(px(8.))
+                            .bg(theme.accent)
+                            .text_color(gpui::white())
+                            .text_size(px(12.))
+                            .cursor_pointer()
+                            .child(format!("提交（已选 {}）", app.question_picked.len()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if this.question_picked.is_empty() {
+                                    return;
+                                }
+                                let labels = this.question_picked.clone();
+                                if let Some(pending) = this.state.take_question(&sid_submit) {
+                                    this.state.core.answer_question(
+                                        sid_submit.clone(),
+                                        pending.request_id,
+                                        protocol::UserAnswer::SelectedMulti { labels },
+                                    );
+                                }
+                                this.question_picked.clear();
+                                cx.notify();
+                            })),
+                    )
+                }),
+        )
 }
 
 /// `.dsp-composer`：输入框 + 底部工具条。
