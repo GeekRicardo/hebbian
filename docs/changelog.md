@@ -11970,3 +11970,14 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: 给 fixture 会话挂上目标并造一份 plan——目标面板显示条件 / 3 轮 / 判定原因，计划面板正确渲染标题、有序列表与引用块。
 - **留尾巴**: 计划不能就地编辑或加批注（原前端有 plan comments）；目标不能在面板里清除。
+
+### 2026-08-11 — gpui surface 加内置终端（alacritty_terminal + portable-pty）
+
+- **Why**: 终端是工作台里最后一块「大件」，也是调试时最常用的。
+- **改动**:
+  - `apps/gpui/src/terminal.rs`（新）: **ANSI 解析、屏幕网格、滚动回看全部交给 `alacritty_terminal`**，PTY 由它的 `tty` 模块起。**刻意不手写 ANSI 状态机**——颜色、光标移动、清屏这些手写必然出错，一个会显示乱码的终端比没有终端更糟。本模块只做三件事：起 shell（取 `$SHELL`，没有退回 `/bin/sh`，工作目录用当前对话的 workdir）、把网格读成「同色段」（一段一个元素，不是一字符一个元素）、把 xterm 256 色板映射成 RGB。语义色（Foreground / Background）故意返回 None 交给主题决定，否则深浅主题切换时终端文字会和背景撞色。
+  - `apps/gpui/src/ui/right_panel.rs`: 终端面板画网格 + 转发按键。回车 / 退格 / Tab / Esc / 方向键 / Ctrl-字母 单独翻成控制字节（Ctrl-C 中断靠这条），其余取 `key_char`。
+  - `apps/gpui/src/ui/mod.rs`: 第一次打开终端才起 shell；起来后开一条 50ms 轮询把新输出刷上屏（alacritty 的事件循环在自己的线程里，我们只能问「脏了没」）——对交互式输入足够跟手又不空转烧 CPU。
+- **影响范围**: 仅 `apps/gpui`。新增两个依赖 `alacritty_terminal` / `portable-pty`（后者本就是 desktop 的依赖）。
+- **验证**: 打开终端面板 → 点一下 → 敲 `echo hello-from-gpui` 回车。截图显示真实 zsh 会话：带色的 `→ chroma git:(master) ✗` 提示符、命令回显、输出、新提示符，颜色与命令行里一致。**顺带修掉一个自己的布局错**：状态行没写 `flex_none`，被 `flex_1` 的屏幕区挤成 0 高，导致第一次截图整个面板看着是空的。
+- **留尾巴**: 尺寸写死 100×30，不跟面板宽度联动（需要按字符宽度算列数再 `resize`）；没有选中 / 复制 / 粘贴；没有多标签；关闭面板不会杀 shell（进程留到退出应用）。

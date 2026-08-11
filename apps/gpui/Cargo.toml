@@ -25,6 +25,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 regex = "1"
+# 终端：alacritty_terminal 负责 ANSI 解析与屏幕网格，portable-pty 负责起 shell。
+# 不自己解析 ANSI——颜色、光标移动、清屏这些手写必然出错，出错的终端比没有更糟。
+alacritty_terminal = "0.25"
+portable-pty = "0.8"
 dirs = "5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

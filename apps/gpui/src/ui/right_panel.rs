@@ -174,6 +174,7 @@ fn panel(
             Workbench::Git => git_panel(app, cx).into_any_element(),
             Workbench::Target => target_panel(app).into_any_element(),
             Workbench::Plan => plan_panel(app, window, cx).into_any_element(),
+            Workbench::Terminal => terminal_panel(app, cx).into_any_element(),
             other => empty_panel(app, other).into_any_element(),
         })
 }
@@ -616,6 +617,106 @@ fn plan_panel(
     list.into_any_element()
 }
 
+/// 终端面板。ANSI 与网格由 alacritty_terminal 处理，这里只画网格 + 转发按键。
+fn terminal_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let Some(session) = app.terminal.as_ref() else {
+        return div()
+            .id("terminal-start")
+            .p(px(14.))
+            .text_size(px(12.))
+            .text_color(theme.muted)
+            .cursor_pointer()
+            .child("点这里在当前对话的工作目录起一个终端")
+            .on_click(cx.listener(|this, _, _, cx| this.ensure_terminal(cx)))
+            .into_any_element();
+    };
+
+    let mut screen = v_flex()
+        .id("terminal-screen")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .p(px(8.))
+        .font_family("monospace")
+        .text_size(px(11.))
+        .line_height(px(16.));
+
+    for line in session.visible_lines() {
+        let mut row = h_flex().h(px(16.));
+        for span in line {
+            let color = span
+                .fg
+                .map(|(r, g, b)| gpui::rgb(((r as u32) << 16) | ((g as u32) << 8) | b as u32).into())
+                .unwrap_or(theme.text);
+            row = row.child(
+                div()
+                    .text_color(color)
+                    .when(span.bold, |this| {
+                        this.font_weight(gpui::FontWeight(700.))
+                    })
+                    .child(span.text),
+            );
+        }
+        screen = screen.child(row);
+    }
+
+    v_flex()
+        .flex_1()
+        .min_h_0()
+        .track_focus(&app.terminal_focus)
+        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+            let Some(term) = this.terminal.clone() else {
+                return;
+            };
+            // 把按键翻成 PTY 字节。控制键单独处理，其余取 key_char。
+            let keystroke = &event.keystroke;
+            let bytes: Vec<u8> = match keystroke.key.as_str() {
+                "enter" => vec![b'\r'],
+                "backspace" => vec![0x7f],
+                "tab" => vec![b'\t'],
+                "escape" => vec![0x1b],
+                "up" => b"\x1b[A".to_vec(),
+                "down" => b"\x1b[B".to_vec(),
+                "right" => b"\x1b[C".to_vec(),
+                "left" => b"\x1b[D".to_vec(),
+                key if keystroke.modifiers.control && key.len() == 1 => {
+                    // Ctrl-A..Ctrl-Z → 0x01..0x1a，Ctrl-C 中断就靠这条。
+                    let c = key.as_bytes()[0].to_ascii_lowercase();
+                    if c.is_ascii_lowercase() {
+                        vec![c - b'a' + 1]
+                    } else {
+                        Vec::new()
+                    }
+                }
+                _ => keystroke
+                    .key_char
+                    .as_ref()
+                    .map(|s| s.as_bytes().to_vec())
+                    .unwrap_or_default(),
+            };
+            if !bytes.is_empty() {
+                term.write(bytes);
+                cx.notify();
+            }
+        }))
+        .child(screen)
+        .child(
+            h_flex()
+                .h(px(22.))
+                .flex_none()
+                .px(px(8.))
+                .text_size(px(10.))
+                .text_color(theme.faint)
+                .child(if session.has_exited() {
+                    "shell 已退出".to_string()
+                } else {
+                    format!("{}×{} · 点一下再打字", session.cols, session.rows)
+                }),
+        )
+        .into_any_element()
+}
+
 /// 还没搬过来的面板：给出这块将来放什么，而不是一片空白。
 fn empty_panel(app: &HebbianApp, item: Workbench) -> impl IntoElement {
     let theme = app.theme.clone();
@@ -818,6 +919,9 @@ fn rail(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
                     } else {
                         this.workbench = item;
                         this.right_collapsed = false;
+                        if item == Workbench::Terminal {
+                            this.ensure_terminal(cx);
+                        }
                     }
                     cx.notify();
                 })),

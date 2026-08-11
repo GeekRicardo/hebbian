@@ -9,6 +9,7 @@ mod core;
 mod diff;
 mod prefs;
 mod state;
+mod terminal;
 mod theme;
 mod ui;
 

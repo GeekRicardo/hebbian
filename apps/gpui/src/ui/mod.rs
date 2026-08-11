@@ -38,6 +38,11 @@ pub struct HebbianApp {
     /// 模型选择器是否展开，以及展开着哪个供应商。
     pub model_picker_open: bool,
     pub model_picker_provider: Option<String>,
+    /// 内置终端会话。第一次打开终端面板时才起 shell。
+    pub terminal: Option<std::rc::Rc<crate::terminal::TerminalSession>>,
+    /// 终端的焦点句柄——键盘输入要转发进 PTY。
+    pub terminal_focus: FocusHandle,
+
     /// 本机 UI 偏好（项目排序 / 折叠）。
     pub prefs: crate::prefs::UiPrefs,
     /// 正在拖的项目 id 与已经拖过的行数——用来预览让位。
@@ -206,6 +211,8 @@ impl HebbianApp {
             right_collapsed: false,
             model_picker_open: false,
             model_picker_provider: None,
+            terminal: None,
+            terminal_focus: cx.focus_handle(),
             prefs,
             dragging_project: None,
             title_editing: false,
@@ -258,6 +265,46 @@ impl HebbianApp {
             });
         })
         .detach();
+    }
+
+    /// 打开终端面板时按需起一个 shell，并开一条轮询把新输出刷上屏。
+    ///
+    /// alacritty 的事件循环跑在它自己的线程里，我们只能问「脏了没」。
+    /// 50ms 一次对交互式输入足够跟手，又不至于空转烧 CPU。
+    pub fn ensure_terminal(&mut self, cx: &mut Context<Self>) {
+        if self.terminal.is_some() {
+            return;
+        }
+        let cwd = self.state.current.as_ref().and_then(|s| s.workdir.clone());
+        match crate::terminal::TerminalSession::spawn(cwd, 100, 30) {
+            Ok(session) => {
+                self.terminal = Some(std::rc::Rc::new(session));
+                cx.spawn(async move |this, cx| loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(50))
+                        .await;
+                    let keep = this
+                        .update(cx, |this, cx| match this.terminal.as_ref() {
+                            Some(term) => {
+                                if term.take_dirty() {
+                                    cx.notify();
+                                }
+                                true
+                            }
+                            None => false,
+                        })
+                        .unwrap_or(false);
+                    if !keep {
+                        break;
+                    }
+                })
+                .detach();
+            }
+            Err(err) => {
+                self.state.error = Some(format!("起不了终端：{err}"));
+            }
+        }
+        cx.notify();
     }
 
     /// 记一次界面偏好（项目顺序 / 折叠）。改动即写盘，量很小。
