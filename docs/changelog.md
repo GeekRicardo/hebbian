@@ -11778,3 +11778,26 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
   - **agent_loop 测试需 mock model server**：`agent_loop::tests::` 下的集成测试跑完整 `run_agent` 循环，需要 mock model API，在本机环境会卡住。编译通过 + 纯函数测试通过 = 逻辑没回归，但完整集成测试未在本轮验证。
   - **Loop 内部结构重构未做**：计划中提到把 `dispatch.rs` (4,547行) 逻辑内联进 `run_agent`、精简 `harness.rs` 的 observer 层，本轮只做了命名对齐。内部结构重构风险高、需要逐步搬入 + 每步验证，留作后续独立 PR。
   - **WireEvent → TS 类型自动生成未做**：当前仍是手写镜像，靠注释提醒同步。后续可从 `WireEvent` serde schema 自动生成 TS 类型，彻底消除手写漂移。
+
+### 2026-08-11 — 新增 gpui 原生 GUI surface（apps/gpui），启动去 Tauri 化的前端重写
+
+- **Why**: 用户明确要求「用 gpui 重写前端，不用 tauri 了，占用资源太重」，并要求**视觉与交互与现 Desktop 一比一还原**（含截图上没拍到的各类点击展开的小窗口）。Tauri 壳带着 WebView + 整条 Node/Vite/pnpm 前端构建链，运行时内存与打包体积都远高于原生方案；gpui（Zed 的 GPU 加速 UI 框架，2025 已发布到 crates.io）是同语言、同工具链、无 WebView 的替代。
+- **改动**:
+  - `apps/gpui/`（新 crate `hebbian-gpui`）：第四个 surface 的骨架与第一屏可用实现。
+    - `theme.rs`: 把 `desktopShell.css` 的 `--dsp-*` 令牌逐项翻译成 Rust。取值按「CSS 层叠 + React 内联 style」的真实优先级解析——`hueStyle()` 出现过的变量以内联值为准（内联 style 压过任何选择器），其余才落到样式表最后一遍覆写。含 5 个色系预设与 abyss 深色分支。
+    - `assets.rs` + `assets/icons/*.svg`: 46 个与原前端 lucide 同名同形的图标，`include_str!` 编进二进制。自带一份是因为 gpui 需要应用侧提供 `AssetSource`，而 gpui-component 不打包 icons。
+    - `core.rs`: core facade 的薄适配。对话走 `surface-session` 的 `RuntimeRegistry → SessionRuntime`，同步能力走 `agent_core::core_client::LocalCoreClient`；常驻一个 tokio Runtime 跑 core 侧，UI 侧用 `tokio::sync::mpsc` 把 `WireEvent` 拉回 gpui 执行器（mpsc 的 recv 不需要 tokio 上下文，可直接在 gpui 上 await）。
+    - `state.rs`: 单一事实源。落盘消息 + 流式增量分开存，`RunFinished` 后重读 session.jsonl 让流式文本退场，避免「实时拼的文本」与「jsonl 真消息」两份各自演化。
+    - `ui/`: 左侧栏（code/chat 双标签、项目分组与折叠、会话行状态点、搜索、设置 + 色系弹窗）、聊天列（header / 消息流 / 工具胶囊 / 审批与提问卡片 / 输入区 + 底部信息行）、右侧工作台（文件目录面板 + 9 个入口的图标竖条）。
+  - `Cargo.toml`: workspace 增加 `apps/gpui` 成员。
+  - `docs/架构.md`: §2.2 workspace 布局补 `apps/gpui`；§7.2 三 surface 拓扑图补 gpui；§13 追加决策行（含代价与验收标准）。
+- **影响范围**: 纯 additive。**agent-core / surface-session / core-rpc / protocol / storage 一行未动**，desktop / heb / hebweb 行为不变。新 crate 依赖 `gpui 0.2.2` + `gpui-component 0.5.1`（均来自 crates.io）。首次编译会拉约 600 个依赖，`cargo check -p hebbian-gpui` 冷启约 6 分半。
+- **留尾巴**（明确未完成，不要误当已完成）:
+  - **只跑通了 `cargo check` / `cargo test`，没有在真实窗口里跑起来截图比对**——本次开发环境是无显示器的容器（无 X11/Wayland/GPU），gpui 窗口起不来。像素级还原度必须在 macOS 上 `cargo run -p hebbian-gpui` 后对着截图逐项校。
+  - Markdown 渲染、代码块高亮、diff、工具卡片展开、Monaco 编辑区、内置终端 / 浏览器全部未实现，消息正文目前是纯文本。
+  - 弹层只做了色系选择、工具审批、模型提问三个；模型选择器、会话设置、应用设置、导入 Claude、权限规则、Skills/Hooks/Providers 面板等仍是空壳（点了给「搬运中」提示，不是静默无反应）。
+  - 目录选择器（新建 / 导入项目）要接 gpui 的 native 文件对话框，当前是提示占位。
+  - gpui 没有 radial-gradient 与 conic-gradient：聊天区的四层 radial 光晕退化成同色系竖向渐变，色环退化成等价功能的色相条。若要完全还原需自绘元素。
+  - 侧栏的项目拖拽排序、列表高度拖拽、hover 浮出的「从 Claude 导入 / 导出到 Claude」尚未移植。
+  - `apps/desktop` 未删除，两套 UI 并存；切换时机由用户决定。
+- **关联**: 架构 §13「2.2 / 7.2（2026-08-11）」决策行

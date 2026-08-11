@@ -2,6 +2,7 @@
 members = [
     "apps/desktop",
     "apps/native",
+    "apps/gpui",
     "apps/cli",
     "apps/web-server",
     "apps/hebcore",
