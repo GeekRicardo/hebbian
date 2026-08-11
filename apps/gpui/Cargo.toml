@@ -17,7 +17,10 @@ common = { package = "hebbian-common", path = "../../crates/common" }
 protocol = { path = "../../crates/protocol" }
 
 gpui = "0.2.2"
-gpui-component = "0.5.1"
+# webview feature：内置浏览器预览用。它拉的是 wry——
+# 与原 Desktop 的预览面板同一条路子（预览本身就是个浏览器），
+# 不是把整个界面又塞回 WebView 里。
+gpui-component = { version = "0.5.1", features = ["webview"] }
 
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 anyhow = "1"

@@ -1,6 +1,7 @@
 //! 视图层。结构与原 Web 前端一一对应：
 //! `DesktopShell` = 左侧栏 + 聊天列 + 右侧工作台，弹层挂在最外层。
 
+mod browser;
 mod chat;
 mod editor;
 mod hue;
@@ -38,6 +39,10 @@ pub struct HebbianApp {
     /// 模型选择器是否展开，以及展开着哪个供应商。
     pub model_picker_open: bool,
     pub model_picker_provider: Option<String>,
+    /// 内置浏览器预览的 webview 与地址栏输入。
+    pub webview: Option<Entity<gpui_component::webview::WebView>>,
+    pub url_input: Entity<InputState>,
+
     /// 内置终端会话。第一次打开终端面板时才起 shell。
     pub terminal: Option<std::rc::Rc<crate::terminal::TerminalSession>>,
     /// 终端的焦点句柄——键盘输入要转发进 PTY。
@@ -100,6 +105,8 @@ impl HebbianApp {
         let shell_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("留空 = 用系统默认 shell"));
         let title_input = cx.new(|cx| InputState::new(window, cx).placeholder("对话标题"));
+        let url_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("localhost:5173"));
 
         // 输入框回车即发送。Shift+Enter 由 InputState 自己插换行，不会走到这里。
         cx.subscribe_in(
@@ -162,6 +169,18 @@ impl HebbianApp {
         )
         .detach();
 
+        // 地址栏回车即打开。
+        cx.subscribe_in(
+            &url_input,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.open_preview(window, cx);
+                }
+            },
+        )
+        .detach();
+
         // core → UI 的唯一事件泵。mpsc 的 recv 不需要 tokio 运行时上下文，
         // 可以直接在 gpui 执行器上 await。
         cx.spawn_in(window, async move |this, cx| {
@@ -211,6 +230,8 @@ impl HebbianApp {
             right_collapsed: false,
             model_picker_open: false,
             model_picker_provider: None,
+            webview: None,
+            url_input,
             terminal: None,
             terminal_focus: cx.focus_handle(),
             prefs,
@@ -265,6 +286,14 @@ impl HebbianApp {
             });
         })
         .detach();
+    }
+
+    /// 按地址栏里的内容打开预览。
+    pub fn open_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let raw = self.url_input.read(cx).value().to_string();
+        let url = browser::normalize_url(&raw);
+        browser::navigate(self, &url, window, cx);
+        cx.notify();
     }
 
     /// 打开终端面板时按需起一个 shell，并开一条轮询把新输出刷上屏。

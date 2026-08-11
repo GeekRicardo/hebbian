@@ -175,6 +175,7 @@ fn panel(
             Workbench::Target => target_panel(app).into_any_element(),
             Workbench::Plan => plan_panel(app, window, cx).into_any_element(),
             Workbench::Terminal => terminal_panel(app, cx).into_any_element(),
+            Workbench::Browser => crate::ui::browser::panel(app, cx).into_any_element(),
             other => empty_panel(app, other).into_any_element(),
         })
 }

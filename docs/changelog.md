@@ -11989,3 +11989,13 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: 打开 `tools/probe.txt`、在编辑区敲入内容、按 Ctrl+S——磁盘内容确实变了，标签条显示「probe.txt 已保存」。
 - **留尾巴**: 没有「有未保存改动」的标记与关闭时确认；没有外部改动检测（别处改了同一个文件不会提示冲突）。
+
+### 2026-08-11 — gpui surface 加内置浏览器预览面板（wry 子 webview），并拦掉 X11 上的崩溃
+
+- **Why**: 工作台最后一块。**这与「不要 Tauri」不冲突**——用户嫌的是把整个界面塞进 WebView，而预览面板本身就是个浏览器，原 Desktop 的预览也是 wry / CEF；界面主体仍然全是 gpui 原生绘制，只有这一块内容区是网页。
+- **改动**:
+  - `apps/gpui/src/ui/browser.rs`（新）: 开 gpui-component 的 `webview` feature，用它**再导出的那份 wry**（自己再依赖一个 wry 会编出两套互不兼容的 `WebView` 类型，实测报错）。地址栏回车或点「打开」即加载，已有 webview 时走 `load_url` 不重建；输入 `localhost:5173` 这种裸地址自动补 `http://`。
+  - **平台守卫**：子 webview 要拿主窗口原生句柄，而 **gpui 0.2.2 的 X11 后端 `HasWindowHandle::window_handle()` 是 `unimplemented!()`——调下去不是返回错误而是整个进程 panic**（实测点一下「打开」应用直接崩）。macOS（AppKit）与 Wayland 都实现了，所以只在 X11 上拦：Linux 下按 `WAYLAND_DISPLAY` 是否存在判断，拦住时给一句「当前显示服务下还开不了内置浏览器（X11 暂不支持，Wayland 与 macOS 可以）」。宁可少一个功能也不能让点一下就崩。
+- **影响范围**: 仅 `apps/gpui`。开了 `gpui-component/webview` feature，Linux 构建需要 `libwebkit2gtk-4.1-dev`；macOS 用系统 WKWebView，无额外依赖。
+- **验证**: 容器是 X11，正好验到了守卫——加守卫前点「打开」应用 panic 退出，加守卫后应用存活并给出上面那句提示。**webview 真正加载页面这条路径本环境验不了**（X11 拦住了），需要在 macOS 上复核。新增 4 条单测（裸地址补协议 / 显式协议保留 / 空串 / X11 判定为不支持），共 23 条通过。
+- **留尾巴**: 只有地址栏与加载，没有前进后退 / 刷新 / 开发者工具；原 Desktop 的页面注释、元素旁支对话、CDP 截图这些依赖预览的能力都还没搬（「对话」面板即为其中之一，故仍是说明页）。
