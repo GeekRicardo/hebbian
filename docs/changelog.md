@@ -12132,3 +12132,19 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: `common` 加两个函数（additive）+ `apps/gpui`。`hebbian-common` 18 条单测通过，gpui 25 条通过。
 - **验证**: 模型菜单底部出现「思考」开关；关掉后 `session.jsonl` 里 `reasoning.enabled = false`，强度 pill 变灰且点不动、但没消失，可从模型菜单再打开。
 - **留尾巴**: `long_context`（Anthropic 1M 上下文）开关还没做；`apps/desktop` 与 `hebweb` 还没改用 `model_supports_reasoning`（各自仍有判定逻辑）。
+
+### 2026-08-11 — 消息操作行对着源码逐项校正（又抓到四处照截图抄错的地方）
+
+- **Why**: 延续「猜错三个面板」的复盘，把消息气泡底部那行操作按钮拿去和 `MessageBubble.tsx` 逐项对，四处不符：
+  1. **整行该 hover 才显**（原 `opacity-0 group-hover:opacity-100`），我一直是常显；
+  2. **时间当天只显时分**（原 `formatTime`），我一律显月/日；
+  3. **「重新生成」对用户消息也有**（用户那条 title 是「用同样内容重跑」），我只给了助手，用户消息少一个按钮；
+  4. **四个按钮全是死的**——我当初摆的是没有 `on_click` 的 div，看着能点其实点了没反应，与「编造的百分比」是同一类问题。
+- **改动**:
+  - `apps/gpui/src/state.rs`: 加 `format_message_time`（当天时分 / 跨天月日），配单测。
+  - `apps/gpui/src/ui/chat.rs`: 整行改 `group_hover` 常态隐形；补齐用户消息的「重新生成」；**复制**接系统剪贴板、**分叉**接 `sessions::fork`（分叉后直接切进新对话，与原 UI 一致）。
+  - `apps/gpui/src/core.rs`: 加 `fork_session`。
+  - 「编辑后重跑」「重新生成」需要截断历史后重跑，core 里还没有对应入口——**给明确提示而不是继续装作能点**。
+- **影响范围**: 仅 `apps/gpui`。26 条单测通过。
+- **验证**: hover 用户消息 → 出现 `02:22 | 复制 | 分叉 | 编辑 | 重新生成`（时间是时分、四个按钮齐全），不 hover 时整行不见；点「分叉」→ 会话数 35→36，新会话的 `forked_from` 指向原会话、标题带「(分支)」后缀。
+- **留尾巴**: 编辑 / 重新生成待 core 暴露「截断到某条消息后重跑」的入口。

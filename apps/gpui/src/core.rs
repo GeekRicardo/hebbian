@@ -201,6 +201,25 @@ impl Core {
         });
     }
 
+    /// 从某条消息处分叉出一个新对话（保留到该消息为止的历史）。
+    pub fn fork_session(&self, session_id: String, up_to_message_id: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            match agent_core::storage::sessions::fork(
+                &this.inner.data_dir,
+                &session_id,
+                &up_to_message_id,
+            ) {
+                Ok(forked) => {
+                    this.refresh_catalog();
+                    // 分叉完直接切过去——原 UI 也是分叉即进入新对话。
+                    this.emit(CoreUpdate::SessionCreated(forked.id));
+                }
+                Err(err) => this.emit_err(err),
+            }
+        });
+    }
+
     /// 改思考强度。业务规则（插 ReasoningSwitch marker）只在 core 一处。
     pub fn set_reasoning(
         &self,

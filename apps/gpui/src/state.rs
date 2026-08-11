@@ -614,6 +614,21 @@ pub fn build_buckets(
     buckets
 }
 
+/// 消息时间戳文案，与原前端 `formatTime` 一致：**当天只显示时分**，
+/// 跨天才显示月/日。（我之前一律显示月/日，与原 UI 不符。）
+pub fn format_message_time(ts_ms: i64, now_ms: i64) -> String {
+    let Some(dt) = chrono::DateTime::from_timestamp_millis(ts_ms) else {
+        return String::new();
+    };
+    let now = chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or(dt);
+    let same_day = dt.date_naive() == now.date_naive();
+    if same_day {
+        dt.format("%H:%M").to_string()
+    } else {
+        dt.format("%m/%d").to_string()
+    }
+}
+
 /// 相对时间文案，与原前端 `relativeTime` 一一对应。
 pub fn relative_time(ts_ms: i64, now_ms: i64) -> String {
     let diff = now_ms - ts_ms;
@@ -739,6 +754,17 @@ mod tests {
         assert_eq!(tasks[1].kind, BackgroundKind::Cron);
         assert!(tasks[1].finished);
         assert_eq!(tasks[2].kind, BackgroundKind::Subagent);
+    }
+
+    #[test]
+    fn message_time_shows_clock_today_and_date_otherwise() {
+        let now = 1_786_000_000_000i64; // 某天正午附近
+        // 同一天 → 时:分
+        let today = format_message_time(now - 3_600_000, now);
+        assert!(today.contains(':'), "同一天该显示时分，实际 {today}");
+        // 跨天 → 月/日
+        let older = format_message_time(now - 3 * 86_400_000, now);
+        assert!(older.contains('/'), "跨天该显示月/日，实际 {older}");
     }
 
     #[test]

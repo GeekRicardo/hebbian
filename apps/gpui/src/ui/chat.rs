@@ -8,7 +8,7 @@ use gpui::{div, prelude::*, px, AnyElement, Context, Window};
 
 use crate::assets::Icon;
 use crate::state::StreamingTurn;
-use crate::ui::widgets::{h_flex, shadow_lifted, v_flex};
+use crate::ui::widgets::{h_flex, now_ms, shadow_lifted, v_flex};
 use crate::ui::HebbianApp;
 
 pub fn render(app: &mut HebbianApp, window: &mut Window, cx: &mut Context<HebbianApp>) -> impl IntoElement {
@@ -304,9 +304,10 @@ fn bubble(
         }
     }
 
-    body = body.child(meta_row(app, message, is_user));
+    body = body.child(meta_row(app, message, is_user, cx));
 
     h_flex()
+        .group(gpui::SharedString::from(format!("msg-{}", message.id)))
         .items_start()
         .gap(px(12.))
         .mb(px(20.))
@@ -549,49 +550,120 @@ fn avatar(app: &HebbianApp, is_user: bool) -> impl IntoElement {
         })
 }
 
-/// 气泡底部那行「日期 · 耗时 + 复制 / 分叉 / 重新生成」。
-fn meta_row(app: &HebbianApp, message: &Message, is_user: bool) -> impl IntoElement {
+/// 气泡底部那行「时间 · 耗时 + 复制 / 分叉 / 编辑 / 重新生成」。
+///
+/// 与原前端逐项对齐（`MessageBubble.tsx`）：整行 **hover 才显出**（原来是
+/// `opacity-0 group-hover:opacity-100`，我之前一直常显）；时间当天只显时分；
+/// **重新生成对用户消息也有**（用户那条是「用同样内容重跑」，我之前只给了助手）。
+fn meta_row(
+    app: &HebbianApp,
+    message: &Message,
+    is_user: bool,
+    cx: &mut Context<HebbianApp>,
+) -> impl IntoElement {
     let theme = app.theme.clone();
+    let group = gpui::SharedString::from(format!("msg-{}", message.id));
 
-    let action = |icon: Icon, label: &'static str| {
+    let action = |id: gpui::SharedString,
+                  icon: Icon,
+                  label: &'static str,
+                  theme: crate::theme::Theme| {
         h_flex()
+            .id(id)
+            .px(px(6.))
+            .py(px(4.))
             .gap(px(4.))
-            .text_size(px(11.))
+            .rounded(px(4.))
+            .text_size(px(10.))
             .text_color(theme.faint)
-            .child(icon.el(px(12.), theme.faint))
-            .child(label)
+            .cursor_pointer()
+            .hover(|this| this.bg(theme.accent_soft).text_color(theme.accent))
+            .child(icon.el(px(13.), theme.faint))
+            .when(!label.is_empty(), |this| this.child(label))
     };
 
-    let stamp = chrono::DateTime::from_timestamp_millis(message.created_at)
-        .map(|dt| dt.format("%m/%d").to_string())
-        .unwrap_or_default();
+    let stamp = crate::state::format_message_time(message.created_at, now_ms());
+    let content = message.content.clone();
+    let fork_id = message.id.clone();
 
     h_flex()
         .mt(px(8.))
-        .gap(px(12.))
+        .gap(px(2.))
         .items_center()
+        // 整行常态隐形，hover 到这条消息才显出。
+        .invisible()
+        .group_hover(group, |this| this.visible())
         .child(
             div()
-                .text_size(px(11.))
+                .px(px(6.))
+                .text_size(px(10.))
                 .text_color(theme.faint)
                 .child(stamp),
         )
         .when_some(message.run_duration_ms, |this, ms| {
             this.child(
                 div()
-                    .text_size(px(11.))
+                    .px(px(4.))
+                    .text_size(px(10.))
                     .text_color(theme.faint)
                     .child(format!("· {:.1}s", ms as f64 / 1000.)),
             )
         })
-        .child(action(Icon::Copy, ""))
-        .child(action(Icon::GitBranch, "分叉"))
-        .child(if is_user {
-            action(Icon::Pencil, "编辑")
-        } else {
-            action(Icon::RefreshCw, "重新生成")
+        .child(
+            action(
+                gpui::SharedString::from(format!("copy-{}", message.id)),
+                Icon::Copy,
+                "",
+                theme.clone(),
+            )
+            .on_click(cx.listener(move |_, _, _, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(content.clone()));
+            })),
+        )
+        .child(
+            action(
+                gpui::SharedString::from(format!("fork-{}", message.id)),
+                Icon::GitBranch,
+                "分叉",
+                theme.clone(),
+            )
+            .on_click(cx.listener(move |this, _, _, _| {
+                if let Some(sid) = this.state.current_id().map(str::to_string) {
+                    this.state.core.fork_session(sid, fork_id.clone());
+                }
+            })),
+        )
+        .when(is_user, |row| {
+            row.child(
+                action(
+                    gpui::SharedString::from(format!("edit-{}", message.id)),
+                    Icon::Pencil,
+                    "编辑",
+                    theme.clone(),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    // 编辑要把消息塞回输入框、截断其后历史再重跑，
+                    // 截断那步 core 里还没暴露入口，先说清楚而不是假装能点。
+                    this.state.error =
+                        Some("「编辑后重跑」还没接上，可以先复制内容手动重发".to_string());
+                    cx.notify();
+                })),
+            )
         })
+        .child(
+            action(
+                gpui::SharedString::from(format!("regen-{}", message.id)),
+                Icon::RefreshCw,
+                "重新生成",
+                theme,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.state.error = Some("「重新生成」还没接上".to_string());
+                cx.notify();
+            })),
+        )
 }
+
 
 /// 流式进行中的助手气泡。
 fn streaming_bubble(
