@@ -30,6 +30,10 @@ pub enum HoverPopup {
     ExportSession(String),
     /// 项目新建键上：从 Claude 导入一条对话到这个项目。
     ImportToProject(Option<String>),
+    /// 「新建对话」键上：从 Claude 导入，不限定项目。
+    /// 单独一个变体而不是 `ImportToProject(None)`——「默认项目」分组的 + 键也是 None，
+    /// 共用会让两个锚点互相点亮对方的浮窗。
+    GlobalImport,
 }
 
 /// 根视图。整个应用只有这一个 `Render` 实体持有状态——子视图都是纯函数式的
@@ -637,13 +641,17 @@ impl Render for HebbianApp {
     }
 }
 
-/// 悬停浮窗：贴着锚点按钮浮出的一个小按钮。
+/// 悬停浮窗：从锚点按钮的右缘浮出的一个小按钮。
 ///
-/// 用 `deferred` + `anchored` 而不是自己算绝对坐标：侧栏是能滚的，
-/// 自己算出来的位置一滚就飘；`anchored` 直接跟着锚点走。
+/// 定位方式是 `absolute` + `left: 100%`，也就是「贴着锚点右边」。试过 `anchored()`——
+/// 它落在锚点的**左上角**，锚点要是像「新建对话」那样占满整行，浮窗就直接盖在按钮
+/// 文字上了；按锚点宽度的百分比定位则不管锚点多宽都贴在右侧。外面裹 `deferred`
+/// 是为了画在同层兄弟节点之上，否则会被后面的行盖住。
 ///
 /// 左边那点内边距是有用的：鼠标从锚点挪到按钮上要经过几像素间隙，
 /// 间隙不属于任何元素的话浮窗会在半路收掉，按钮永远点不到。
+///
+/// **调用方的锚点必须是 `absolute` 或 `relative`**，否则百分比没有参照物。
 pub fn hover_popup(
     theme: &Theme,
     popup: HoverPopup,
@@ -651,11 +659,17 @@ pub fn hover_popup(
 ) -> impl IntoElement {
     let (label, icon) = match &popup {
         HoverPopup::ExportSession(_) => ("导出到 Claude", crate::assets::Icon::ArrowUpFromLine),
-        HoverPopup::ImportToProject(_) => ("从 Claude 导入", crate::assets::Icon::Import),
+        HoverPopup::ImportToProject(_) | HoverPopup::GlobalImport => {
+            ("从 Claude 导入", crate::assets::Icon::Import)
+        }
     };
     gpui::deferred(
-        gpui::anchored().snap_to_window_with_margin(px(8.)).child(
-            div().pl(px(8.)).child(
+        div()
+            .absolute()
+            .left(gpui::relative(1.))
+            .top(px(-4.))
+            .pl(px(8.))
+            .child(
                 div()
                     .id("hover-popup-btn")
                     .flex()
@@ -670,6 +684,7 @@ pub fn hover_popup(
                     .bg(theme.card_strong)
                     .text_size(px(11.))
                     .text_color(theme.text)
+                    .whitespace_nowrap()
                     .cursor_pointer()
                     .hover(|this| this.text_color(theme.accent).bg(theme.accent_soft))
                     .child(icon.el(px(11.), theme.muted))
@@ -684,6 +699,11 @@ pub fn hover_popup(
                                 // 丢了推理链等于丢上下文。
                                 this.state.core.export_session_to_claude(id, true);
                             }
+                            Some(HoverPopup::GlobalImport) => {
+                                this.import_claude_project = None;
+                                this.import_claude_open = true;
+                                this.state.core.refresh_claude_importable();
+                            }
                             Some(HoverPopup::ImportToProject(project_id)) => {
                                 this.import_claude_project = project_id;
                                 this.import_claude_open = true;
@@ -694,7 +714,6 @@ pub fn hover_popup(
                         cx.notify();
                     })),
             ),
-        ),
     )
 }
 

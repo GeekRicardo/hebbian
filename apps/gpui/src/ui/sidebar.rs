@@ -104,6 +104,8 @@ fn new_chat_button(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl I
     let theme = app.theme.clone();
     h_flex()
         .id("new-chat")
+        // 浮窗按百分比贴在右缘，需要这层做定位参照
+        .relative()
         .mx(px(8.))
         .mt(px(10.))
         .mb(px(20.))
@@ -119,8 +121,22 @@ fn new_chat_button(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl I
         .text_size(px(12.))
         .cursor_pointer()
         .hover(|this| this.bg(theme.new_chat_bg_a))
+        .children(match &app.hover_popup {
+            Some(p @ crate::ui::HoverPopup::GlobalImport) => {
+                Some(crate::ui::hover_popup(&theme, p.clone(), cx))
+            }
+            _ => None,
+        })
         .child(Icon::MessageSquarePlus.el(px(14.), theme.new_chat_text))
         .child("新建对话")
+        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+            if *hovered {
+                this.hover_popup = Some(crate::ui::HoverPopup::GlobalImport);
+            } else if matches!(this.hover_popup, Some(crate::ui::HoverPopup::GlobalImport)) {
+                this.hover_popup = None;
+            }
+            cx.notify();
+        }))
         .on_click(cx.listener(|this, _, _, _| {
             this.state.core.create_session(None, None);
         }))
@@ -380,10 +396,26 @@ fn project_group(
                 this.save_prefs();
                 cx.notify();
             }))
-            // 拖动整行改顺序：按下即记住拖的是谁，松手时落到当前悬停的那一项上。
-            .on_drag(
-                ProjectDrag(drag_id.clone()),
-                |_, _, _, cx| cx.new(|_| crate::ui::widgets::NoDragPreview),
+            // 拖拽只认左缘那个抓手，不认整行——整行既要点开折叠又要能拖的话，
+            // 想折叠时手抖一下就把项目顺序拖乱了。原前端也是专门留了个抓手。
+            .child(
+                div()
+                    .id(gpui::SharedString::from(format!("grip-{}", bucket.id)))
+                    .absolute()
+                    .left(px(-4.))
+                    .w(px(14.))
+                    .h(px(32.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_grab()
+                    // 常态隐形，hover 整行才显出，与 CSS `.dsp-project-drag-handle` 一致。
+                    .invisible()
+                    .group_hover(group_name.clone(), |this| this.visible())
+                    .child(Icon::GripVertical.el(px(13.), theme.faint))
+                    .on_drag(ProjectDrag(drag_id.clone()), |_, _, _, cx| {
+                        cx.new(|_| crate::ui::widgets::NoDragPreview)
+                    }),
             )
             .on_drop(cx.listener({
                 let target = drop_id.clone();

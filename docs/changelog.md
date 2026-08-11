@@ -12278,3 +12278,27 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - 原前端导入前可以先**预览**（`read_claude_session_preview`），gpui 版是直接导入。导入本身可逆（删掉即可），暂不补
 - 侧栏顶部还有个全局「从 Claude 导入」入口（不限定项目），gpui 版目前只有项目级的
 - 原前端项目行有独立的拖拽手柄（GripVertical）；gpui 版是整行可拖。整行拖和点击折叠共用同一区域，手感与原版不同，待定
+
+---
+
+## 2026-08-11 — gpui surface：补全局「从 Claude 导入」入口与项目拖拽手柄，改掉浮窗的定位方式
+
+**Why**：接着上一条继续核对 `DesktopSidebar.tsx`，还差两处，另有一处是上一条自己留的毛病：
+
+1. **全局「从 Claude 导入」没有入口**。原前端把它挂在 chat 页的「新建对话」按钮上（`openHover("import")`），导进来的对话不归任何项目。上一条只做了项目级的那个
+2. **项目行没有拖拽手柄**。原前端有个 14px 的 `GripVertical` 抓手（`.dsp-project-drag-handle`），只有它能拖；gpui 版是**整行**可拖。整行既要点开折叠又要能拖，想折叠时手抖一下就把项目顺序拖乱了
+3. **浮窗盖住了锚点文字**。上一条用 `anchored()` 定位，它落在锚点的**左上角**——锚点是小图标时看着没问题，换成占满整行的「新建对话」就直接盖在按钮文字上
+
+**改动**：
+- `apps/gpui/src/ui/mod.rs`：`HoverPopup` 加 `GlobalImport` 变体；浮窗定位从 `anchored()` 改成 `absolute` + `left: 100%`（按锚点宽度的百分比贴右缘，锚点多宽都不会盖住它），外面仍裹 `deferred` 保证画在兄弟节点之上
+  - 单独一个 `GlobalImport` 而不是复用 `ImportToProject(None)`：「默认项目」分组的 + 键也是 `None`，共用会让两个锚点互相点亮对方的浮窗
+- `apps/gpui/src/ui/sidebar.rs`：「新建对话」按钮挂上全局导入浮窗（并补 `relative()` 给百分比定位当参照）；项目行拖拽从整行收到左缘的 `GripVertical` 抓手
+
+**怎么验的**：
+- 全局入口：切到 chat 页 → 悬停「新建对话」→ 浮窗出现在按钮右侧且不再压住「新建对话」四个字
+- 项目级入口：回 code 页 → 悬停项目「+」→ 浮窗同样贴在右缘、露在侧栏外
+- 抓手：悬停项目行时左缘出现 ⠿；从抓手按下拖到另一个项目上松手，`~/.hebbian/gpui-ui.json` 里 `project_order` 确实换了位（测完已改回原顺序）
+
+**影响范围**：只动 `apps/gpui`。
+
+**留尾巴**：导入前预览仍未做（原前端有 `read_claude_session_preview`）；后台任务面板「展开看实时输出」仍未做。
