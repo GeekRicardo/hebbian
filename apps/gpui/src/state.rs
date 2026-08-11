@@ -94,6 +94,10 @@ pub struct AppState {
     /// 当前正在看的改动：文件相对路径 + 逐行 diff。
     pub diff: Option<(String, Vec<crate::diff::DiffLine>)>,
 
+    /// 全局权限规则（设置里的「权限」页）。
+    pub perm_allow: Vec<String>,
+    pub perm_deny: Vec<String>,
+
     /// 可用 skill（`//` 命令面板）。
     pub skills: Vec<agent_core::tools::skill::Skill>,
 
@@ -148,6 +152,8 @@ impl AppState {
             search_regex: false,
             collapsed: HashSet::new(),
             plans: Vec::new(),
+            perm_allow: Vec::new(),
+            perm_deny: Vec::new(),
             diff: None,
             skills: Vec::new(),
             git: None,
@@ -205,6 +211,10 @@ impl AppState {
             }
             CoreUpdate::SessionCreated(id) => {
                 self.core.open_session(id);
+            }
+            CoreUpdate::Permissions { allow, deny } => {
+                self.perm_allow = allow;
+                self.perm_deny = deny;
             }
             CoreUpdate::Settings(settings) => {
                 self.settings = *settings;

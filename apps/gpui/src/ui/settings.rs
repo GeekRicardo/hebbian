@@ -273,6 +273,9 @@ fn body(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
         SettingsTab::General => general_pane(app, cx).into_any_element(),
         SettingsTab::Providers => providers_pane(app).into_any_element(),
         SettingsTab::Conversation => conversation_pane(app, cx).into_any_element(),
+        SettingsTab::Memory => memory_pane(app, cx).into_any_element(),
+        SettingsTab::Permissions => permissions_pane(app).into_any_element(),
+        SettingsTab::Skills => skills_pane(app).into_any_element(),
         SettingsTab::Appearance => appearance_pane(app, cx).into_any_element(),
         other => not_yet(app, other.label()).into_any_element(),
     };
@@ -478,6 +481,156 @@ fn segmented(
                 .child(label),
         )
         .child(group)
+}
+
+/// 记忆页：长期记忆的总开关与深睡节奏。
+fn memory_pane(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let memory = app
+        .settings_draft
+        .as_ref()
+        .map(|d| &d.memory)
+        .unwrap_or(&app.state.settings.memory);
+
+    v_flex()
+        .gap(px(2.))
+        .child(switch_row(
+            &theme,
+            cx,
+            "memory-enabled",
+            "开启长期记忆",
+            memory.enabled,
+            |draft, on| draft.memory.enabled = on,
+        ))
+        .child(stepper(
+            &theme,
+            cx,
+            "空闲多久开始整理记忆",
+            memory.idle_consolidate_minutes,
+            |draft, v| draft.memory.idle_consolidate_minutes = v,
+        ))
+        .child(row(
+            &theme,
+            "抽取用的模型",
+            if memory.models.is_empty() {
+                "还没配".to_string()
+            } else {
+                format!("{} 个备选", memory.models.len())
+            },
+        ))
+        .child(hint(
+            &theme,
+            "关掉后不再自动记东西，但你手动让它读写记忆仍然有效。",
+        ))
+}
+
+/// 权限页：全局层的放行 / 拦截规则。
+fn permissions_pane(app: &HebbianApp) -> impl IntoElement {
+    let theme = app.theme.clone();
+
+    let list = |title: &'static str, rules: &[String], color: gpui::Hsla| {
+        let theme = theme.clone();
+        let mut section = v_flex().gap(px(4.)).child(
+            div()
+                .mt(px(10.))
+                .text_size(px(12.))
+                .font_weight(gpui::FontWeight(600.))
+                .child(title),
+        );
+        if rules.is_empty() {
+            section = section.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.muted)
+                    .child("还没有规则"),
+            );
+        }
+        for rule in rules {
+            section = section.child(
+                h_flex()
+                    .gap(px(8.))
+                    .py(px(4.))
+                    .border_b_1()
+                    .border_color(theme.line)
+                    .child(div().size(px(6.)).flex_none().rounded_full().bg(color))
+                    .child(
+                        div()
+                            .font_family("monospace")
+                            .text_size(px(11.))
+                            .child(rule.clone()),
+                    ),
+            );
+        }
+        section
+    };
+
+    v_flex()
+        .child(list("放行", &app.state.perm_allow, theme.green))
+        .child(list("拦截", &app.state.perm_deny, theme.danger))
+        .child(hint(
+            &theme,
+            "这里是对所有对话都生效的那层规则。审批弹窗里选「一直允许」就会写到这儿。",
+        ))
+}
+
+/// Skills 页：三层目录合并后的技能清单。
+fn skills_pane(app: &HebbianApp) -> impl IntoElement {
+    let theme = app.theme.clone();
+    if app.state.skills.is_empty() {
+        return v_flex()
+            .child(hint(&theme, "还没有可用的 Skill。"))
+            .into_any_element();
+    }
+
+    let mut list = v_flex().gap(px(8.));
+    for skill in &app.state.skills {
+        list = list.child(
+            v_flex()
+                .p(px(12.))
+                .gap(px(4.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(theme.line)
+                .bg(theme.card)
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(gpui::FontWeight(600.))
+                                .child(
+                                    skill.alias.clone().unwrap_or_else(|| skill.name.clone()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px(px(8.))
+                                .py(px(2.))
+                                .rounded(px(999.))
+                                .text_size(px(11.))
+                                .bg(if skill.enabled {
+                                    theme.accent_soft
+                                } else {
+                                    theme.line
+                                })
+                                .text_color(if skill.enabled {
+                                    theme.accent
+                                } else {
+                                    theme.muted
+                                })
+                                .child(if skill.enabled { "已启用" } else { "已停用" }),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(theme.muted)
+                        .child(skill.description.clone()),
+                ),
+        );
+    }
+    list.into_any_element()
 }
 
 /// 对话页：新对话继承的默认值。

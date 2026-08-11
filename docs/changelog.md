@@ -12028,3 +12028,11 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: 在窄面板里跑 `ls`——输出按实际列宽排成多列且颜色正确（目录蓝、图片紫），说明 alacritty 拿到的是真实宽度。
 - **留尾巴**: 行数仍固定 30，没按面板高度算；鼠标拖选还没接（Ctrl+Shift+C 复制的是终端内部选区，目前只能靠键盘选）。
+
+### 2026-08-11 — gpui surface 设置补齐记忆 / 权限 / Skills 三页
+
+- **Why**: 设置里除通用与对话外还都是占位页，其中记忆、权限、Skills 三页的数据 core 里现成。
+- **改动**: `apps/gpui/src/ui/settings.rs` 加三页——记忆（总开关 + 空闲整理分钟数可改，抽取模型只读）、权限（全局层 allow / deny 规则，等宽字体按 pattern 原样列，绿点放行红点拦截）、Skills（三层目录合并后的清单 + 启用徽章 + 描述）。`core.rs` 加 `refresh_permissions`（只读全局层，与原前端「权限」页一致），打开设置时连同 skills 一起预取。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: 打开设置切到 Skills——两个真实 skill 与其 frontmatter 描述；切到权限——放行 / 拦截两栏与说明（本机没配规则，显示「还没有规则」而不是空白）。
+- **留尾巴**: 权限规则不能在这里增删（`CoreClient` 有 add/remove，只差入口）；Skills 不能在这里启停；角色 / 插件 / Hooks / MCP / 连接器 / 日志六页仍是说明页。

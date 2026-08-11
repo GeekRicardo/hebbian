@@ -36,6 +36,8 @@ pub enum CoreUpdate {
     SessionLoaded(Box<Session>),
     /// 新建会话成功，附带要打开的 id。
     SessionCreated(String),
+    /// 权限规则读完了（全局层的 allow / deny）。
+    Permissions { allow: Vec<String>, deny: Vec<String> },
     /// 全局设置读完了。
     Settings(Box<agent_core::storage::settings::Settings>),
     /// 供应商列表刷新完成（模型选择器用）。
@@ -345,6 +347,28 @@ impl Core {
                 Ok(_) => this.refresh_catalog(),
                 Err(err) => this.emit_err(err),
             }
+        });
+    }
+
+    /// 读一次全局层的权限规则。项目 / 会话层要带 workdir、session_id，
+    /// 设置面板看的是全局层，与原前端的「权限」页一致。
+    pub fn refresh_permissions(&self) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let client = this.local_client();
+            let allow = client.list_permissions(
+                protocol::PermissionScope::Global,
+                None,
+                None,
+                agent_core::permissions::RuleEffect::Allow,
+            );
+            let deny = client.list_permissions(
+                protocol::PermissionScope::Global,
+                None,
+                None,
+                agent_core::permissions::RuleEffect::Deny,
+            );
+            this.emit(CoreUpdate::Permissions { allow, deny });
         });
     }
 

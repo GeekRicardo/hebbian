@@ -447,6 +447,10 @@ impl HebbianApp {
         self.shell_input
             .update(cx, |state, cx| state.set_value(shell, window, cx));
         self.state.core.refresh_providers();
+        self.state.core.refresh_permissions();
+        if let Some(workdir) = self.state.current.as_ref().and_then(|s| s.workdir.clone()) {
+            self.state.core.refresh_skills(workdir);
+        }
         cx.notify();
     }
 
