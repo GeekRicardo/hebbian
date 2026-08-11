@@ -36,6 +36,10 @@ pub enum CoreUpdate {
     SessionLoaded(Box<Session>),
     /// 新建会话成功，附带要打开的 id。
     SessionCreated(String),
+    /// 这个会话改过的文件（按 run 分组，新的在前）。
+    Edits(Vec<agent_core::edits::metadata::RunEditEntry>),
+    /// 从这个会话分叉出去的旁支（会话 id + 标题）。
+    Branches(Vec<(String, String)>),
     /// 角色（prompts）/ 子 agent / 插件 / MCP / Hooks 的清单，供设置页展示。
     Extras(Box<Extras>),
     /// 最近一份调度日志的尾部（设置里的「日志」页）。
@@ -361,6 +365,89 @@ impl Core {
                 Ok(_) => this.refresh_catalog(),
                 Err(err) => this.emit_err(err),
             }
+        });
+    }
+
+    /// 读这个会话的改动记录（edits-worktree 的 run 清单）。
+    pub fn refresh_edits(&self, session_id: String, workdir: Option<PathBuf>) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let Some(workdir) = workdir else {
+                return this.emit(CoreUpdate::Edits(Vec::new()));
+            };
+            let workspace = agent_core::Workspace::new(workdir, Vec::new());
+            let tree = agent_core::edits::EditsWorktree::new(
+                &this.inner.data_dir,
+                &session_id,
+                &workspace,
+            );
+            let mut runs = tree.list_runs().unwrap_or_default();
+            // 新的在前，与消息流的阅读方向一致。
+            runs.reverse();
+            this.emit(CoreUpdate::Edits(runs));
+        });
+    }
+
+    /// 找从这个会话分叉出去的旁支。
+    ///
+    /// `forked_from` 只写在每个 session.jsonl 的第一行（meta），`SessionMeta` 不带它，
+    /// 所以这里逐个读首行。会话数量是几百量级、只读一行，代价可以接受。
+    pub fn refresh_branches(&self, parent_id: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let mut out = Vec::new();
+            let root = this.inner.data_dir.join("sessions");
+            if let Ok(entries) = std::fs::read_dir(&root) {
+                for entry in entries.flatten() {
+                    let path = entry.path().join("session.jsonl");
+                    if !path.is_file() {
+                        continue;
+                    }
+                    let Ok(file) = std::fs::File::open(&path) else {
+                        continue;
+                    };
+                    let mut first = String::new();
+                    if std::io::BufRead::read_line(
+                        &mut std::io::BufReader::new(file),
+                        &mut first,
+                    )
+                    .is_err()
+                    {
+                        continue;
+                    }
+                    // 正常的 session.jsonl 第一行就是 meta。但仓库里还兼容老的
+                    // pretty-JSON 会话（storage 里有专门的兼容分支），那种文件第一行
+                    // 只有一个 `{`——解析失败时整份读一次兜底，否则老会话的旁支会静默漏掉。
+                    let meta = match serde_json::from_str::<serde_json::Value>(&first) {
+                        Ok(meta) => meta,
+                        Err(_) => match std::fs::read_to_string(&path)
+                            .ok()
+                            .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
+                        {
+                            Some(meta) => meta,
+                            None => continue,
+                        },
+                    };
+                    if meta.get("forked_from").and_then(|v| v.as_str()) != Some(parent_id.as_str())
+                    {
+                        continue;
+                    }
+                    let id = meta
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let title = meta
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("旁支对话")
+                        .to_string();
+                    if !id.is_empty() {
+                        out.push((id, title));
+                    }
+                }
+            }
+            this.emit(CoreUpdate::Branches(out));
         });
     }
 

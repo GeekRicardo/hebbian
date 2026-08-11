@@ -117,6 +117,11 @@ pub struct AppState {
     pub open_files: Vec<PathBuf>,
     pub active_file: Option<PathBuf>,
 
+    /// 这个会话改过的文件（按 run 分组，新的在前）。
+    pub edits: Vec<agent_core::edits::metadata::RunEditEntry>,
+    /// 从这个会话分叉出去的旁支。
+    pub branches: Vec<(String, String)>,
+
     /// 当前会话的 todo 列表。由 `TodoListUpdated` 事件驱动，不落单独的盘。
     pub todos: Vec<protocol::WireTodoItem>,
 
@@ -168,6 +173,8 @@ impl AppState {
             file_baselines: HashMap::new(),
             open_files: Vec::new(),
             active_file: None,
+            edits: Vec::new(),
+            branches: Vec::new(),
             todos: Vec::new(),
             expanded_parts: HashSet::new(),
             dirs: HashMap::new(),
@@ -209,6 +216,11 @@ impl AppState {
                 self.diff = None;
                 self.core
                     .refresh_plans(session.id.clone(), session.workdir.clone());
+                self.edits.clear();
+                self.branches.clear();
+                self.core
+                    .refresh_edits(session.id.clone(), session.workdir.clone());
+                self.core.refresh_branches(session.id.clone());
                 if let Some(workdir) = session.workdir.clone() {
                     self.expanded_dirs.insert(workdir.clone());
                     self.core.list_dir(workdir.clone());
@@ -219,6 +231,12 @@ impl AppState {
             }
             CoreUpdate::SessionCreated(id) => {
                 self.core.open_session(id);
+            }
+            CoreUpdate::Edits(edits) => {
+                self.edits = edits;
+            }
+            CoreUpdate::Branches(branches) => {
+                self.branches = branches;
             }
             CoreUpdate::Extras(extras) => {
                 self.extras = *extras;
@@ -390,6 +408,80 @@ impl AppState {
     }
 }
 
+/// 「后台任务」面板的一条。与原前端一样**从 `session.messages` 派生**——
+/// 跑完的任务永远留在 transcript 里，不依赖任何运行期注册表，切会话/重启都还在。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackgroundTask {
+    pub kind: BackgroundKind,
+    /// 命令原文 / 唤醒原因 / 子 agent 描述，取决于 kind。
+    pub label: String,
+    /// 有 result 就算跑完了；没有就是还在跑（或这轮没跑完就结束了）。
+    pub finished: bool,
+    pub is_error: bool,
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundKind {
+    Bash,
+    Cron,
+    Subagent,
+}
+
+/// 从消息里挑出后台任务。
+///
+/// 判定依据与原前端一致：后台 Bash（入参 `run_in_background: true`）、
+/// `ScheduleWakeup`（定时唤醒）、`Task`（子 agent）。前台 Bash 不进这个列表——
+/// 它由聊天区的工具卡片自己管，重复列出只会让人分不清哪个才是后台的。
+pub fn derive_background_tasks(messages: &[Message]) -> Vec<BackgroundTask> {
+    let mut out = Vec::new();
+    for message in messages {
+        for call in &message.tool_calls {
+            let kind = match call.name.as_str() {
+                "Bash" => {
+                    let bg = call
+                        .input
+                        .get("run_in_background")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if !bg {
+                        continue;
+                    }
+                    BackgroundKind::Bash
+                }
+                "ScheduleWakeup" => BackgroundKind::Cron,
+                "Task" => BackgroundKind::Subagent,
+                _ => continue,
+            };
+            let label = match kind {
+                BackgroundKind::Bash => call
+                    .input
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default(),
+                BackgroundKind::Cron => call
+                    .input
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("定时唤醒"),
+                BackgroundKind::Subagent => call
+                    .input
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("子任务"),
+            };
+            out.push(BackgroundTask {
+                kind,
+                label: label.to_string(),
+                finished: call.result.is_some(),
+                is_error: call.is_error,
+                duration_ms: call.duration_ms,
+            });
+        }
+    }
+    out
+}
+
 /// 侧栏的一个项目分组。空项目也要显示（原前端同样保留空桶）。
 #[derive(Debug, Clone)]
 pub struct ProjectBucket {
@@ -546,6 +638,67 @@ mod tests {
     fn broken_regex_does_not_panic() {
         let session = meta("a", "hi", None);
         assert!(!session_matches(&session, "(unclosed", false, true));
+    }
+
+    fn tool_call(name: &str, input: serde_json::Value, result: Option<&str>) -> Message {
+        Message {
+            id: "m".into(),
+            role: Role::Assistant,
+            content: String::new(),
+            attachments: Vec::new(),
+            tool_calls: vec![agent_core::storage::sessions::MessageToolCall {
+                id: "t".into(),
+                name: name.into(),
+                input,
+                result: result.map(|s| s.to_string()),
+                duration_ms: Some(10),
+                is_error: false,
+                nested: Vec::new(),
+            }],
+            parts: Vec::new(),
+            created_at: 0,
+            meta: None,
+            subagent_call_id: None,
+            run_duration_ms: None,
+        }
+    }
+
+    /// 前台 Bash 不该出现在后台任务列表里——它由聊天区的工具卡片管，
+    /// 重复列出会让人分不清哪个才是真后台。
+    #[test]
+    fn foreground_bash_is_not_a_background_task() {
+        let msgs = vec![tool_call(
+            "Bash",
+            serde_json::json!({"command": "ls"}),
+            Some("ok"),
+        )];
+        assert!(derive_background_tasks(&msgs).is_empty());
+    }
+
+    #[test]
+    fn background_bash_cron_and_subagent_are_picked_up() {
+        let msgs = vec![
+            tool_call(
+                "Bash",
+                serde_json::json!({"command": "cargo build", "run_in_background": true}),
+                None,
+            ),
+            tool_call(
+                "ScheduleWakeup",
+                serde_json::json!({"reason": "等 CI"}),
+                Some("done"),
+            ),
+            tool_call("Task", serde_json::json!({"description": "查一下用法"}), None),
+        ];
+        let tasks = derive_background_tasks(&msgs);
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(tasks[0].kind, BackgroundKind::Bash);
+        assert_eq!(tasks[0].label, "cargo build");
+        // 没有 result = 还在跑
+        assert!(!tasks[0].finished);
+        assert_eq!(tasks[1].kind, BackgroundKind::Cron);
+        assert!(tasks[1].finished);
+        assert_eq!(tasks[2].kind, BackgroundKind::Subagent);
     }
 
     #[test]

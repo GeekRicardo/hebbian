@@ -12055,3 +12055,17 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **desktop 为什么不一起改**: `cargo check -p hebbian` 在本机（Linux）**编不过**——`tauri-runtime-wry` 在 Linux 路径上有 API 不匹配（E0046 / E0277），与本次改动无关。CLAUDE.md 要求「commit 前本次涉及的 surface 至少跑过 cargo check」，我没法验证就不改：desktop 目前是你在用的那套 UI，盲改一个我编不了的 crate，风险远大于消掉一份重复的收益。**这一处重复仍在，留给能编 desktop 的环境去收**。
 - **影响范围**: 仅 `apps/web-server`。`cargo check -p hebbian-web-server` 通过（hebweb 无单测）。
 - **留尾巴**: `apps/desktop/src/lib.rs` 的 `switch_provider_model` 仍是独立实现，需在 macOS 上改并验证。
+
+### 2026-08-11 — 修正右侧工作台的九个面板（此前认错了三个），并补齐后台任务 / 修改文件 / 旁支对话
+
+- **Why**: 我此前照截图**猜**了工作台的九个入口，对着原前端 `RightSidebar.tsx` 的 `tabs` 定义一比，猜错了三个：把「后台任务」当成了「编辑」、「修改文件」当成了「目标」、「旁支对话」当成了「对话」，还自己加了个原 UI 里根本没有的「目标」面板。这属于还原度硬伤——图标条是主界面上一眼能看到的东西。
+- **改动**:
+  - `apps/gpui/src/ui/right_panel.rs`: 九个面板改成与原前端逐字对齐：文件目录 / 后台任务 / 修改文件 / 源代码管理 / 任务清单 / 计划 / 旁支对话 / 浏览器 / 终端。**删掉我自己加的「目标」面板**（原 UI 的右栏没有它）。
+  - 新增三个面板的实现：
+    - **后台任务**：与原前端同源，**从 `session.messages` 派生**（跑完的任务永远留在 transcript 里，不依赖运行期注册表，切会话/重启都还在）。只收后台 Bash（入参 `run_in_background: true`）、`ScheduleWakeup`、`Task`；前台 Bash 不进列表——它由聊天区的工具卡片自己管，重复列出会让人分不清哪个才是后台的。
+    - **修改文件**：读 edits-worktree 的 run 记录，按 run 分组、新的在前，用改动前后字节数给增减指示，已回退的整组标灰 + 「已回退」徽章。
+    - **旁支对话**：扫各会话 jsonl 首行的 `forked_from` 找分叉，点了直接切过去。
+  - `apps/gpui/src/state.rs`: `derive_background_tasks` 是纯函数，配 2 条单测（前台 Bash 不算后台任务 / 三种类型都能识别）。共 25 条通过。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: 三个面板各造 fixture 后逐个截图确认。**过程中踩到两个自己的错**：① edits 的 fixture 我猜的路径不对（真实位置是 `sessions/<sid>/edits-worktree/.hebbian-edits.json`），且 metadata 有 `version: 3` 的版本守卫，我写 v1 被正确丢弃——是守卫在按设计工作，不是 bug；② 旁支的 fixture 我用 pretty-JSON 写，被 storage 的老格式迁移重写后 `forked_from` 丢了，改用真 jsonl 首行才验通。顺带给 `refresh_branches` 加了「首行解析失败就整份读一次」的兜底——仓库里确实还兼容老 pretty-JSON 会话，不兜底那类会话的旁支会静默漏掉。
+- **留尾巴**: 后台任务没有实时输出与倒计时（要 join 运行期注册表，gpui 侧还没暴露那个接口）；修改文件不能逐个回退；旁支不能在面板里新建。

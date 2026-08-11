@@ -21,12 +21,12 @@ pub const MAX_WIDTH: f32 = 960.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Workbench {
     Files,
-    Editor,
-    Target,
+    Tasks,
+    Edits,
     Git,
-    Todo,
-    Plan,
-    Chat,
+    Todos,
+    Plans,
+    Branches,
     Browser,
     Terminal,
 }
@@ -34,12 +34,12 @@ pub enum Workbench {
 impl Workbench {
     const ALL: [Workbench; 9] = [
         Workbench::Files,
-        Workbench::Editor,
-        Workbench::Target,
+        Workbench::Tasks,
+        Workbench::Edits,
         Workbench::Git,
-        Workbench::Todo,
-        Workbench::Plan,
-        Workbench::Chat,
+        Workbench::Todos,
+        Workbench::Plans,
+        Workbench::Branches,
         Workbench::Browser,
         Workbench::Terminal,
     ];
@@ -47,12 +47,12 @@ impl Workbench {
     fn icon(self) -> Icon {
         match self {
             Workbench::Files => Icon::FileText,
-            Workbench::Editor => Icon::Pencil,
-            Workbench::Target => Icon::Target,
+            Workbench::Tasks => Icon::LoaderCircle,
+            Workbench::Edits => Icon::Pencil,
             Workbench::Git => Icon::GitBranch,
-            Workbench::Todo => Icon::ListTodo,
-            Workbench::Plan => Icon::List,
-            Workbench::Chat => Icon::MessageSquare,
+            Workbench::Todos => Icon::ListTodo,
+            Workbench::Plans => Icon::List,
+            Workbench::Branches => Icon::MessageSquare,
             Workbench::Browser => Icon::Globe,
             Workbench::Terminal => Icon::Terminal,
         }
@@ -62,12 +62,12 @@ impl Workbench {
     fn blurb(self) -> &'static str {
         match self {
             Workbench::Files => "当前对话工作目录里的文件。",
-            Workbench::Editor => "点开文件后在这里改，还没搬过来。",
-            Workbench::Target => "这轮对话的目标与验收条件，还没搬过来。",
-            Workbench::Git => "改了哪些文件、能不能一键回退，还没搬过来。",
-            Workbench::Todo => "这轮的待办清单。",
-            Workbench::Plan => "计划模式下的方案与批注，还没搬过来。",
-            Workbench::Chat => "分叉出去的旁支对话，还没搬过来。",
+            Workbench::Tasks => "在后台跑着的命令与子任务。",
+            Workbench::Edits => "这轮改过的文件，可整轮回退。",
+            Workbench::Git => "改了哪些文件、能不能一键回退。",
+            Workbench::Todos => "这轮的任务清单。",
+            Workbench::Plans => "计划模式下的方案与批注。",
+            Workbench::Branches => "从这个对话分叉出去的旁支。",
             Workbench::Browser => "内置浏览器预览，还没搬过来。",
             Workbench::Terminal => "内置终端，还没搬过来。",
         }
@@ -76,12 +76,12 @@ impl Workbench {
     pub fn title(self) -> &'static str {
         match self {
             Workbench::Files => "文件目录",
-            Workbench::Editor => "编辑",
-            Workbench::Target => "目标",
-            Workbench::Git => "Git",
-            Workbench::Todo => "待办",
-            Workbench::Plan => "计划",
-            Workbench::Chat => "对话",
+            Workbench::Tasks => "后台任务",
+            Workbench::Edits => "修改文件",
+            Workbench::Git => "源代码管理",
+            Workbench::Todos => "任务清单",
+            Workbench::Plans => "计划",
+            Workbench::Branches => "旁支对话",
             Workbench::Browser => "浏览器",
             Workbench::Terminal => "终端",
         }
@@ -170,10 +170,12 @@ fn panel(
         )
         .child(match app.workbench {
             Workbench::Files => file_panel(app, cx, workdir).into_any_element(),
-            Workbench::Todo => todo_panel(app).into_any_element(),
+            Workbench::Todos => todo_panel(app).into_any_element(),
             Workbench::Git => git_panel(app, cx).into_any_element(),
-            Workbench::Target => target_panel(app).into_any_element(),
-            Workbench::Plan => plan_panel(app, window, cx).into_any_element(),
+            Workbench::Edits => edits_panel(app).into_any_element(),
+            Workbench::Tasks => tasks_panel(app).into_any_element(),
+            Workbench::Branches => branches_panel(app, cx).into_any_element(),
+            Workbench::Plans => plan_panel(app, window, cx).into_any_element(),
             Workbench::Terminal => terminal_panel(app, cx).into_any_element(),
             Workbench::Browser => crate::ui::browser::panel(app, cx).into_any_element(),
             other => empty_panel(app, other).into_any_element(),
@@ -507,10 +509,176 @@ fn diff_view(app: &HebbianApp) -> Option<impl IntoElement> {
     )
 }
 
-/// 目标面板：`//goal` 挂上的完成条件、已自动续跑几轮、判官上次说还差什么。
-fn target_panel(app: &HebbianApp) -> impl IntoElement {
+/// 后台任务面板。与原前端同源：从 `session.messages` 派生，跑完的任务永久保留。
+/// 实时输出与倒计时要 join 运行期注册表，gpui 侧还没暴露那个接口，所以这里只有历史与状态。
+fn tasks_panel(app: &HebbianApp) -> impl IntoElement {
     let theme = app.theme.clone();
-    let Some(goal) = app.state.current.as_ref().and_then(|s| s.active_goal.as_ref()) else {
+    let tasks = crate::state::derive_background_tasks(&app.state.messages);
+    if tasks.is_empty() {
+        return div()
+            .p(px(14.))
+            .text_size(px(12.))
+            .text_color(theme.muted)
+            .child("这个对话没有后台任务")
+            .into_any_element();
+    }
+
+    let mut list = v_flex()
+        .id("task-list")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .px(px(12.))
+        .py(px(6.));
+
+    for task in &tasks {
+        use crate::state::BackgroundKind;
+        let (icon, tag) = match task.kind {
+            BackgroundKind::Bash => (Icon::Terminal, "命令"),
+            BackgroundKind::Cron => (Icon::Clock, "定时"),
+            BackgroundKind::Subagent => (Icon::Bot, "子任务"),
+        };
+        let color = if task.is_error {
+            theme.danger
+        } else if task.finished {
+            theme.green
+        } else {
+            theme.accent
+        };
+        list = list.child(
+            v_flex()
+                .py(px(6.))
+                .gap(px(3.))
+                .border_b_1()
+                .border_color(theme.line)
+                .child(
+                    h_flex()
+                        .gap(px(6.))
+                        .text_size(px(11.))
+                        .text_color(theme.faint)
+                        .child(icon.el(px(11.), theme.faint))
+                        .child(tag)
+                        .child(
+                            div().text_color(color).child(if task.is_error {
+                                "失败"
+                            } else if task.finished {
+                                "已完成"
+                            } else {
+                                "运行中"
+                            }),
+                        )
+                        .children(task.duration_ms.map(|ms| {
+                            div()
+                                .text_color(theme.faint)
+                                .child(format!("{:.1}s", ms as f64 / 1000.))
+                        })),
+                )
+                .child(
+                    div()
+                        .font_family("monospace")
+                        .text_size(px(11.))
+                        .text_color(theme.muted)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(task.label.clone()),
+                ),
+        );
+    }
+    list.into_any_element()
+}
+
+/// 修改文件面板：这个会话每个 run 改了哪些文件（edits-worktree 的记录）。
+fn edits_panel(app: &HebbianApp) -> impl IntoElement {
+    let theme = app.theme.clone();
+    if app.state.edits.is_empty() {
+        return div()
+            .p(px(14.))
+            .text_size(px(12.))
+            .text_color(theme.muted)
+            .child("这个对话还没改过文件")
+            .into_any_element();
+    }
+
+    let mut list = v_flex()
+        .id("edits-list")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .px(px(12.))
+        .py(px(8.))
+        .gap(px(10.));
+
+    for run in &app.state.edits {
+        let stamp = chrono::DateTime::from_timestamp_millis(run.started_at_ms)
+            .map(|dt| dt.format("%m/%d %H:%M").to_string())
+            .unwrap_or_default();
+        let mut group = v_flex().gap(px(3.)).child(
+            h_flex()
+                .gap(px(6.))
+                .text_size(px(11.))
+                .text_color(theme.faint)
+                .child(stamp)
+                .child(format!("{} 个文件", run.files.len()))
+                // 已回退的整组标出来，否则看不出这轮改动其实已经撤销了。
+                .when(run.reverted, |this| {
+                    this.child(
+                        div()
+                            .px(px(6.))
+                            .rounded(px(999.))
+                            .bg(theme.line)
+                            .text_color(theme.muted)
+                            .child("已回退"),
+                    )
+                }),
+        );
+        for file in &run.files {
+            // 用改动前后字节数给一个直观的增减指示。
+            let delta = file.after_bytes as i64 - file.before_bytes as i64;
+            let (sign, color) = if delta > 0 {
+                ("+", theme.green)
+            } else if delta < 0 {
+                ("−", theme.danger)
+            } else {
+                ("", theme.muted)
+            };
+            group = group.child(
+                h_flex()
+                    .gap(px(8.))
+                    .py(px(3.))
+                    .text_size(px(12.))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_color(if run.reverted { theme.faint } else { theme.muted })
+                            .child(file.real_path.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(11.))
+                            .text_color(color)
+                            .child(if delta == 0 {
+                                String::new()
+                            } else {
+                                format!("{sign}{} B", delta.abs())
+                            }),
+                    ),
+            );
+        }
+        list = list.child(group);
+    }
+    list.into_any_element()
+}
+
+/// 旁支对话面板：从这个对话分叉出去的会话，点了直接切过去。
+fn branches_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
+    let theme = app.theme.clone();
+    if app.state.branches.is_empty() {
         return v_flex()
             .p(px(14.))
             .gap(px(6.))
@@ -518,54 +686,52 @@ fn target_panel(app: &HebbianApp) -> impl IntoElement {
                 div()
                     .text_size(px(12.))
                     .text_color(theme.muted)
-                    .child("这个对话还没挂目标"),
+                    .child("还没有旁支对话"),
             )
             .child(
                 div()
                     .text_size(px(11.))
                     .text_color(theme.faint)
-                    .child("在输入框里用 //goal 写一个完成条件，没达成它就会自己接着跑。"),
+                    .child("在某条消息上点「分叉」，就会从那里岔出一个新对话。"),
             )
             .into_any_element();
-    };
+    }
 
-    v_flex()
-        .p(px(12.))
-        .gap(px(10.))
-        .child(
-            div()
-                .p(px(10.))
-                .rounded(px(8.))
-                .bg(theme.accent_soft)
-                .text_size(px(12.))
-                .text_color(theme.text)
-                .child(goal.condition.clone()),
-        )
-        .child(
+    let mut list = v_flex()
+        .id("branch-list")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .px(px(8.))
+        .py(px(6.));
+
+    for (id, title) in &app.state.branches {
+        let open_id = id.clone();
+        list = list.child(
             h_flex()
-                .gap(px(6.))
-                .text_size(px(11.))
-                .text_color(theme.muted)
-                .child(Icon::RefreshCw.el(px(12.), theme.faint))
-                .child(format!("已自动续跑 {} 轮", goal.iterations)),
-        )
-        .children(goal.last_reason.clone().map(|reason| {
-            v_flex()
-                .gap(px(4.))
+                .id(gpui::SharedString::from(format!("branch-{id}")))
+                .py(px(6.))
+                .px(px(8.))
+                .gap(px(8.))
+                .rounded(px(8.))
+                .text_size(px(12.))
+                .cursor_pointer()
+                .hover(|this| this.bg(theme.accent_soft))
+                .child(Icon::GitBranch.el(px(12.), theme.faint))
                 .child(
                     div()
-                        .text_size(px(11.))
-                        .text_color(theme.faint)
-                        .child("上一轮判定还差"),
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(title.clone()),
                 )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme.muted)
-                        .child(reason),
-                )
-        }))
-        .into_any_element()
+                .on_click(cx.listener(move |this, _, _, _| {
+                    this.state.core.open_session(open_id.clone());
+                })),
+        );
+    }
+    list.into_any_element()
 }
 
 /// 计划面板：PlanMode 落盘的 plan markdown，新的在前。
