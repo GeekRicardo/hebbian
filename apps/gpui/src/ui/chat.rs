@@ -77,10 +77,28 @@ fn header(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
                 ),
         )
         .child(
-            div()
-                .text_size(px(11.))
-                .text_color(theme.faint)
-                .child(session_id),
+            h_flex()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(theme.faint)
+                        .child(session_id),
+                )
+                .child(
+                    div()
+                        .id("session-settings-open")
+                        .p(px(4.))
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .hover(|this| this.bg(theme.accent_soft))
+                        .child(Icon::Settings.el(px(14.), theme.faint))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.session_settings_open = true;
+                            this.state.core.refresh_providers();
+                            cx.notify();
+                        })),
+                ),
         )
 }
 

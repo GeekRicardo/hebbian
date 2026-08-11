@@ -5,6 +5,7 @@ mod chat;
 mod editor;
 mod hue;
 mod right_panel;
+mod session_settings;
 mod settings;
 mod sidebar;
 mod widgets;
@@ -37,6 +38,8 @@ pub struct HebbianApp {
     /// 模型选择器是否展开，以及展开着哪个供应商。
     pub model_picker_open: bool,
     pub model_picker_provider: Option<String>,
+    /// 对话设置弹窗是否打开。
+    pub session_settings_open: bool,
     /// 设置面板是否打开、停在哪一页。
     pub settings_open: bool,
     pub settings_tab: settings::SettingsTab,
@@ -140,6 +143,7 @@ impl HebbianApp {
             right_collapsed: false,
             model_picker_open: false,
             model_picker_provider: None,
+            session_settings_open: false,
             settings_open: false,
             settings_tab: settings::SettingsTab::General,
             workbench: right_panel::Workbench::Files,
@@ -225,6 +229,7 @@ impl Render for HebbianApp {
             .child(chat::render(self, window, cx))
             .children(editor::render(self, window, cx))
             .child(right_panel::render(self, window, cx))
+            .children(session_settings::render(self, cx))
             .children(settings::render(self, cx))
             .children(self.state.error.clone().map(|message| toast(&theme, message, cx)))
     }
