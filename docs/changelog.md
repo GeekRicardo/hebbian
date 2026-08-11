@@ -11824,3 +11824,13 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: Xvfb + lavapipe 起窗截图确认——文件树列出真实目录内容（目录在前、图标与折叠箭头正确），项目胶囊显示 `chroma`。顺带验证了错误提示通路：工作目录不存在时顶部会浮出「读不了这个文件夹：…」而不是静默空白。
 - **留尾巴**: 文件点击只做了目录展开，点文件还没有打开编辑区（编辑区本身未移植）；目录变更没有 watch，改动后需重开会话才刷新。
+
+### 2026-08-11 — gpui surface 加模型选择器弹窗；打通「点击 + 截图」的无人值守 UI 验证
+
+- **Why**: 用户特别点名「有一些是点击后展开的小窗口没有截图到，这些你也要实现」——弹层是这次还原的重点之一，模型选择器是其中最常用的。同时此前只能截静态首屏，交互态（弹窗展开、hover）无从验证。
+- **改动**:
+  - `apps/gpui/src/core.rs` / `state.rs`: 新增 `refresh_providers`，供应商列表进 state（走 `CoreClient::list_providers`，与另三端同一实现）。
+  - `apps/gpui/src/ui/chat.rs`: 模型选择器弹窗——256px 宽、18px 圆角，供应商行 38px、模型行 40px，当前供应商/模型高亮，点供应商展开其模型列表（对齐 `.model-picker-*` 一族 CSS）。
+  - **验证手段**：容器里 Xvfb + lavapipe 起窗后，用 `xdotool` 合成点击、`import` 截图——首次做到「点开弹窗看它长什么样」的无人值守验证，不再只能看静态首屏。
+- **影响范围**: 仅 `apps/gpui`。
+- **留尾巴 / 需要用户拍板**: **选中一个模型目前不会真的切换**，点了会明确提示而不是静默失败。原因是切模型不是写两个字段：它要插 `MessageMeta::Switch` 标记、要执行「DeepSeek 与其他系列不可互切」的锁定规则、还要按新模型重置推理参数——这套业务规则现在**同时存在于 `apps/desktop/src/lib.rs` 与 `apps/web-server/src/server.rs` 两份命令壳里**，`CoreRequest` 里没有对应入口。按架构 §7.3「不允许在 Desktop 和 hebweb 各写一套」，正确做法是先把它收进 `core-rpc`（新增 `SwitchSessionModel`）再让三端都调它；在用户确认之前，gpui 不抄第三份。

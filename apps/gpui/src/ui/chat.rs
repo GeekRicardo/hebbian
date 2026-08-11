@@ -577,6 +577,124 @@ fn composer(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement 
         .child(info_row(app))
 }
 
+/// 模型选择器弹窗。对应 `.model-picker-popup`：256px 宽、18px 圆角、
+/// 供应商一行 38px，展开后列出该供应商的模型（40px 一行）。
+fn model_picker(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> Option<impl IntoElement> {
+    if !app.model_picker_open {
+        return None;
+    }
+    let theme = app.theme.clone();
+    let current_model = app.state.current.as_ref().map(|s| s.model.clone());
+    let current_provider = app.state.current.as_ref().map(|s| s.provider_id.clone());
+
+    let mut list = v_flex().max_h(px(420.)).id("provider-list").overflow_y_scroll();
+
+    if app.state.providers.is_empty() {
+        list = list.child(
+            div()
+                .p(px(12.))
+                .text_size(px(12.))
+                .text_color(theme.muted)
+                .child("还没有配置模型供应商"),
+        );
+    }
+
+    for provider in &app.state.providers {
+        let expanded = app.model_picker_provider.as_deref() == Some(provider.id.as_str());
+        let selected = current_provider.as_deref() == Some(provider.id.as_str());
+        let pid = provider.id.clone();
+
+        list = list.child(
+            h_flex()
+                .id(gpui::SharedString::from(format!("prov-{}", provider.id)))
+                .h(px(38.))
+                .px(px(12.))
+                .gap(px(6.))
+                .justify_between()
+                .text_size(px(12.))
+                .text_color(if selected { theme.accent } else { theme.muted })
+                .cursor_pointer()
+                .when(selected, |this| this.bg(theme.accent_soft))
+                .hover(|this| this.bg(theme.accent_soft).text_color(theme.accent))
+                .child(div().overflow_hidden().text_ellipsis().child(provider.name.clone()))
+                .child(
+                    if expanded {
+                        Icon::ChevronDown.el(px(12.), theme.faint)
+                    } else {
+                        Icon::ChevronRight.el(px(12.), theme.faint)
+                    },
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.model_picker_provider = if this.model_picker_provider.as_deref()
+                        == Some(pid.as_str())
+                    {
+                        None
+                    } else {
+                        Some(pid.clone())
+                    };
+                    cx.notify();
+                })),
+        );
+
+        if !expanded {
+            continue;
+        }
+        for model in provider.models.iter() {
+            let is_current = current_model.as_deref() == Some(model.as_str());
+            let label = model.clone();
+            list = list.child(
+                h_flex()
+                    .id(gpui::SharedString::from(format!("model-{}-{}", provider.id, model)))
+                    .min_h(px(40.))
+                    .px(px(12.))
+                    .pl(px(24.))
+                    .text_size(px(12.))
+                    .text_color(if is_current { theme.accent } else { theme.text })
+                    .cursor_pointer()
+                    .when(is_current, |this| this.bg(theme.accent_soft))
+                    .hover(|this| this.bg(theme.accent_soft))
+                    .child(div().overflow_hidden().text_ellipsis().child(label.clone()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        // 切模型不是纯写字段：会话里要插一条 switch marker、
+                        // DeepSeek 与其他系列之间还有锁定规则、推理参数要跟着模型默认值走。
+                        // 这套业务规则现在只存在于 desktop / hebweb 的命令壳里，gpui 不再抄第三份
+                        // ——等它收进 core-rpc 之后再接上，在此之前明确告诉用户而不是假装切了。
+                        this.state.error = Some(format!(
+                            "切换到「{label}」还没接上：切模型要连带插切换标记、系列锁定与推理参数，\
+                             这套规则得先收进公共入口，我不想在这里再抄一份走样的"
+                        ));
+                        this.model_picker_open = false;
+                        cx.notify();
+                    })),
+            );
+        }
+    }
+
+    Some(
+        v_flex()
+            .absolute()
+            .bottom(px(34.))
+            .left(px(0.))
+            .w(px(256.))
+            .rounded(px(18.))
+            .bg(theme.card_strong)
+            .border_1()
+            .border_color(theme.card_line)
+            .shadow(shadow_lifted(gpui::rgba(0x2d3d5324).into()))
+            .child(
+                div()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .text_size(px(11.))
+                    .font_weight(gpui::FontWeight(650.))
+                    .text_color(theme.muted)
+                    .bg(theme.right_bg_top)
+                    .child("选择模型"),
+            )
+            .child(list),
+    )
+}
+
 /// 输入框顶部的项目胶囊：当前对话绑在哪个项目 / 目录上。
 /// 没绑目录就不显示——原前端也是「有才画」，不占位。
 fn project_chip(app: &HebbianApp) -> Option<impl IntoElement> {
@@ -704,19 +822,34 @@ fn toolbar(
                 .child(tool(Icon::Plus, "attach"))
                 .child(tool(Icon::Slash, "slash"))
                 .child(
-                    h_flex()
-                        .id("model-picker")
-                        .h(px(28.))
-                        .max_w(px(230.))
-                        .px(px(8.))
-                        .gap(px(4.))
-                        .rounded(px(999.))
-                        .text_size(px(12.))
-                        .text_color(theme.muted)
-                        .cursor_pointer()
-                        .hover(|this| this.bg(gpui::rgba(0x203648_0f)).text_color(theme.text))
-                        .child(div().overflow_hidden().text_ellipsis().child(model))
-                        .child(Icon::ChevronDown.el(px(12.), theme.muted)),
+                    div()
+                        .relative()
+                        .child(
+                            h_flex()
+                                .id("model-picker")
+                                .h(px(28.))
+                                .max_w(px(230.))
+                                .px(px(8.))
+                                .gap(px(4.))
+                                .rounded(px(999.))
+                                .text_size(px(12.))
+                                .text_color(theme.muted)
+                                .cursor_pointer()
+                                .hover(|this| {
+                                    this.bg(gpui::rgba(0x203648_0f)).text_color(theme.text)
+                                })
+                                .child(div().overflow_hidden().text_ellipsis().child(model))
+                                .child(Icon::ChevronDown.el(px(12.), theme.muted))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.model_picker_open = !this.model_picker_open;
+                                    if this.model_picker_open {
+                                        // 每次展开都重拉一次，供应商可能在别处被改过。
+                                        this.state.core.refresh_providers();
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .children(model_picker(app, cx)),
                 ),
         )
         .child(

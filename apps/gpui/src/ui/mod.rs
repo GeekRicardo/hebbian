@@ -32,6 +32,9 @@ pub struct HebbianApp {
     pub hue_popover_open: bool,
     /// 右侧工作台是否折叠。
     pub right_collapsed: bool,
+    /// 模型选择器是否展开，以及展开着哪个供应商。
+    pub model_picker_open: bool,
+    pub model_picker_provider: Option<String>,
 
     pub composer: Entity<InputState>,
     pub search: Entity<InputState>,
@@ -97,6 +100,7 @@ impl HebbianApp {
         .detach();
 
         core.refresh_catalog();
+        core.refresh_providers();
 
         // 调试入口：`HEBBIAN_GPUI_OPEN=<session_id>` 启动即打开某个对话。
         // 无人值守截图 / 排查渲染时不用先点一下侧栏，与 heb CLI 的脚本化调试同一思路。
@@ -113,6 +117,8 @@ impl HebbianApp {
             hue: 208.0,
             hue_popover_open: false,
             right_collapsed: false,
+            model_picker_open: false,
+            model_picker_provider: None,
             composer,
             search,
             focus: cx.focus_handle(),

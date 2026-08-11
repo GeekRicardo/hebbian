@@ -36,6 +36,8 @@ pub enum CoreUpdate {
     SessionLoaded(Box<Session>),
     /// 新建会话成功，附带要打开的 id。
     SessionCreated(String),
+    /// 供应商列表刷新完成（模型选择器用）。
+    Providers(Vec<model_gateway::config::Provider>),
     /// 某个目录读完了（文件树按需展开）。
     DirListed {
         path: PathBuf,
@@ -136,6 +138,17 @@ impl Core {
                     this.emit(CoreUpdate::Catalog { sessions, projects })
                 }
                 (Err(err), _) | (_, Err(err)) => this.emit_err(err),
+            }
+        });
+    }
+
+    /// 拉一次供应商列表。模型选择器展开时用，冷启动也预取一次。
+    pub fn refresh_providers(&self) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            match this.local_client().list_providers() {
+                Ok(file) => this.emit(CoreUpdate::Providers(file.providers)),
+                Err(err) => this.emit_err(err),
             }
         });
     }

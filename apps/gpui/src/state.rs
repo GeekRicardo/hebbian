@@ -65,6 +65,7 @@ pub struct AppState {
 
     pub sessions: Vec<SessionMeta>,
     pub projects: Vec<WorkspaceProject>,
+    pub providers: Vec<model_gateway::config::Provider>,
 
     pub current: Option<Session>,
     pub messages: Vec<Message>,
@@ -102,6 +103,7 @@ impl AppState {
             core,
             sessions: Vec::new(),
             projects: Vec::new(),
+            providers: Vec::new(),
             current: None,
             messages: Vec::new(),
             streaming: StreamingTurn::default(),
@@ -156,6 +158,9 @@ impl AppState {
             }
             CoreUpdate::SessionCreated(id) => {
                 self.core.open_session(id);
+            }
+            CoreUpdate::Providers(providers) => {
+                self.providers = providers;
             }
             CoreUpdate::DirListed { path, entries } => {
                 self.dirs.insert(path, entries);
