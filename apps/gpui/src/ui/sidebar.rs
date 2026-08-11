@@ -287,11 +287,17 @@ fn project_groups(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl In
         app.state.search_case,
         app.state.search_regex,
     );
-    let buckets: Vec<ProjectBucket> = match app.state.tab {
+    let mut buckets: Vec<ProjectBucket> = match app.state.tab {
         // chat 页只看没有项目归属的对话；code 页反之。
         SidebarTab::Chat => buckets.into_iter().filter(|b| b.project_id.is_none()).collect(),
         SidebarTab::Code => buckets.into_iter().filter(|b| b.project_id.is_some()).collect(),
     };
+
+    // 用户拖过的顺序优先；新项目排到末尾。
+    if app.state.tab == SidebarTab::Code {
+        crate::prefs::apply_order(&app.prefs.project_order, &mut buckets, |b| b.id.clone());
+    }
+    let ordered_ids: Vec<String> = buckets.iter().map(|b| b.id.clone()).collect();
 
     let mut list = v_flex()
         .id("project-groups")
@@ -311,7 +317,7 @@ fn project_groups(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl In
     }
 
     for bucket in &buckets {
-        list = list.child(project_group(app, cx, bucket));
+        list = list.child(project_group(app, cx, bucket, &ordered_ids));
     }
     list
 }
@@ -320,10 +326,13 @@ fn project_group(
     app: &HebbianApp,
     cx: &mut Context<HebbianApp>,
     bucket: &ProjectBucket,
+    ordered_ids: &[String],
 ) -> impl IntoElement {
     let theme = app.theme.clone();
     let collapsed = app.state.collapsed.contains(&bucket.id);
     let bucket_id = bucket.id.clone();
+    let drag_id = bucket.id.clone();
+    let drop_id = bucket.id.clone();
     let project_id = bucket.project_id.clone();
     let group_name = gpui::SharedString::from(format!("proj-row-{}", bucket.id));
     let count = bucket.sessions.len();
@@ -368,7 +377,21 @@ fn project_group(
                 if !this.state.collapsed.remove(&bucket_id) {
                     this.state.collapsed.insert(bucket_id.clone());
                 }
+                this.save_prefs();
                 cx.notify();
+            }))
+            // 拖动整行改顺序：按下即记住拖的是谁，松手时落到当前悬停的那一项上。
+            .on_drag(
+                ProjectDrag(drag_id.clone()),
+                |_, _, _, cx| cx.new(|_| crate::ui::widgets::NoDragPreview),
+            )
+            .on_drop(cx.listener({
+                let target = drop_id.clone();
+                let ids = ordered_ids.to_vec();
+                move |this, dragged: &ProjectDrag, _, cx| {
+                    this.reorder_project(&dragged.0, &target, &ids);
+                    cx.notify();
+                }
             }))
             // 悬停时右侧浮出「在这个项目里新建对话」。
             .child(
@@ -532,3 +555,7 @@ fn footer(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElemen
         .child(hue::control(app, cx))
         .children(hue::popover_for_footer(app, cx))
 }
+
+/// 拖项目排序的载荷。
+#[derive(Clone, Debug)]
+pub struct ProjectDrag(pub String);

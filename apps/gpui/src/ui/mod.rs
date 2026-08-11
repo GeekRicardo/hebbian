@@ -38,6 +38,11 @@ pub struct HebbianApp {
     /// 模型选择器是否展开，以及展开着哪个供应商。
     pub model_picker_open: bool,
     pub model_picker_provider: Option<String>,
+    /// 本机 UI 偏好（项目排序 / 折叠）。
+    pub prefs: crate::prefs::UiPrefs,
+    /// 正在拖的项目 id 与已经拖过的行数——用来预览让位。
+    pub dragging_project: Option<String>,
+
     /// 正在改标题（点头部标题进入）。
     pub title_editing: bool,
     /// 标题输入框。
@@ -176,6 +181,7 @@ impl HebbianApp {
         })
         .detach();
 
+        let prefs = crate::prefs::load(core.data_dir());
         core.refresh_catalog();
         core.refresh_providers();
         core.refresh_settings();
@@ -188,8 +194,11 @@ impl HebbianApp {
             }
         }
 
+        let mut state = AppState::new(core);
+        state.collapsed = prefs.collapsed.clone();
+
         Self {
-            state: AppState::new(core),
+            state,
             theme: Theme::new(ThemePreset::Glacier, 208.0),
             preset: ThemePreset::Glacier,
             hue: 208.0,
@@ -197,6 +206,8 @@ impl HebbianApp {
             right_collapsed: false,
             model_picker_open: false,
             model_picker_provider: None,
+            prefs,
+            dragging_project: None,
             title_editing: false,
             title_input,
             slash_open: false,
@@ -247,6 +258,30 @@ impl HebbianApp {
             });
         })
         .detach();
+    }
+
+    /// 记一次界面偏好（项目顺序 / 折叠）。改动即写盘，量很小。
+    pub fn save_prefs(&mut self) {
+        self.prefs.collapsed = self.state.collapsed.clone();
+        crate::prefs::save(self.state.core.data_dir(), &self.prefs);
+    }
+
+    /// 把 `from` 项目挪到 `to` 的位置，并记住新顺序。
+    pub fn reorder_project(&mut self, from: &str, to: &str, ordered_ids: &[String]) {
+        if from == to {
+            return;
+        }
+        let mut ids = ordered_ids.to_vec();
+        let Some(from_ix) = ids.iter().position(|id| id == from) else {
+            return;
+        };
+        let Some(to_ix) = ids.iter().position(|id| id == to) else {
+            return;
+        };
+        let moved = ids.remove(from_ix);
+        ids.insert(to_ix, moved);
+        self.prefs.project_order = ids;
+        self.save_prefs();
     }
 
     /// 关掉一个编辑器标签。关的是当前活动标签时，焦点顺延到相邻的那个。
