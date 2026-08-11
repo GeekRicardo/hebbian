@@ -18,7 +18,9 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::core::{Core, CoreUpdate};
+use crate::assets::Icon;
 use crate::state::AppState;
+use crate::ui::widgets::{h_flex, v_flex};
 use crate::theme::{Theme, ThemePreset};
 
 pub fn init(_cx: &mut App) {}
@@ -94,6 +96,8 @@ pub struct HebbianApp {
     pub title_input: Entity<InputState>,
     /// 多选提问已勾选的选项（按勾选顺序）。
     pub question_picked: Vec<String>,
+    /// 提问卡片折叠着没有（原版头部那个「折叠 / 展开」）。
+    pub question_collapsed: bool,
     /// 提问的「其他回答」自由输入。
     pub question_custom: Entity<InputState>,
     /// 审批卡片上「拒绝并说明」展开的反馈输入。
@@ -158,7 +162,7 @@ impl HebbianApp {
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索"));
         let claude_search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜标题…"));
+            cx.new(|cx| InputState::new(window, cx).placeholder("搜索标题或 UUID…"));
         let shell_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("留空 = 用系统默认 shell"));
         let title_input = cx.new(|cx| InputState::new(window, cx).placeholder("对话标题"));
@@ -324,6 +328,7 @@ impl HebbianApp {
             title_editing: false,
             title_input,
             question_picked: Vec::new(),
+            question_collapsed: false,
             question_custom,
             deny_feedback_open: false,
             deny_feedback,
@@ -875,7 +880,11 @@ fn import_claude_dialog(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> i
     // 用 Vec 而不是 HashMap 保持列表本来的时间顺序（新的在前）。
     let mut groups: Vec<(String, Vec<&crate::core::ClaudeImportable>)> = Vec::new();
     for item in &app.state.claude_importable {
-        if !query.is_empty() && !item.title.to_lowercase().contains(&query) {
+        // 标题和 uuid 都能搜——原版搜索框的提示语就是「搜索标题或 UUID…」。
+        if !query.is_empty()
+            && !item.title.to_lowercase().contains(&query)
+            && !item.uuid.to_lowercase().contains(&query)
+        {
             continue;
         }
         let dir = if item.cwd.is_empty() {
@@ -932,36 +941,65 @@ fn import_claude_dialog(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> i
         for item in list {
             let path = item.path.clone();
             let stamp = chrono::DateTime::from_timestamp_millis(item.modified_ms)
-                .map(|dt| dt.format("%m/%d %H:%M").to_string())
+                .map(|dt| chrono::DateTime::<chrono::Local>::from(dt))
+                .map(|dt| {
+                    // 今天的只显示时分，更早的显示月日——与原版一致。
+                    let now = chrono::Local::now();
+                    if dt.date_naive() == now.date_naive() {
+                        dt.format("%H:%M").to_string()
+                    } else {
+                        dt.format("%m/%d").to_string()
+                    }
+                })
                 .unwrap_or_default();
             group = group.child(
-                div()
+                h_flex()
                     .id(gpui::SharedString::from(format!("imp-{}", item.path)))
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .px(px(8.))
-                    .py(px(6.))
+                    .gap(px(8.))
+                    .items_start()
+                    .px(px(10.))
+                    .py(px(8.))
                     .rounded(px(8.))
+                    .border_1()
+                    .border_color(theme.line)
                     .cursor_pointer()
                     .hover(|this| this.bg(theme.accent_soft))
                     .child(
                         div()
-                            .text_size(px(12.))
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .child(item.title.clone()),
+                            .flex_none()
+                            .mt(px(1.))
+                            .child(Icon::MessageSquare.el(px(14.), theme.faint)),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap(px(8.))
-                            .text_size(px(10.))
-                            .text_color(theme.faint)
-                            .child(stamp)
-                            .child(format!("{} 条消息", item.message_count)),
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(3.))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .child(item.title.clone()),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap(px(8.))
+                                    .text_size(px(10.))
+                                    .text_color(theme.faint)
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
+                                            .font_family("monospace")
+                                            .child(format!("# {}", item.uuid)),
+                                    )
+                                    .child(format!("{} 条", item.message_count))
+                                    .child(stamp),
+                            ),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.state.core.preview_claude_session(path.clone());
@@ -982,15 +1020,21 @@ fn import_claude_dialog(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> i
             .gap(px(10.))
             .child(
                 div()
-                    .h(px(30.))
+                    .text_size(px(11.))
+                    .text_color(theme.muted)
+                    .child("选一段 Claude 里的对话搬进来，按项目分组。点击预览内容，满意了再导入。"),
+            )
+            .child(
+                h_flex()
+                    .h(px(32.))
                     .px(px(8.))
-                    .flex()
-                    .flex_row()
+                    .gap(px(6.))
                     .items_center()
                     .rounded(px(8.))
                     .border_1()
                     .border_color(theme.line)
                     .bg(theme.surface_veil)
+                    .child(Icon::Search.el(px(13.), theme.faint))
                     .child(
                         div()
                             .flex_1()
@@ -1000,13 +1044,7 @@ fn import_claude_dialog(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> i
                             .child(Input::new(&app.claude_search).appearance(false)),
                     ),
             )
-            .child(rows)
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(theme.muted)
-                    .child("点一条先看看内容，确认了再导入"),
-            ),
+            .child(rows),
     )
     .into_any_element()
 }

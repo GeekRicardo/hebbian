@@ -113,6 +113,8 @@ pub struct Extras {
 #[derive(Debug, Clone)]
 pub struct ClaudeImportable {
     pub path: String,
+    /// Claude 那边的会话 uuid（就是文件名）。列表里显示它，搜索也认它。
+    pub uuid: String,
     pub title: String,
     pub cwd: String,
     pub message_count: usize,
@@ -720,6 +722,7 @@ impl Core {
                     list.into_iter()
                         .map(|i| ClaudeImportable {
                             path: i.path.to_string_lossy().into_owned(),
+                            uuid: i.uuid,
                             title: i.title,
                             cwd: i.cwd,
                             message_count: i.message_count,

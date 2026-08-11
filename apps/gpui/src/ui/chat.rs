@@ -5,7 +5,7 @@
 
 use agent_core::storage::sessions::{Message, MessagePart, Role};
 use gpui::{div, prelude::*, px, AnyElement, Context, Entity, Window};
-use gpui_component::input::InputState;
+use gpui_component::input::{Input, InputState};
 
 use crate::assets::Icon;
 use crate::state::StreamingTurn;
@@ -588,6 +588,7 @@ pub(crate) struct RenderCtx {
     pub question_custom: Entity<InputState>,
     pub approval_picked: Vec<String>,
     pub question_picked: Vec<String>,
+    pub question_collapsed: bool,
 }
 
 impl RenderCtx {
@@ -604,6 +605,7 @@ impl RenderCtx {
             question_custom: app.question_custom.clone(),
             approval_picked: app.state.approval_picked.clone(),
             question_picked: app.question_picked.clone(),
+            question_collapsed: app.question_collapsed,
         }
     }
 
@@ -1546,7 +1548,13 @@ fn remember_section(
 ///
 /// 按原前端 `UserQuestionPopup` 对齐：单选点一下即回答；多选勾完点「提交」；
 /// 另有「其他回答」自由输入与「取消」（取消 = `UserAnswer::Cancelled`，
-/// 让模型知道用户主动放弃了这轮提问，而不是干等）。
+/// 提问卡片。照着跑起来的原版重做：
+///
+/// - 头部：问号图标 + 问题 + 「多选」徽章（只在多选时）+ 折叠开关 + 「ESC 取消」提示
+/// - 选项：整行按钮、行间一条细分隔线（不是一个个带边框的盒子）；多选时行首一个小方框，
+///   序号 `1.` 用等宽字体；选中整行染主色底
+/// - 「其他回答…」**只在单选时出现**（多选没有这一行）
+/// - 底部：「✕ 取消」/「➤ 提交」
 fn question_card(
     ctx: &RenderCtx,
     question: &crate::state::PendingQuestion,
@@ -1555,46 +1563,90 @@ fn question_card(
     let session_id = ctx.session_id.clone();
     let entity = ctx.entity.clone();
     let multi = question.multi;
+    let collapsed = ctx.question_collapsed;
 
-    let mut options = v_flex().gap(px(6.));
-    for option in &question.options {
+    let mut options = v_flex();
+    for (idx, option) in question.options.iter().enumerate() {
         let label = option.label.clone();
-        let sid = session_id.clone();
-        let picked = ctx.question_picked.contains(&label);
+        let checked = ctx.question_picked.contains(&label);
         let label_for_click = label.clone();
+        let sid = session_id.clone();
+        let entity_row = entity.clone();
+        if idx > 0 {
+            options = options.child(
+                div()
+                    .h(px(1.))
+                    .mx(px(12.))
+                    .bg(theme.line),
+            );
+        }
         options = options.child(
             h_flex()
                 .id(gpui::SharedString::from(format!("opt-{label}")))
+                .w_full()
                 .px(px(12.))
-                .py(px(8.))
+                .py(px(6.))
                 .gap(px(8.))
-                .rounded(px(8.))
-                .border_1()
-                .border_color(if picked { theme.accent } else { theme.line })
-                .when(picked, |this| this.bg(theme.accent_soft))
-                .text_size(px(12.))
+                .items_start()
+                .text_size(px(13.))
                 .cursor_pointer()
-                .hover(|this| this.bg(theme.accent_soft))
-                // 多选时给一个勾选指示，否则看不出已选了哪些。
+                .when(checked, |this| {
+                    this.bg(crate::theme::with_alpha(theme.accent, 0.1))
+                        .text_color(theme.accent)
+                })
+                .when(!checked, |this| this.hover(|h| h.bg(theme.surface_veil)))
+                // 多选才有勾选框；单选靠整行高亮表示选中。
                 .when(multi, |this| {
                     this.child(
                         div()
-                            .size(px(12.))
+                            .mt(px(3.))
+                            .size(px(14.))
                             .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
                             .rounded(px(3.))
                             .border_1()
-                            .border_color(if picked { theme.accent } else { theme.line })
-                            .when(picked, |this| this.bg(theme.accent)),
+                            .border_color(if checked { theme.accent } else { theme.line })
+                            .when(checked, |b| b.bg(theme.accent))
+                            .text_size(px(10.))
+                            .text_color(gpui::white())
+                            .child(if checked { "✓" } else { "" }),
                     )
                 })
-                .child(label.clone())
+                .child(
+                    div()
+                        .flex_none()
+                        .font_family("monospace")
+                        .text_size(px(12.))
+                        .text_color(if checked { theme.accent } else { theme.muted })
+                        .child(format!("{}.", idx + 1)),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .font_weight(gpui::FontWeight(500.))
+                                .child(label.clone()),
+                        )
+                        .when(!option.description.trim().is_empty(), |this| {
+                            this.child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(theme.muted)
+                                    .child(option.description.clone()),
+                            )
+                        }),
+                )
                 .on_click({
-                    let entity = entity.clone();
+                    let entity = entity_row.clone();
                     move |_, _, outer: &mut gpui::App| {
                         let Some(app) = entity.upgrade() else { return };
                         app.update(outer, |this, cx| {
                             if multi {
-                                // 多选只切换勾选状态，等用户点「提交」再一次性回答。
+                                // 多选只切勾选状态，等用户点「提交」再一次性回答。
                                 if let Some(i) =
                                     this.question_picked.iter().position(|l| l == &label_for_click)
                                 {
@@ -1616,99 +1668,186 @@ fn question_card(
                             }
                             this.question_picked.clear();
                             cx.notify();
-                
                         });
                     }
                 }),
         );
     }
 
-    let sid_submit = session_id.clone();
-    let sid_custom = session_id.clone();
-    let sid_cancel = session_id.clone();
+    // 「其他回答…」只有单选才有——多选场景下原版没有这一行。
+    if !multi {
+        let sid_custom = session_id.clone();
+        options = options
+            .child(div().h(px(1.)).mx(px(12.)).bg(theme.line))
+            .child(
+                h_flex()
+                    .w_full()
+                    .px(px(12.))
+                    .py(px(6.))
+                    .gap(px(6.))
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(13.))
+                            .text_color(theme.input_text)
+                            .child(Input::new(&ctx.question_custom).appearance(false)),
+                    )
+                    .child(
+                        h_flex()
+                            .id("answer-custom")
+                            .flex_none()
+                            .gap(px(4.))
+                            .px(px(8.))
+                            .py(px(3.))
+                            .rounded(px(6.))
+                            .text_size(px(12.))
+                            .text_color(theme.accent)
+                            .cursor_pointer()
+                            .hover(|this| this.bg(theme.accent_soft))
+                            .child(Icon::Send.el(px(12.), theme.accent))
+                            .child("发送")
+                            .on_click({
+                                let entity = entity.clone();
+                                move |_, window: &mut Window, outer: &mut gpui::App| {
+                                    let Some(app) = entity.upgrade() else { return };
+                                    app.update(outer, |this, cx| {
+                                        let text = this
+                                            .question_custom
+                                            .read(cx)
+                                            .value()
+                                            .trim()
+                                            .to_string();
+                                        if text.is_empty() {
+                                            return;
+                                        }
+                                        if let Some(pending) =
+                                            this.state.take_question(&sid_custom)
+                                        {
+                                            this.state.core.answer_question(
+                                                sid_custom.clone(),
+                                                pending.request_id,
+                                                protocol::UserAnswer::Custom { text },
+                                            );
+                                        }
+                                        this.question_custom.update(cx, |state, cx| {
+                                            state.set_value("", window, cx)
+                                        });
+                                        this.question_picked.clear();
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    ),
+            );
+    }
 
+    let sid_cancel = session_id.clone();
+    let sid_submit = session_id.clone();
     v_flex()
         .mx_auto()
         .mb(px(20.))
         .w_full()
         .max_w(px(720.))
-        .p(px(14.))
-        .gap(px(10.))
-        .rounded(px(16.))
+        .rounded(px(12.))
         .border_1()
-        .border_color(theme.accent)
+        .border_color(theme.line)
         .bg(theme.card_strong)
-        .child(
-            div()
-                .text_size(px(13.))
-                .font_weight(gpui::FontWeight(650.))
-                .child(question.question.clone()),
-        )
-        .child(options)
+        .overflow_hidden()
+        // 头部
         .child(
             h_flex()
+                .px(px(12.))
+                .py(px(8.))
                 .gap(px(8.))
+                .items_start()
+                .border_b_1()
+                .border_color(theme.line)
+                .child(div().mt(px(2.)).child(Icon::CircleHelp.el(px(14.), theme.accent)))
                 .child(
                     div()
                         .flex_1()
-                        .px(px(10.))
-                        .py(px(6.))
-                        .rounded(px(8.))
-                        .border_1()
-                        .border_color(theme.line)
-                        .text_size(px(12.))
-                        .child(gpui_component::input::Input::new(&ctx.question_custom)),
+                        .min_w_0()
+                        .text_size(px(13.))
+                        .font_weight(gpui::FontWeight(500.))
+                        .child(question.question.clone()),
                 )
+                .when(multi, |this| {
+                    this.child(
+                        div()
+                            .flex_none()
+                            .px(px(6.))
+                            .py(px(1.))
+                            .rounded(px(4.))
+                            .bg(crate::theme::with_alpha(theme.accent, 0.15))
+                            .text_size(px(11.))
+                            .font_weight(gpui::FontWeight(500.))
+                            .text_color(theme.accent)
+                            .child("多选"),
+                    )
+                })
                 .child(
                     h_flex()
-                        .id("answer-custom")
-                        .h(px(30.))
-                        .px(px(12.))
-                        .rounded(px(8.))
-                        .bg(theme.accent)
-                        .text_color(gpui::white())
-                        .text_size(px(12.))
+                        .id("question-collapse")
+                        .flex_none()
+                        .gap(px(2.))
+                        .text_size(px(11.))
+                        .text_color(theme.muted)
                         .cursor_pointer()
-                        .child("发送")
+                        .hover(|this| this.text_color(theme.text))
+                        .child(
+                            if collapsed {
+                                Icon::ChevronRight
+                            } else {
+                                Icon::ChevronDown
+                            }
+                            .el(px(11.), theme.muted),
+                        )
+                        .child(if collapsed { "展开" } else { "折叠" })
                         .on_click({
                             let entity = entity.clone();
-                            move |_, window: &mut Window, outer: &mut gpui::App| {
+                            move |_, _, outer: &mut gpui::App| {
                                 let Some(app) = entity.upgrade() else { return };
                                 app.update(outer, |this, cx| {
-                                    let text = this.question_custom.read(cx).value().trim().to_string();
-                                    if text.is_empty() {
-                                        return;
-                                    }
-                                    if let Some(pending) = this.state.take_question(&sid_custom) {
-                                        this.state.core.answer_question(
-                                            sid_custom.clone(),
-                                            pending.request_id,
-                                            protocol::UserAnswer::Custom { text },
-                                        );
-                                    }
-                                    this.question_custom
-                                        .update(cx, |state, cx| state.set_value("", window, cx));
-                                    this.question_picked.clear();
+                                    this.question_collapsed = !this.question_collapsed;
                                     cx.notify();
-                        
                                 });
                             }
                         }),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(theme.faint)
+                        .child("ESC 取消"),
                 ),
         )
+        // 选项（折叠时藏起来，让用户先看上面的内容）
+        .when(!collapsed, |this| this.child(options))
+        // 底部
         .child(
             h_flex()
+                .px(px(12.))
+                .py(px(8.))
                 .gap(px(8.))
+                .items_center()
+                .border_t_1()
+                .border_color(theme.line)
+                .child(div().flex_1())
                 .child(
                     h_flex()
                         .id("answer-cancel")
-                        .h(px(30.))
-                        .px(px(12.))
+                        .gap(px(4.))
+                        .px(px(10.))
+                        .py(px(4.))
                         .rounded(px(8.))
                         .text_size(px(12.))
                         .text_color(theme.muted)
                         .cursor_pointer()
-                        .hover(|this| this.bg(theme.accent_soft))
+                        .hover(|this| this.bg(theme.surface_veil))
+                        .child(Icon::X.el(px(12.), theme.muted))
                         .child("取消")
                         .on_click({
                             let entity = entity.clone();
@@ -1724,24 +1863,24 @@ fn question_card(
                                     }
                                     this.question_picked.clear();
                                     cx.notify();
-                        
                                 });
                             }
                         }),
                 )
-                .child(div().flex_1())
                 .when(multi, |row| {
                     row.child(
                         h_flex()
                             .id("answer-submit")
-                            .h(px(30.))
-                            .px(px(14.))
+                            .gap(px(4.))
+                            .px(px(12.))
+                            .py(px(5.))
                             .rounded(px(8.))
                             .bg(theme.accent)
-                            .text_color(gpui::white())
                             .text_size(px(12.))
+                            .text_color(gpui::white())
                             .cursor_pointer()
-                            .child(format!("提交（已选 {}）", ctx.question_picked.len()))
+                            .child(Icon::Send.el(px(12.), gpui::white()))
+                            .child("提交")
                             .on_click({
                                 let entity = entity.clone();
                                 move |_, _, outer: &mut gpui::App| {
@@ -1751,7 +1890,9 @@ fn question_card(
                                             return;
                                         }
                                         let labels = this.question_picked.clone();
-                                        if let Some(pending) = this.state.take_question(&sid_submit) {
+                                        if let Some(pending) =
+                                            this.state.take_question(&sid_submit)
+                                        {
                                             this.state.core.answer_question(
                                                 sid_submit.clone(),
                                                 pending.request_id,
@@ -1760,7 +1901,6 @@ fn question_card(
                                         }
                                         this.question_picked.clear();
                                         cx.notify();
-                            
                                     });
                                 }
                             }),
