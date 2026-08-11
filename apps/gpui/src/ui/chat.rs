@@ -137,7 +137,20 @@ fn canvas(
     let Some(session) = app.state.current.as_ref() else {
         return no_session_state(app, cx).into_any_element();
     };
-    if session.messages.is_empty() && app.state.streaming.is_empty() {
+    // 只有「真的什么都没有」才显示欢迎页。有待审批 / 待回答时不能早返回——
+    // 否则审批卡片会被欢迎页顶掉，run 卡在那儿而界面上什么都没有（实测踩到过）。
+    let has_pending = app
+        .state
+        .current_id()
+        .is_some_and(|id| {
+            app.state.pending_approvals.contains_key(id)
+                || app.state.pending_questions.contains_key(id)
+        });
+    if session.messages.is_empty()
+        && app.state.messages.is_empty()
+        && app.state.streaming.is_empty()
+        && !has_pending
+    {
         return empty_state(app).into_any_element();
     }
 

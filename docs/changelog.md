@@ -12202,3 +12202,14 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
   - **`refuse_remember` 为真时整个区不出现**——不是灰掉，是根本不给。core 判定这条命令含危险复合模式时就不该有「记住」这个选项。
 - **影响范围**: 仅 `apps/gpui`。33 条单测通过。
 - **留尾巴**: 段与命令原文的 cross-link 高亮（原前端勾某段时会把命令里对应片段染色）没做；本机没有可用模型，触发不了真实审批事件，这一区只验到编译与逻辑，需在有 provider 的环境点一次真实审批复核。
+
+### 2026-08-11 — 用 mock provider 跑通真实 run，抓出三个只有真跑才会暴露的 bug
+
+- **Why**: 「审批卡片要在有 provider 的环境验」这条我挂了好几轮。与其等，不如**把这个环境造出来**——写一个最小 OpenAI 兼容 mock（`apps/gpui/dev/mock-provider.py`），让「发消息 → 工具调用 → 审批 → 收尾」整条链路在没有任何凭证的机器上跑通。
+- **抓到的三个 bug（都是只有真跑才会暴露的）**:
+  1. **发完消息屏幕毫无变化**。`send_message` 没把用户自己那条消息挂上去，而我只在 `RunFinished` 后重读 transcript——中间这段用户看不到自己发的话，像是没发出去。改成发送时先本地追加，落盘后由 jsonl 覆盖。
+  2. **审批卡片被欢迎页顶掉**。`canvas()` 在 `messages.is_empty()` 时早返回欢迎页，而首轮就触发审批时 transcript 恰恰是空的——run 卡在等审批，界面上什么都没有。改成有待审批 / 待回答时不早返回。
+  3. **助手回复重复一遍**。`open_session` / `send_message` / `run_continue` 各自调 `subscribe`，同一 session 起了多个 reader，每条事件投递多次，`streaming.text` 被追加两遍。加「已订阅」表去重，reader 退出时摘标记（失败路径也要摘，否则该 session 再也订阅不上）。
+- **审批卡片终于验到真数据**：core 把 `rm /tmp/mock-target` 判为 `Unmemorable`（红色、不可勾选、「每次都要确认，不能记住」），`echo done` 判为 `Readonly`（灰显「只读，免审」），三个范围按钮就位。**这正是我之前说「需要在有 provider 的环境复核」的那一项，现在不需要了。**
+- **影响范围**: `apps/gpui` + 新增 dev 脚本。33 条单测通过。
+- **留尾巴**: mock 只覆盖「一次工具调用 + 收尾」，没覆盖多轮工具、流式 reasoning、压缩等路径。

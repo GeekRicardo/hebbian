@@ -113,6 +113,10 @@ pub struct Core {
 
 struct CoreInner {
     rt: Runtime,
+    /// 已经在订阅事件流的 session。**必须去重**：open_session / send_message /
+    /// run_continue 都会订阅，同一个 session 起多个 reader 会让每条事件被投递多次，
+    /// 表现为助手回复重复一遍（实测就是这样发现的）。
+    subscribed: std::sync::Mutex<std::collections::HashSet<String>>,
     data_dir: PathBuf,
     permission_store: Option<Arc<PermissionStore>>,
     runtimes: RuntimeRegistry,
@@ -146,6 +150,7 @@ impl Core {
             Self {
                 inner: Arc::new(CoreInner {
                     rt,
+                    subscribed: std::sync::Mutex::new(std::collections::HashSet::new()),
                     data_dir,
                     permission_store,
                     runtimes,
@@ -954,6 +959,13 @@ impl Core {
     /// 订阅某个会话的事件流。重复调用是安全的：每次订阅拿的是同一个 broadcast 的新读端，
     /// 收到 `RunFinished` / `Error` 后自行退出，不会常驻堆积。
     fn subscribe(&self, session_id: String) {
+        // 已经有 reader 就不再起第二个。
+        {
+            let mut set = self.inner.subscribed.lock().expect("subscribed set");
+            if !set.insert(session_id.clone()) {
+                return;
+            }
+        }
         let this = self.clone();
         self.inner.rt.spawn(async move {
             let runtime = match this
@@ -967,7 +979,14 @@ impl Core {
                 .await
             {
                 Ok(runtime) => runtime,
-                Err(err) => return this.emit_err(err),
+                Err(err) => {
+                    this.inner
+                        .subscribed
+                        .lock()
+                        .expect("subscribed set")
+                        .remove(&session_id);
+                    return this.emit_err(err);
+                }
             };
             let mut events = runtime.state.subscribe();
             while let Ok(envelope) = events.recv().await {
@@ -983,6 +1002,12 @@ impl Core {
                     break;
                 }
             }
+            // reader 退出后要摘掉标记，否则这个 session 再也订阅不上了。
+            this.inner
+                .subscribed
+                .lock()
+                .expect("subscribed set")
+                .remove(&session_id);
         });
     }
 

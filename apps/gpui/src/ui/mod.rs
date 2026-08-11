@@ -529,6 +529,21 @@ impl HebbianApp {
         }
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
+        // 先把自己这条消息挂上去再发。落盘 + RunFinished 后会用 jsonl 覆盖它，
+        // 但在那之前必须立刻可见——否则用户按下回车后屏幕毫无变化，
+        // 看起来像没发出去（实测就是这样）。
+        self.state.messages.push(agent_core::storage::sessions::Message {
+            id: format!("local-{}", crate::ui::widgets::now_ms()),
+            role: agent_core::storage::sessions::Role::User,
+            content: text.clone(),
+            attachments: Vec::new(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            created_at: crate::ui::widgets::now_ms(),
+            meta: None,
+            subagent_call_id: None,
+            run_duration_ms: None,
+        });
         self.state.core.send_message(session_id, text);
         cx.notify();
     }
