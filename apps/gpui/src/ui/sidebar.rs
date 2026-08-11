@@ -151,20 +151,47 @@ fn toolbar(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEleme
             this.child(
                 v_flex()
                     .gap(px(4.))
-                    .child(toolbar_action(app, cx, Icon::Plus, "新建项目"))
-                    .child(toolbar_action(app, cx, Icon::Import, "导入项目"))
-                    .child(toolbar_action(app, cx, Icon::FolderOpen, "导入 VS Code")),
+                    .child(toolbar_action(
+                        app,
+                        cx,
+                        Icon::Plus,
+                        "新建项目",
+                        ToolbarAction::NewProject,
+                    ))
+                    .child(toolbar_action(
+                        app,
+                        cx,
+                        Icon::Import,
+                        "导入项目",
+                        ToolbarAction::ImportProject,
+                    ))
+                    .child(toolbar_action(
+                        app,
+                        cx,
+                        Icon::FolderOpen,
+                        "导入 VS Code",
+                        ToolbarAction::ImportVscode,
+                    )),
             )
         })
         .child(search_box(app))
 }
 
 /// `.dsp-project-actions button`：h 26 / 圆角 8 / 图标 13。
+/// 项目工具区的三个入口。
+#[derive(Debug, Clone, Copy)]
+enum ToolbarAction {
+    NewProject,
+    ImportProject,
+    ImportVscode,
+}
+
 fn toolbar_action(
     app: &HebbianApp,
     cx: &mut Context<HebbianApp>,
     icon: Icon,
     label: &'static str,
+    action: ToolbarAction,
 ) -> impl IntoElement {
     let theme = app.theme.clone();
     h_flex()
@@ -180,11 +207,15 @@ fn toolbar_action(
         .hover(|this| this.bg(theme.accent_soft).text_color(theme.text))
         .child(icon.el(px(13.), theme.muted))
         .child(label)
-        .on_click(cx.listener(move |this, _, _, cx| {
-            // 目录选择器要等 native 文件对话框接进来（gpui 的 prompt_for_paths 在
-            // 主线程异步返回），先把动作留成明确的提示而不是静默无反应。
-            this.state.error = Some(format!("「{label}」还没接上目录选择器"));
-            cx.notify();
+        .on_click(cx.listener(move |this, _, _, cx| match action {
+            ToolbarAction::NewProject => this.pick_project_dir(cx),
+            // 导入项目 / 导入 VS Code 读的是 .code-workspace / json 文件，
+            // 解析规则在 core 里还没暴露成 CoreRequest，先明确说明而不是假装能点。
+            ToolbarAction::ImportProject | ToolbarAction::ImportVscode => {
+                this.state.error =
+                    Some(format!("「{label}」还没接上，先用原来的桌面端导入，两边读同一份配置"));
+                cx.notify();
+            }
         }))
 }
 

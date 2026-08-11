@@ -155,6 +155,28 @@ impl Core {
         });
     }
 
+    /// 新建项目：把一个目录登记成 workspace project。
+    pub fn create_project(&self, workdir: PathBuf) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let name = workdir
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "项目".to_string());
+            let input = agent_core::storage::projects::WorkspaceProjectInput {
+                id: None,
+                name,
+                workdir,
+                allowed_paths: Vec::new(),
+                source: Some("manual".to_string()),
+            };
+            match this.local_client().save_project(input) {
+                Ok(_) => this.refresh_catalog(),
+                Err(err) => this.emit_err(err),
+            }
+        });
+    }
+
     /// 读一次全局设置。
     pub fn refresh_settings(&self) {
         let this = self.clone();

@@ -39,6 +39,8 @@ pub struct HebbianApp {
     /// 设置面板是否打开、停在哪一页。
     pub settings_open: bool,
     pub settings_tab: settings::SettingsTab,
+    /// 右侧工作台当前显示哪个面板。
+    pub workbench: right_panel::Workbench,
 
     pub composer: Entity<InputState>,
     pub search: Entity<InputState>,
@@ -126,6 +128,7 @@ impl HebbianApp {
             model_picker_provider: None,
             settings_open: false,
             settings_tab: settings::SettingsTab::General,
+            workbench: right_panel::Workbench::Files,
             composer,
             search,
             focus: cx.focus_handle(),
@@ -137,6 +140,32 @@ impl HebbianApp {
         self.hue = hue;
         self.theme = Theme::new(preset, hue);
         cx.notify();
+    }
+
+    /// 弹系统目录选择器，选中的目录登记成项目。
+    ///
+    /// `prompt_for_paths` 走的是平台原生对话框，结果异步回来，所以要在 gpui 的
+    /// async 任务里等，拿到后再回到主线程改状态。
+    pub fn pick_project_dir(&mut self, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("选择项目文件夹".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let Some(dir) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.state.core.create_project(dir);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// 发送输入框里的内容。空白不发；发完清空。

@@ -88,6 +88,9 @@ pub struct AppState {
     pub search_regex: bool,
     pub collapsed: HashSet<String>,
 
+    /// 当前会话的 todo 列表。由 `TodoListUpdated` 事件驱动，不落单独的盘。
+    pub todos: Vec<protocol::WireTodoItem>,
+
     /// 展开着的工具卡片 / 思考块（按 message id + 序号定位）。
     pub expanded_parts: HashSet<String>,
 
@@ -122,6 +125,7 @@ impl AppState {
             search_case: false,
             search_regex: false,
             collapsed: HashSet::new(),
+            todos: Vec::new(),
             expanded_parts: HashSet::new(),
             dirs: HashMap::new(),
             expanded_dirs: HashSet::new(),
@@ -156,6 +160,7 @@ impl AppState {
                     .cloned()
                     .collect();
                 self.streaming = StreamingTurn::default();
+                self.todos.clear();
                 if let Some(workdir) = session.workdir.clone() {
                     self.expanded_dirs.insert(workdir.clone());
                     self.core.list_dir(workdir);
@@ -256,6 +261,12 @@ impl AppState {
                         multi,
                     },
                 );
+            }
+            WireEvent::TodoListUpdated { todos, .. } => {
+                if !foreground {
+                    return false;
+                }
+                self.todos = todos;
             }
             WireEvent::RunFinished { .. } => {
                 self.running.remove(session_id);
