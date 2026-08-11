@@ -176,7 +176,7 @@ fn tab_bar(
                 }))
                 .child(
                     div()
-                        .id("x")
+                        .id(gpui::SharedString::from(format!("close-{}", path.display())))
                         .size(px(16.))
                         .flex()
                         .items_center()
@@ -186,6 +186,9 @@ fn tab_bar(
                         .hover(|this| this.bg(theme.line))
                         .child(Icon::X.el(px(10.), theme.faint))
                         .on_click(cx.listener(move |this, _, _, cx| {
+                            // 关标签不该顺带切到这个标签上——否则关的是别的文件时
+                            // 编辑区会先跳过来再关掉，闪一下。
+                            cx.stop_propagation();
                             this.close_file(&close);
                             cx.notify();
                         })),

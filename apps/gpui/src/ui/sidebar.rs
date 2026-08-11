@@ -334,6 +334,7 @@ fn project_group(
     let drag_id = bucket.id.clone();
     let drop_id = bucket.id.clone();
     let project_id = bucket.project_id.clone();
+    let import_project = bucket.project_id.clone();
     let group_name = gpui::SharedString::from(format!("proj-row-{}", bucket.id));
     let count = bucket.sessions.len();
 
@@ -409,7 +410,28 @@ fn project_group(
                     .invisible()
                     .group_hover(group_name.clone(), |this| this.visible())
                     .hover(|this| this.bg(theme.accent_soft).text_color(theme.accent))
+                    .children(match &app.hover_popup {
+                        Some(p @ crate::ui::HoverPopup::ImportToProject(pid))
+                            if pid == &bucket.project_id =>
+                        {
+                            Some(crate::ui::hover_popup(&theme, p.clone(), cx))
+                        }
+                        _ => None,
+                    })
                     .child(Icon::Plus.el(px(13.), theme.faint))
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if *hovered {
+                            this.hover_popup = Some(crate::ui::HoverPopup::ImportToProject(
+                                import_project.clone(),
+                            ));
+                        } else if matches!(
+                            this.hover_popup,
+                            Some(crate::ui::HoverPopup::ImportToProject(_))
+                        ) {
+                            this.hover_popup = None;
+                        }
+                        cx.notify();
+                    }))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         this.state.core.create_session(project_id.clone(), None);
@@ -475,6 +497,7 @@ fn session_row(
     let open_id = id.clone();
     let delete_id = id.clone();
     let delete_title = session.title.clone();
+    let export_id = id.clone();
     let group_name = gpui::SharedString::from(format!("sess-row-{id}"));
 
     h_flex()
@@ -549,7 +572,27 @@ fn session_row(
                 .invisible()
                 .group_hover(group_name.clone(), |this| this.visible())
                 .hover(|this| this.bg(gpui::rgba(0xd35b5b1a)).text_color(theme.danger))
+                .children(match &app.hover_popup {
+                    Some(p @ crate::ui::HoverPopup::ExportSession(sid)) if sid == &id => {
+                        Some(crate::ui::hover_popup(&theme, p.clone(), cx))
+                    }
+                    _ => None,
+                })
                 .child(Icon::Trash2.el(px(12.), theme.faint))
+                // 悬停在删除键上浮出「导出到 Claude」，与原 UI 一致。
+                // 挂在删除键上看着别扭，但它是这一行里唯一常驻的锚点。
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    if *hovered {
+                        this.hover_popup =
+                            Some(crate::ui::HoverPopup::ExportSession(export_id.clone()));
+                    } else if matches!(
+                        this.hover_popup,
+                        Some(crate::ui::HoverPopup::ExportSession(_))
+                    ) {
+                        this.hover_popup = None;
+                    }
+                    cx.notify();
+                }))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     // 点删除不该顺带把这条对话打开——事件必须在这里截住，
                     // 否则会冒泡到整行的 on_click。

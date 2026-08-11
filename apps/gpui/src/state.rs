@@ -93,6 +93,11 @@ pub struct AppState {
     pub search_regex: bool,
     pub collapsed: HashSet<String>,
 
+    /// 用户 Claude 目录下可以导入的对话（导入弹窗打开时才拉）。
+    pub claude_importable: Vec<crate::core::ClaudeImportable>,
+    /// 刚导出成功的那条 `claude --resume` 命令，等用户复制走。
+    pub claude_exported: Option<String>,
+
     /// 待用户确认的破坏性操作。删除对话 / 删除项目都不可撤销，
     /// 所以照原 UI 一样问两遍——第一遍防误点，第二遍防手快。
     pub confirm: Option<Confirm>,
@@ -186,6 +191,8 @@ impl AppState {
             search_case: false,
             search_regex: false,
             collapsed: HashSet::new(),
+            claude_importable: Vec::new(),
+            claude_exported: None,
             confirm: None,
             plans: Vec::new(),
             extras: crate::core::Extras::default(),
@@ -264,6 +271,12 @@ impl AppState {
             }
             CoreUpdate::SessionCreated(id) => {
                 self.core.open_session(id);
+            }
+            CoreUpdate::ClaudeImportable(list) => {
+                self.claude_importable = list;
+            }
+            CoreUpdate::ClaudeExported { resume_command } => {
+                self.claude_exported = Some(resume_command);
             }
             CoreUpdate::Edits(edits) => {
                 self.edits = edits;

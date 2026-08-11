@@ -36,6 +36,10 @@ pub enum CoreUpdate {
     SessionLoaded(Box<Session>),
     /// 新建会话成功，附带要打开的 id。
     SessionCreated(String),
+    /// 用户 Claude 目录下可导入的对话列表。
+    ClaudeImportable(Vec<ClaudeImportable>),
+    /// 导出到 Claude 完成，附带可直接粘贴执行的 resume 命令。
+    ClaudeExported { resume_command: String },
     /// 这个会话改过的文件（按 run 分组，新的在前）。
     Edits(Vec<agent_core::edits::metadata::RunEditEntry>),
     /// 从这个会话分叉出去的旁支（会话 id + 标题）。
@@ -95,6 +99,21 @@ pub struct Extras {
     pub plugins: Vec<agent_core::storage::plugins::PluginListItem>,
     pub mcp_servers: Vec<String>,
     pub hooks_raw: String,
+}
+
+/// 用户 Claude 目录下一条可导入的对话。
+#[derive(Debug, Clone)]
+pub struct ClaudeImportable {
+    pub path: String,
+    pub title: String,
+    pub cwd: String,
+    pub message_count: usize,
+    pub modified_ms: i64,
+}
+
+/// 把字符串包成单引号 shell 字面量，路径里有空格 / 引号也不会把命令拆坏。
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// 文件树的一个条目。
@@ -663,6 +682,115 @@ impl Core {
     /// 注册表是进程内的：gpui 自己跑 run，所以这里看到的就是它自己起的那些。
     /// 别的 surface（Desktop / heb）起的后台任务在它们各自进程里，这边看不到——
     /// 这是 in-process 架构的既有边界（架构 §7.5），不是这里漏读了。
+    /// 列出用户 Claude 目录下可以导入的对话。
+    ///
+    /// 目录不存在不算错——大多数人机器上根本没装 Claude Code，
+    /// 这时候给一个空列表让弹窗自己说「没找到」，比弹一条报错友好。
+    pub fn refresh_claude_importable(&self) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let Some(home) = dirs::home_dir() else {
+                return this.emit_err("找不到用户主目录");
+            };
+            let dir = home.join(".claude").join("projects");
+            match agent_core::storage::import_claude::list_importable(&dir) {
+                Ok(list) => this.emit(CoreUpdate::ClaudeImportable(
+                    list.into_iter()
+                        .map(|i| ClaudeImportable {
+                            path: i.path.to_string_lossy().into_owned(),
+                            title: i.title,
+                            cwd: i.cwd,
+                            message_count: i.message_count,
+                            modified_ms: i.modified_ms,
+                        })
+                        .collect(),
+                )),
+                Err(_) => this.emit(CoreUpdate::ClaudeImportable(Vec::new())),
+            }
+        });
+    }
+
+    /// 把一个 Claude 对话文件导进来，成功后直接打开它。
+    pub fn import_claude_session(&self, path: String, project_id: Option<String>) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let content = match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(err) => return this.emit_err(format!("读不了这个文件：{err}")),
+            };
+            let parsed = match agent_core::storage::import_claude::parse_claude_jsonl(&content) {
+                Ok(parsed) => parsed,
+                Err(err) => return this.emit_err(err),
+            };
+            // provider_id 留空：导进来的对话没有本侧供应商，
+            // 用户要接着聊时在对话设置里选一个。
+            let created = agent_core::storage::sessions::create_with_workspace(
+                &this.inner.data_dir,
+                String::new(),
+                parsed.model,
+                None,
+                None,
+                "claude".into(),
+                project_id,
+                parsed.workdir,
+                Vec::new(),
+            );
+            let mut session = match created {
+                Ok(session) => session,
+                Err(err) => return this.emit_err(err),
+            };
+            session.title = parsed.title;
+            session.messages = parsed.messages;
+            let id = session.id.clone();
+            match agent_core::storage::sessions::save(&this.inner.data_dir, session) {
+                Ok(_) => {
+                    this.refresh_catalog();
+                    this.emit(CoreUpdate::SessionCreated(id));
+                }
+                Err(err) => this.emit_err(err),
+            }
+        });
+    }
+
+    /// 把一段对话导出成 Claude 能 resume 的会话文件。
+    ///
+    /// 转换本身在 agent-core 里做（无副作用），落盘留在这一层——
+    /// 写的是用户自己的 `~/.claude` 目录，不属于 agent-core 该碰的地方。
+    pub fn export_session_to_claude(&self, session_id: String, include_thinking: bool) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let Some(home) = dirs::home_dir() else {
+                return this.emit_err("找不到用户主目录");
+            };
+            let export = match agent_core::storage::export_claude::build_claude_resume(
+                &this.inner.data_dir,
+                &session_id,
+                include_thinking,
+                &home,
+            ) {
+                Ok(export) => export,
+                Err(err) => return this.emit_err(err),
+            };
+            let dir = home.join(".claude").join("projects").join(&export.dir_name);
+            if let Err(err) = std::fs::create_dir_all(&dir) {
+                return this.emit_err(format!("建不了导出目录：{err}"));
+            }
+            let path = dir.join(format!("{}.jsonl", export.session_uuid));
+            if let Err(err) = std::fs::write(&path, export.lines.join("\n")) {
+                return this.emit_err(format!("写不进去：{err}"));
+            }
+            // resume 那头是按当前目录找会话文件的，所以命令要先 cd 回原目录，
+            // 否则换个地方执行就说找不到这个会话。
+            this.emit(CoreUpdate::ClaudeExported {
+                resume_command: format!(
+                    "cd {} && claude --resume {}",
+                    shell_quote(&export.cwd),
+                    export.session_uuid
+                ),
+            });
+        });
+    }
+
     /// 停掉一个还在跑的后台命令。
     ///
     /// 停完立刻重读一次注册表：注册表是进程内内存，没有变更推送，

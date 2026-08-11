@@ -12244,3 +12244,37 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - `load_edit_diff` 与 desktop `diff_edit` / hebweb `cmd_diff_edit` 是三处形状相同的「建 worktree → 找 run → 找 file → diff_text」样板。真要收口应在 `agent_core::edits` 上加一个 `diff_run_file(&self, run_id, real_path)`，三个 surface 各减十几行——本次没做，因为它会动到 Desktop 与 hebweb 两个已发布 surface，值得单开一次改动
 - 后台任务面板还差「展开看实时输出」（原前端展开卡片会 polling `read_background_task_output`）
 - `apps/desktop` 的模型 / 思考强度切换去重仍卡在 Linux 上 `cargo check -p hebbian` 编不过（`tauri-runtime-wry` E0046/E0277），非本次改动引入
+
+---
+
+## 2026-08-11 — gpui surface：补上「导出到 Claude / 从 Claude 导入」两个悬停浮窗与配套弹窗
+
+**Why**：核对原 `DesktopSidebar.tsx` 时发现两个**完全没搬过来**的入口，而且它们正是那种「不点开就看不见」的小窗口：
+
+- 鼠标停在**会话删除键**上 → 侧栏右缘浮出「导出到 Claude」
+- 鼠标停在**项目新建键**上 → 浮出「从 Claude 导入」，点开是一个列出本机 Claude 对话的弹窗
+
+之所以是悬停浮出而不是点开菜单：浮窗里只有一个按钮，为一个按钮多要一次点击不值当。原前端也是这么设计的。
+
+**改动**：
+- `apps/gpui/src/core.rs`：新增 `refresh_claude_importable` / `import_claude_session` / `export_session_to_claude`。转换全部走 `agent_core::storage::{import_claude, export_claude}`（与 Desktop / hebweb 同一份实现，没有复制解析逻辑）；落盘留在 surface 这一层，因为写的是用户自己的 Claude 目录，不该由 agent-core 去碰。Claude 目录不存在时返回空列表而不是报错——大多数机器上根本没装 Claude Code，为此弹一条红字没意义
+- `apps/gpui/src/ui/mod.rs`：新增 `HoverPopup` 状态与 `hover_popup` 元素（`deferred` + `anchored`，跟着锚点走，侧栏一滚也不飘）、`import_claude_dialog`、`exported_dialog`、共用的 `dialog_frame`
+- `apps/gpui/src/ui/sidebar.rs`：两个锚点各挂一个 `on_hover`
+- `apps/gpui/src/ui/editor.rs`：编辑区标签的关闭键补 `stop_propagation`（同一类问题，见下）
+
+**过程中修掉的三个自己写出来的 bug**（都是真跑才暴露的）：
+1. **点浮窗会连锚点的动作一起触发**——浮窗是锚点按钮的子元素，点「从 Claude 导入」的同时把「+ 新建对话」也执行了，凭空多出一个空对话。同一类问题在上一条改动里已经修过侧栏三处，这次又在浮窗和编辑区标签关闭键上各撞一次：**gpui 的 `on_click` 默认继续向上派发，凡是「按钮套在可点父元素里」就必须显式 `stop_propagation`**
+2. **弹窗内容飞到遮罩层上**——`dialog_frame` 原本返回的是最外层遮罩，调用方 `.child()` 加的内容就成了卡片的兄弟节点，被 flex 横向铺开在屏幕上。改成把内容当参数传进卡片
+3. 用 Python 脚本改代码时 `str.index` 的结束标记先于起始标记，切出空串后 `replace("", ...)` 把新文本插到了每个字符之间，`mod.rs` 被写成两百万行。已从上一个 commit 恢复重做（损坏副本留在 scratchpad 里比对过）
+
+**怎么验的**：
+- 导入：造一条 Claude 会话文件 → 悬停项目「+」→ 浮窗出现 → 点开弹窗列出本机真实 Claude 对话（标题 / 时间 / 消息数 / 工作目录）→ 点其中一条 → 磁盘会话数 43 → 44、落进 chroma 项目（12 → 13）、标题与两条消息都对、模型显示 claude-opus-4、并自动打开
+- 导出：悬停会话删除键 → 浮窗出现 → 点击 → 弹出 `cd '/root/code/chroma' && claude --resume <uuid>`，对应文件确实写进了 Claude 目录且内容可解析（两条消息完整）
+- 穿透：修前点浮窗会多出一个空对话（已删）；修后聊天区停在原会话不动
+
+**影响范围**：只动 `apps/gpui`。不改协议、不改 agent-core、不影响其余三 surface。
+
+**留尾巴**：
+- 原前端导入前可以先**预览**（`read_claude_session_preview`），gpui 版是直接导入。导入本身可逆（删掉即可），暂不补
+- 侧栏顶部还有个全局「从 Claude 导入」入口（不限定项目），gpui 版目前只有项目级的
+- 原前端项目行有独立的拖拽手柄（GripVertical）；gpui 版是整行可拖。整行拖和点击折叠共用同一区域，手感与原版不同，待定

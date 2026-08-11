@@ -23,6 +23,15 @@ use crate::theme::{Theme, ThemePreset};
 
 pub fn init(_cx: &mut App) {}
 
+/// 悬停浮窗挂在哪个锚点上。
+#[derive(Debug, Clone, PartialEq)]
+pub enum HoverPopup {
+    /// 会话删除键上：导出这条对话到 Claude。
+    ExportSession(String),
+    /// 项目新建键上：从 Claude 导入一条对话到这个项目。
+    ImportToProject(Option<String>),
+}
+
 /// 根视图。整个应用只有这一个 `Render` 实体持有状态——子视图都是纯函数式的
 /// `IntoElement`，直接读 `&AppState` 渲染。原前端也是「单 store + 无状态组件」的形态，
 /// 保持一致能让两边对照着改。
@@ -50,6 +59,13 @@ pub struct HebbianApp {
 
     /// 本机 UI 偏好（项目排序 / 折叠）。
     pub prefs: crate::prefs::UiPrefs,
+
+    /// 悬停浮窗当前挂在哪个锚点上。与原前端一样是「悬停浮出」而不是「点开菜单」：
+    /// 它只有一个按钮，为一个按钮多要一次点击不值当。
+    pub hover_popup: Option<HoverPopup>,
+    /// 「从 Claude 导入」弹窗是否打开，以及限定导进哪个项目。
+    pub import_claude_open: bool,
+    pub import_claude_project: Option<String>,
 
     /// 正在改标题（点头部标题进入）。
     pub title_editing: bool,
@@ -253,6 +269,9 @@ impl HebbianApp {
             terminal: None,
             terminal_focus: cx.focus_handle(),
             prefs,
+            hover_popup: None,
+            import_claude_open: false,
+            import_claude_project: None,
             title_editing: false,
             title_input,
             question_picked: Vec::new(),
@@ -606,9 +625,278 @@ impl Render for HebbianApp {
             .child(right_panel::render(self, window, cx))
             .children(session_settings::render(self, cx))
             .children(settings::render(self, cx))
+            .children(self.import_claude_open.then(|| import_claude_dialog(self, cx)))
+            .children(
+                self.state
+                    .claude_exported
+                    .clone()
+                    .map(|cmd| exported_dialog(&theme, cmd, cx)),
+            )
             .children(self.state.confirm.clone().map(|c| confirm_dialog(&theme, c, cx)))
             .children(self.state.error.clone().map(|message| toast(&theme, message, cx)))
     }
+}
+
+/// 悬停浮窗：贴着锚点按钮浮出的一个小按钮。
+///
+/// 用 `deferred` + `anchored` 而不是自己算绝对坐标：侧栏是能滚的，
+/// 自己算出来的位置一滚就飘；`anchored` 直接跟着锚点走。
+///
+/// 左边那点内边距是有用的：鼠标从锚点挪到按钮上要经过几像素间隙，
+/// 间隙不属于任何元素的话浮窗会在半路收掉，按钮永远点不到。
+pub fn hover_popup(
+    theme: &Theme,
+    popup: HoverPopup,
+    cx: &mut Context<HebbianApp>,
+) -> impl IntoElement {
+    let (label, icon) = match &popup {
+        HoverPopup::ExportSession(_) => ("导出到 Claude", crate::assets::Icon::ArrowUpFromLine),
+        HoverPopup::ImportToProject(_) => ("从 Claude 导入", crate::assets::Icon::Import),
+    };
+    gpui::deferred(
+        gpui::anchored().snap_to_window_with_margin(px(8.)).child(
+            div().pl(px(8.)).child(
+                div()
+                    .id("hover-popup-btn")
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(5.))
+                    .px(px(11.))
+                    .py(px(5.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(theme.line)
+                    .bg(theme.card_strong)
+                    .text_size(px(11.))
+                    .text_color(theme.text)
+                    .cursor_pointer()
+                    .hover(|this| this.text_color(theme.accent).bg(theme.accent_soft))
+                    .child(icon.el(px(11.), theme.muted))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        // 浮窗挂在锚点按钮里面，不截住就会连锚点的动作一起触发
+                        // （表现为点「从 Claude 导入」还顺手新建了一个空对话）。
+                        cx.stop_propagation();
+                        match this.hover_popup.take() {
+                            Some(HoverPopup::ExportSession(id)) => {
+                                // 跟原 UI 一样固定带上推理链：导出是为了换个工具接着聊，
+                                // 丢了推理链等于丢上下文。
+                                this.state.core.export_session_to_claude(id, true);
+                            }
+                            Some(HoverPopup::ImportToProject(project_id)) => {
+                                this.import_claude_project = project_id;
+                                this.import_claude_open = true;
+                                this.state.core.refresh_claude_importable();
+                            }
+                            None => {}
+                        }
+                        cx.notify();
+                    })),
+            ),
+        ),
+    )
+}
+
+/// 「从 Claude 导入」弹窗：列出用户 Claude 目录里的对话，点一条就导进来。
+fn import_claude_dialog(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let list = &app.state.claude_importable;
+
+    let mut rows = div()
+        .id("claude-import-list")
+        .flex()
+        .flex_col()
+        .max_h(px(360.))
+        .overflow_y_scroll();
+    if list.is_empty() {
+        rows = rows.child(
+            div()
+                .py(px(20.))
+                .text_size(px(12.))
+                .text_color(theme.muted)
+                .child("这台机器上没找到 Claude 的对话记录"),
+        );
+    }
+    for item in list {
+        let path = item.path.clone();
+        let stamp = chrono::DateTime::from_timestamp_millis(item.modified_ms)
+            .map(|dt| dt.format("%m/%d %H:%M").to_string())
+            .unwrap_or_default();
+        rows = rows.child(
+            div()
+                .id(gpui::SharedString::from(format!("imp-{}", item.path)))
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .px(px(8.))
+                .py(px(7.))
+                .rounded(px(8.))
+                .cursor_pointer()
+                .hover(|this| this.bg(theme.accent_soft))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(item.title.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(8.))
+                        .text_size(px(10.))
+                        .text_color(theme.faint)
+                        .child(stamp)
+                        .child(format!("{} 条消息", item.message_count))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .child(item.cwd.clone()),
+                        ),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let project = this.import_claude_project.clone();
+                    this.state.core.import_claude_session(path.clone(), project);
+                    this.import_claude_open = false;
+                    cx.notify();
+                })),
+        );
+    }
+
+    dialog_frame(
+        &theme,
+        "从 Claude 导入",
+        cx,
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(rows)
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(theme.muted)
+                    .child("导进来的对话还没选模型，想接着聊的话先在对话设置里挑一个"),
+            ),
+    )
+}
+
+/// 导出成功后把 resume 命令摆出来给用户复制。
+/// 只说一句「已导出」没用——用户真正要的是那条能直接粘进终端的命令。
+fn exported_dialog(
+    theme: &Theme,
+    resume_command: String,
+    cx: &mut Context<HebbianApp>,
+) -> impl IntoElement {
+    let to_copy = resume_command.clone();
+    dialog_frame(
+        theme,
+        "已导出到 Claude",
+        cx,
+        div()
+        .flex()
+        .flex_col()
+        .gap(px(10.))
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(theme.muted)
+                .child("在终端里执行这条命令就能接着聊："),
+        )
+        .child(
+            div()
+                .p(px(10.))
+                .rounded(px(8.))
+                .bg(theme.surface_veil)
+                .font_family("monospace")
+                .text_size(px(11.))
+                .child(resume_command),
+        )
+        .child(
+            div().flex().flex_row().justify_end().child(
+                div()
+                    .id("copy-resume")
+                    .px(px(12.))
+                    .py(px(6.))
+                    .rounded(px(8.))
+                    .text_size(px(12.))
+                    .text_color(theme.accent)
+                    .cursor_pointer()
+                    .hover(|this| this.bg(theme.accent_soft))
+                    .child("复制命令")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(to_copy.clone()));
+                        this.state.claude_exported = None;
+                        cx.notify();
+                    })),
+            ),
+        ),
+    )
+}
+
+/// 居中弹窗的外壳：遮罩 + 卡片 + 标题 + 右上角关闭。返回的卡片可以继续 `.child()`。
+fn dialog_frame(
+    theme: &Theme,
+    title: &'static str,
+    cx: &mut Context<HebbianApp>,
+    content: impl IntoElement,
+) -> gpui::Div {
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(gpui::rgba(0x0000_0059))
+        .child(
+            div()
+                .w(px(460.))
+                .p(px(18.))
+                .rounded(px(14.))
+                .border_1()
+                .border_color(theme.line)
+                .bg(theme.card_strong)
+                .flex()
+                .flex_col()
+                .gap(px(10.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_between()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(gpui::FontWeight(600.))
+                                .child(title),
+                        )
+                        .child(
+                            div()
+                                .id("dialog-close")
+                                .size(px(22.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .hover(|this| this.bg(theme.surface_veil))
+                                .child(crate::assets::Icon::X.el(px(12.), theme.faint))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.import_claude_open = false;
+                                    this.state.claude_exported = None;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .child(content),
+        )
 }
 
 /// 破坏性操作的确认弹窗。删对话 / 删项目都从这里过一遍。
