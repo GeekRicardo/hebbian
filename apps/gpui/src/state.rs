@@ -120,6 +120,10 @@ pub struct AppState {
     /// 当前会话的运行模式。切会话时从 session 读，切模式时即时更新。
     pub run_mode: agent_core::run_mode::RunMode,
 
+    /// 上下文占用（已用 / 预算 tokens）与缓存命中率。没算出来之前是 None——
+    /// 宁可不显示，也不显示编出来的数字。
+    pub context_usage: Option<(usize, usize, u32)>,
+
     /// 注册表里还活着的后台任务。每次渲染后台面板时现读，不缓存。
     pub live_tasks: Vec<LiveTask>,
 
@@ -179,6 +183,7 @@ impl AppState {
             file_baselines: HashMap::new(),
             open_files: Vec::new(),
             active_file: None,
+            context_usage: None,
             live_tasks: Vec::new(),
             run_mode: agent_core::run_mode::RunMode::Default,
             edits: Vec::new(),
@@ -230,6 +235,8 @@ impl AppState {
                 self.core
                     .refresh_edits(session.id.clone(), session.workdir.clone());
                 self.core.refresh_branches(session.id.clone());
+                self.context_usage = None;
+                self.core.refresh_context_usage(session.id.clone());
                 if let Some(workdir) = session.workdir.clone() {
                     self.expanded_dirs.insert(workdir.clone());
                     self.core.list_dir(workdir.clone());
@@ -256,6 +263,13 @@ impl AppState {
             CoreUpdate::Permissions { allow, deny } => {
                 self.perm_allow = allow;
                 self.perm_deny = deny;
+            }
+            CoreUpdate::ContextUsage {
+                used_tokens,
+                budget_tokens,
+                cache_hit_pct,
+            } => {
+                self.context_usage = Some((used_tokens, budget_tokens, cache_hit_pct));
             }
             CoreUpdate::LiveTasks(tasks) => {
                 self.live_tasks = tasks;
@@ -399,6 +413,7 @@ impl AppState {
                 if foreground {
                     // 落盘的消息才是唯一真源：重新读一遍 transcript，让流式拼的文本退场。
                     self.core.open_session(session_id.to_string());
+                    self.core.refresh_context_usage(session_id.to_string());
                 } else {
                     self.unread.insert(session_id.to_string());
                 }

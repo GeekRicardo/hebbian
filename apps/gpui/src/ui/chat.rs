@@ -1142,37 +1142,71 @@ fn info_row(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement 
         .text_size(px(11.))
         .text_color(theme.muted)
         .child(run_mode_chip(app, cx))
-        .child(
-            h_flex()
-                .gap(px(4.))
-                .pr(px(8.))
-                .min_h(px(20.))
-                .child(Icon::Gauge.el(px(12.), theme.muted))
-                .child("极高")
-                .child(Icon::ChevronDown.el(px(10.), theme.faint)),
-        )
+        .children(reasoning_pill(app))
         .child(div().flex_1())
+        .child(context_meter(app))
+}
+
+/// 思考强度 pill。**只在当前模型确实启用了推理时才显示**——
+/// 不支持推理的模型上原前端是隐藏这个 pill 的，硬画一个「极高」是假状态。
+/// 档位名逐字取自原前端 `REASONING_EFFORT_LABEL`。
+fn reasoning_pill(app: &HebbianApp) -> Option<impl IntoElement> {
+    use common::ReasoningEffort;
+    let theme = app.theme.clone();
+    let reasoning = app.state.current.as_ref()?.reasoning.as_ref()?;
+    if reasoning.enabled == Some(false) {
+        return None;
+    }
+    let label = match reasoning.effort.unwrap_or_default() {
+        ReasoningEffort::Low => "低",
+        ReasoningEffort::Medium => "中",
+        ReasoningEffort::High => "高",
+        ReasoningEffort::Extra => "极高",
+        ReasoningEffort::Max => "最高",
+    };
+    Some(
+        h_flex()
+            .gap(px(4.))
+            .pr(px(8.))
+            .min_h(px(20.))
+            .child(Icon::Gauge.el(px(12.), theme.muted))
+            .child(label)
+            .child(Icon::ChevronDown.el(px(10.), theme.faint)),
+    )
+}
+
+/// 输入框右下角：上下文占用环 + `cache x% / ctx y%`。
+/// 算不出来（还没跑过 run / 读不到会话）就整块不显示——编个数字充数不如空着。
+fn context_meter(app: &HebbianApp) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let Some((used, budget, cache_pct)) = app.state.context_usage else {
+        return div().into_any_element();
+    };
+    let ctx_pct = if budget > 0 {
+        ((used as f64 / budget as f64) * 100.0).min(150.0) as u32
+    } else {
+        0
+    };
+    // 与原前端同样的告警配色：≥90% 转红，≥70% 转琥珀。
+    let ring_color = if ctx_pct >= 90 {
+        theme.danger
+    } else if ctx_pct >= 70 {
+        theme.amber
+    } else {
+        theme.accent
+    };
+
+    h_flex()
+        .gap(px(6.))
         .child(
-            h_flex()
-                .gap(px(6.))
-                .child(
-                    // 上下文占用环。真实占比接进来之前先画空环，位置尺寸与原前端一致。
-                    div()
-                        .size(px(18.))
-                        .rounded_full()
-                        .border_2()
-                        .border_color(theme.accent),
-                )
-                .child(format!(
-                    "cache {}% / ctx {}%",
-                    0,
-                    app.state
-                        .current
-                        .as_ref()
-                        .map(|s| context_percent(s.messages.len()))
-                        .unwrap_or(0)
-                )),
+            div()
+                .size(px(18.))
+                .rounded_full()
+                .border_2()
+                .border_color(ring_color),
         )
+        .child(format!("cache {cache_pct}% / ctx {ctx_pct}%"))
+        .into_any_element()
 }
 
 /// 运行模式 chip + 下拉。四个模式的名字与说明逐字取自原前端 `RunModeChip`。
@@ -1282,11 +1316,6 @@ fn run_mode_chip(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEle
         .when(app.run_mode_open, |this| this.child(menu))
 }
 
-/// 上下文占用的粗略估计：消息条数占 200 条软上限的比例。
-/// 真正的 token 统计要等 `TokenStats` 事件接进来，这里先给一个不误导的近似。
-fn context_percent(message_count: usize) -> usize {
-    (message_count * 100 / 200).min(100)
-}
 
 fn toolbar(
     app: &HebbianApp,

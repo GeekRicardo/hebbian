@@ -46,6 +46,12 @@ pub enum CoreUpdate {
     LogTail { name: String, lines: Vec<String> },
     /// 权限规则读完了（全局层的 allow / deny）。
     Permissions { allow: Vec<String>, deny: Vec<String> },
+    /// 上下文占用与缓存命中（输入框右下角那个环 + 百分比）。
+    ContextUsage {
+        used_tokens: usize,
+        budget_tokens: usize,
+        cache_hit_pct: u32,
+    },
     /// 注册表里还活着的后台任务。
     LiveTasks(Vec<crate::state::LiveTask>),
     /// 运行模式改好了。
@@ -420,6 +426,59 @@ impl Core {
             // 新的在前，与消息流的阅读方向一致。
             runs.reverse();
             this.emit(CoreUpdate::Edits(runs));
+        });
+    }
+
+    /// 算当前会话的上下文占用与缓存命中率。
+    ///
+    /// **算法与 Desktop 完全一致**（`apps/desktop/src/chat.rs::context_usage`）：
+    /// 用 `calibrated_transcript_tokens`（拿上一次真实 input_tokens 校准估算），
+    /// 分母走 provider 的真实 context window。之前这里是我按「消息条数 / 200」瞎凑的
+    /// 假百分比——看着像真数据的假数据比不显示更糟。
+    pub fn refresh_context_usage(&self, session_id: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let Ok(session) =
+                agent_core::storage::sessions::load(&this.inner.data_dir, &session_id)
+            else {
+                return;
+            };
+            let transcript = agent_core::context::transcript::Transcript::from_session(
+                session.system_prompt.clone(),
+                &session.messages,
+            );
+            let (last_real, last_estimated) = session
+                .token_stats
+                .as_ref()
+                .map(|s| (s.last_input_tokens, s.last_estimated_tokens))
+                .unwrap_or((0, 0));
+            let used = agent_core::context::budget::calibrated_transcript_tokens(
+                transcript.system.as_deref(),
+                &transcript.entries,
+                last_real,
+                last_estimated,
+            );
+            let budget = match model_gateway::config::get(
+                &this.inner.data_dir,
+                &session.provider_id,
+            ) {
+                Ok(p) => {
+                    model_gateway::context_window::resolve_context_window(&p, &session.model).await
+                }
+                Err(_) => 200_000,
+            };
+            // 缓存命中率 = 整个对话累计 cache_read / 累计 input（与原前端同口径）。
+            let cache_hit_pct = session
+                .token_stats
+                .as_ref()
+                .filter(|s| s.input_tokens > 0)
+                .map(|s| ((s.cache_read_tokens as f64 / s.input_tokens as f64) * 100.0) as u32)
+                .unwrap_or(0);
+            this.emit(CoreUpdate::ContextUsage {
+                used_tokens: used,
+                budget_tokens: budget,
+                cache_hit_pct,
+            });
         });
     }
 

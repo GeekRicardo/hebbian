@@ -12100,3 +12100,14 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **一个必须说清的边界**: 注册表是**进程内**的。gpui 自己跑 run，所以这里看到的是它自己起的后台任务；Desktop / heb 在各自进程里起的，这边看不到。这是 in-process 架构的既有边界（架构 §7.5：三 surface 不共享活内存，只共享 `~/.hebbian/`），不是这里漏读了。
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: 面板正常渲染历史条目；活任务列表为空——本机没有配可用模型，跑不出真实的后台命令，这条路径需要在有模型的环境里复核。
+
+### 2026-08-11 — 修掉输入框下方三处「照截图抄的假状态」
+
+- **Why**: 复盘「九个面板猜错三个」之后，我把凡是照截图抄、没对过源码的地方逐个翻了一遍，又抓到三处。其中最严重的一处是**在显示编造的数字**——看着像真数据的假数据，比不显示糟糕得多。
+- **改动**:
+  - **上下文占用环 + `cache x% / ctx y%`**：原来 ctx 是我按「消息条数 ÷ 200」瞎凑的，cache 直接写死 0%。现在**算法与 Desktop 逐行一致**（`apps/desktop/src/chat.rs::context_usage`）：用 `calibrated_transcript_tokens`（拿上一次真实 input_tokens 校准估算），分母走 `resolve_context_window` 的真实上下文窗口；cache 命中率 = 累计 `cache_read / input`（与原前端同口径）。**算不出来时整块不显示**，不再拿 0% 充数。环的告警配色也照抄：≥90% 转红、≥70% 转琥珀。
+  - **思考强度 pill**：原来硬写「极高」。现在读 `session.reasoning`，档位名逐字取自原前端 `REASONING_EFFORT_LABEL`（低 / 中 / 高 / 极高 / 最高）；**推理没启用时整个 pill 不显示**——原前端在不支持推理的模型上就是隐藏它的，硬画一个档位是假状态。
+  - 运行模式 chip 在上一条已修（原来也是死文字）。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: 给 fixture 会话补真实 `token_stats`（input 120k / cache_read 90k）——显示 `cache 75%`，正好是 90000/120000；补 `reasoning.effort = high` —— pill 显示「高」而不是写死的「极高」。**过程中踩到自己一个坑**：`MetaUpdate` 行的 `at` 字段没有 serde default，我第一版 fixture 漏写，整行被静默跳过，表现为 cache 仍是 0%——不是代码错，是 fixture 错。
+- **留尾巴**: 两个 chip 都还不能点开改（原前端可以）；上下文环是纯边框圆，没有按百分比画弧。
