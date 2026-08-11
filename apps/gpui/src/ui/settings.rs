@@ -223,31 +223,54 @@ fn header(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
                 ),
         )
         .child(
-            h_flex().gap(px(8.)).child(
-                h_flex()
-                    .id("settings-close")
-                    .h(px(30.))
-                    .px(px(14.))
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(theme.line)
-                    .text_size(px(12.))
-                    .text_color(theme.muted)
-                    .cursor_pointer()
-                    .hover(|this| this.bg(theme.accent_soft).text_color(theme.text))
-                    .child("关闭")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.settings_open = false;
-                        cx.notify();
-                    })),
-            ),
+            h_flex()
+                .gap(px(8.))
+                .child(
+                    h_flex()
+                        .id("settings-cancel")
+                        .h(px(30.))
+                        .px(px(14.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(theme.line)
+                        .text_size(px(12.))
+                        .text_color(theme.muted)
+                        .cursor_pointer()
+                        .hover(|this| this.bg(theme.accent_soft).text_color(theme.text))
+                        .child("取消")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            // 直接丢掉草稿，磁盘上的值不动。
+                            this.settings_draft = None;
+                            this.settings_open = false;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    h_flex()
+                        .id("settings-save")
+                        .h(px(30.))
+                        .px(px(16.))
+                        .rounded(px(8.))
+                        .bg(theme.accent)
+                        .text_size(px(12.))
+                        .text_color(gpui::white())
+                        .cursor_pointer()
+                        .child("保存")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(draft) = this.settings_draft.take() {
+                                this.state.core.save_settings(draft);
+                            }
+                            this.settings_open = false;
+                            cx.notify();
+                        })),
+                ),
         )
 }
 
 fn body(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();
     let content = match app.settings_tab {
-        SettingsTab::General => general_pane(app).into_any_element(),
+        SettingsTab::General => general_pane(app, cx).into_any_element(),
         SettingsTab::Providers => providers_pane(app).into_any_element(),
         SettingsTab::Appearance => appearance_pane(app, cx).into_any_element(),
         other => not_yet(app, other.label()).into_any_element(),
@@ -264,43 +287,196 @@ fn body(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
         .child(content)
 }
 
-/// 通用：只读展示当前生效的设置。改值要走 `save_settings`，等表单控件补齐后接上。
-fn general_pane(app: &HebbianApp) -> impl IntoElement {
+/// 通用页。改动落在 `settings_draft` 上，点保存才写盘。
+fn general_pane(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();
-    let settings = &app.state.settings;
+    // 草稿没建起来（理论上不会）就退回已加载的值，至少不空白。
+    let general = app
+        .settings_draft
+        .as_ref()
+        .map(|d| &d.general)
+        .unwrap_or(&app.state.settings.general);
+
+    use agent_core::storage::settings::{AppLanguage, EditBackend};
 
     v_flex()
         .gap(px(2.))
-        .child(row(&theme, "界面语言", language_label(settings.general.language)))
-        .child(row(
+        .child(segmented(
             &theme,
+            cx,
+            "界面语言",
+            vec![
+                ("简体中文", general.language == AppLanguage::ZhCn, 0usize),
+                ("English", general.language == AppLanguage::En, 1),
+            ],
+            |draft, index| {
+                draft.general.language = if index == 0 {
+                    AppLanguage::ZhCn
+                } else {
+                    AppLanguage::En
+                };
+            },
+        ))
+        .child(switch_row(
+            &theme,
+            cx,
+            "launch-at-login",
             "开机启动",
-            on_off(settings.general.launch_at_login),
+            general.launch_at_login,
+            |draft, on| draft.general.launch_at_login = on,
         ))
-        .child(row(
+        .child(switch_row(
             &theme,
+            cx,
+            "grep-path",
             "Grep 结果显示搜索路径",
-            on_off(settings.general.show_grep_search_path),
+            general.show_grep_search_path,
+            |draft, on| draft.general.show_grep_search_path = on,
         ))
-        .child(row(
+        .child(switch_row(
             &theme,
+            cx,
+            "log-enabled",
             "工具调度日志落盘",
-            on_off(settings.general.log_enabled),
+            general.log_enabled,
+            |draft, on| draft.general.log_enabled = on,
         ))
-        .child(row(
+        .child(
+            h_flex()
+                .h(px(44.))
+                .justify_between()
+                .gap(px(16.))
+                .border_b_1()
+                .border_color(theme.line)
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.muted)
+                        .child("工具执行 shell"),
+                )
+                .child(
+                    div()
+                        .w(px(280.))
+                        .px(px(10.))
+                        .py(px(5.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(theme.line)
+                        .text_size(px(12.))
+                        .child(
+                            gpui_component::input::Input::new(&app.shell_input)
+                                .appearance(false),
+                        ),
+                ),
+        )
+        .child(segmented(
             &theme,
-            "工具执行 shell",
-            settings
-                .general
-                .shell
-                .clone()
-                .unwrap_or_else(|| "系统默认".to_string()),
+            cx,
+            "改文件的方式",
+            vec![
+                (
+                    "精确替换原文",
+                    general.edit_backend == EditBackend::StringReplace,
+                    0usize,
+                ),
+                (
+                    "按行号打补丁",
+                    general.edit_backend == EditBackend::Hashline,
+                    1,
+                ),
+            ],
+            |draft, index| {
+                draft.general.edit_backend = if index == 0 {
+                    EditBackend::StringReplace
+                } else {
+                    EditBackend::Hashline
+                };
+            },
         ))
-        .child(row(&theme, "改文件的方式", edit_backend_label(settings.general.edit_backend)))
-        .child(hint(
-            &theme,
-            "这些值目前只读。改设置的表单控件还没搬过来，要改先在原来的桌面端改，两边读的是同一份配置。",
-        ))
+}
+
+/// 一行开关。
+fn switch_row(
+    theme: &crate::theme::Theme,
+    cx: &mut Context<HebbianApp>,
+    id: &'static str,
+    label: &'static str,
+    value: bool,
+    apply: fn(&mut agent_core::storage::settings::Settings, bool),
+) -> impl IntoElement {
+    h_flex()
+        .h(px(44.))
+        .justify_between()
+        .border_b_1()
+        .border_color(theme.line)
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(theme.muted)
+                .child(label),
+        )
+        .child(
+            gpui_component::switch::Switch::new(id)
+                .checked(value)
+                .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                    if let Some(draft) = this.settings_draft.as_mut() {
+                        apply(draft, *checked);
+                        cx.notify();
+                    }
+                })),
+        )
+}
+
+/// 二选一的分段控件。枚举类设置用它，比下拉更省一次点击。
+fn segmented(
+    theme: &crate::theme::Theme,
+    cx: &mut Context<HebbianApp>,
+    label: &'static str,
+    options: Vec<(&'static str, bool, usize)>,
+    apply: fn(&mut agent_core::storage::settings::Settings, usize),
+) -> impl IntoElement {
+    let mut group = h_flex()
+        .p(px(3.))
+        .gap(px(3.))
+        .rounded(px(8.))
+        .bg(theme.right_bg_top);
+
+    for (text, active, index) in options {
+        let theme = theme.clone();
+        group = group.child(
+            div()
+                .id(text)
+                .px(px(10.))
+                .py(px(4.))
+                .rounded(px(6.))
+                .text_size(px(12.))
+                .cursor_pointer()
+                .when(active, |this| {
+                    this.bg(theme.card_strong).text_color(theme.text)
+                })
+                .when(!active, |this| this.text_color(theme.muted))
+                .child(text)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(draft) = this.settings_draft.as_mut() {
+                        apply(draft, index);
+                        cx.notify();
+                    }
+                })),
+        );
+    }
+
+    h_flex()
+        .h(px(44.))
+        .justify_between()
+        .border_b_1()
+        .border_color(theme.line)
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(theme.muted)
+                .child(label),
+        )
+        .child(group)
 }
 
 /// 外观：色系与深浅由左下角调色盘控制，这里给出当前值与入口说明。
@@ -435,6 +611,4 @@ fn edit_backend_label(backend: agent_core::storage::settings::EditBackend) -> St
     .to_string()
 }
 
-fn on_off(value: bool) -> String {
-    if value { "开" } else { "关" }.to_string()
-}
+

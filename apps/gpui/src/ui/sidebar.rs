@@ -525,11 +525,8 @@ fn footer(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElemen
                 .hover(|this| this.text_color(theme.text))
                 .child(Icon::Settings.el(px(14.), theme.muted))
                 .child("设置")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.settings_open = true;
-                    this.state.core.refresh_settings();
-                    this.state.core.refresh_providers();
-                    cx.notify();
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_settings(window, cx);
                 })),
         )
         .child(hue::control(app, cx))

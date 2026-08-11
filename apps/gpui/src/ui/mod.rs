@@ -45,6 +45,11 @@ pub struct HebbianApp {
     /// 设置面板是否打开、停在哪一页。
     pub settings_open: bool,
     pub settings_tab: settings::SettingsTab,
+    /// 设置面板的编辑副本。打开时从 state 拷一份，改动落在它身上，
+    /// 点保存才写盘、点取消直接丢——与原前端的 draft 语义一致。
+    pub settings_draft: Option<agent_core::storage::settings::Settings>,
+    /// 「工具执行 shell」那一格的输入框。
+    pub shell_input: Entity<InputState>,
     /// 右侧工作台当前显示哪个面板。
     pub workbench: right_panel::Workbench,
     /// 编辑区与右侧工作台的宽度。只活在本次运行里，重启回默认——
@@ -78,6 +83,8 @@ impl HebbianApp {
                 .placeholder("输入消息，Enter 发送，Shift+Enter 换行…")
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索"));
+        let shell_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("留空 = 用系统默认 shell"));
 
         // 输入框回车即发送。Shift+Enter 由 InputState 自己插换行，不会走到这里。
         cx.subscribe_in(
@@ -99,6 +106,23 @@ impl HebbianApp {
                 if matches!(event, InputEvent::Change) {
                     this.state.query = state.read(cx).value().to_string();
                     cx.notify();
+                }
+            },
+        )
+        .detach();
+
+        // 「工具执行 shell」输入框改动直接落进设置草稿。
+        cx.subscribe_in(
+            &shell_input,
+            window,
+            |this, state, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    if let Some(draft) = this.settings_draft.as_mut() {
+                        let value = state.read(cx).value().to_string();
+                        draft.general.shell =
+                            if value.trim().is_empty() { None } else { Some(value) };
+                        cx.notify();
+                    }
                 }
             },
         )
@@ -153,6 +177,8 @@ impl HebbianApp {
             session_settings_open: false,
             settings_open: false,
             settings_tab: settings::SettingsTab::General,
+            settings_draft: None,
+            shell_input,
             workbench: right_panel::Workbench::Files,
             editor_width: editor::DEFAULT_WIDTH,
             right_width: right_panel::DEFAULT_WIDTH,
@@ -195,6 +221,18 @@ impl HebbianApp {
             });
         })
         .detach();
+    }
+
+    /// 打开设置面板：拷一份草稿，并把 shell 输入框填上当前值。
+    pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_open = true;
+        let draft = self.state.settings.clone();
+        let shell = draft.general.shell.clone().unwrap_or_default();
+        self.settings_draft = Some(draft);
+        self.shell_input
+            .update(cx, |state, cx| state.set_value(shell, window, cx));
+        self.state.core.refresh_providers();
+        cx.notify();
     }
 
     /// 选文件当附件。选中的路径以 `@路径` 形式追加进输入框——

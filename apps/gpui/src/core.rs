@@ -161,6 +161,17 @@ impl Core {
         });
     }
 
+    /// 保存全局设置，写完再回读一次让 UI 与磁盘对齐。
+    pub fn save_settings(&self, settings: agent_core::storage::settings::Settings) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            match this.local_client().save_settings(settings) {
+                Ok(()) => this.refresh_settings(),
+                Err(err) => this.emit_err(err),
+            }
+        });
+    }
+
     /// 读一次可用 skill。三层目录（全局 / 项目 / 工作区）由 core 统一合并，
     /// 这里只负责把结果搬给 UI。
     pub fn refresh_skills(&self, workdir: PathBuf) {

@@ -11918,3 +11918,14 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。
 - **验证**: xdotool 点调色盘后截图——五个预设、色相条、当前色值都完整可见。
 - **留尾巴**: 弹窗底色 96% 不透明（与原 CSS 同值），原 Web 版另有 `backdrop-filter: blur(18px)` 把透出的内容糊掉，gpui 没有背景模糊，透出的项目名比原版明显一点。
+
+### 2026-08-11 — gpui surface 设置面板变成可写（草稿 + 取消 / 保存）
+
+- **Why**: 设置全部只读，是上一条自己列的最大留尾巴——「能看不能改」的设置页等于没有。
+- **改动**:
+  - `apps/gpui/src/ui/mod.rs`: 打开面板时从 state 拷一份 `settings_draft`，所有改动落在草稿上；「取消」直接丢草稿、磁盘不动，「保存」才写盘——与原前端的 draft 语义一致。
+  - `apps/gpui/src/ui/settings.rs`: 通用页接上真控件——三个开关（开机启动 / Grep 显示搜索路径 / 日志落盘）用 gpui-component 的 Switch；两个枚举（界面语言、改文件的方式）用二选一分段控件（比下拉少一次点击，且不用搭 SelectDelegate）；shell 用文本输入框，改动实时同步进草稿。头部换成「取消 / 保存」两个按钮。
+  - `apps/gpui/src/core.rs`: 新增 `save_settings`，写完回读一次让 UI 与磁盘对齐。
+- **影响范围**: 仅 `apps/gpui`。写的是 `~/.hebbian/settings.json`，与 Desktop / hebweb 同一份文件、同一个 `CoreClient::save_settings` 实现。
+- **验证**: xdotool 在界面上把语言切成 English、打开「开机启动」，点保存后直接读磁盘——`settings.json` 里 `language: en` / `launch_at_login: true` / `shell: /usr/bin/zsh`，UI→草稿→core→磁盘整条链打通。
+- **留尾巴**: 只有「通用」页可写，对话 / 角色 / 记忆 / 权限等页仍是只读或占位；没有「改动未保存」的离开提醒。
