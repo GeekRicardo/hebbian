@@ -11834,3 +11834,15 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
   - **验证手段**：容器里 Xvfb + lavapipe 起窗后，用 `xdotool` 合成点击、`import` 截图——首次做到「点开弹窗看它长什么样」的无人值守验证，不再只能看静态首屏。
 - **影响范围**: 仅 `apps/gpui`。
 - **留尾巴 / 需要用户拍板**: **选中一个模型目前不会真的切换**，点了会明确提示而不是静默失败。原因是切模型不是写两个字段：它要插 `MessageMeta::Switch` 标记、要执行「DeepSeek 与其他系列不可互切」的锁定规则、还要按新模型重置推理参数——这套业务规则现在**同时存在于 `apps/desktop/src/lib.rs` 与 `apps/web-server/src/server.rs` 两份命令壳里**，`CoreRequest` 里没有对应入口。按架构 §7.3「不允许在 Desktop 和 hebweb 各写一套」，正确做法是先把它收进 `core-rpc`（新增 `SwitchSessionModel`）再让三端都调它；在用户确认之前，gpui 不抄第三份。
+
+### 2026-08-11 — gpui surface 按 parts 时序渲染：可展开工具卡片 + 思考过程折叠块
+
+- **Why**: 此前消息只渲染整块 `content`，工具调用退化成一排小胶囊、思考过程完全看不到。真实对话里「模型想了什么 / 调了什么工具 / 入参和结果是什么」才是主要信息量，这块不补齐，界面就只是「看起来像」。
+- **改动**:
+  - `apps/gpui/src/ui/chat.rs`: 有 `parts` 就按落盘时序渲染（文本 / 思考 / 工具调用交错），没有才退回 `content`——老 jsonl 不会因此空白。
+    - 思考块：默认收起，标题行「⏱ 思考过程 2.4s ⌄」，展开后正文弱化色 + 左侧竖线，与正式回答区分。
+    - 工具卡片：收起时一行「状态图标 + 工具名 + 摘要 + 耗时」，摘要按 command / file_path / pattern / query / url 顺序挑最能说明这次调用干了什么的字段；展开后把入参 JSON 与结果原样摊开，超长内部滚动而不撑爆气泡。失败的调用整卡描边转红 + 图标换成禁止号。
+  - `apps/gpui/src/state.rs`: 加 `expanded_parts`，按「message id + 序号」定位，避免同一工具在不同消息里共用展开态。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: Xvfb + lavapipe 起窗，用 xdotool 点开思考块与一张工具卡片后截图——思考正文、入参 JSON、结果文本、失败卡片的红框都正确呈现，文本/工具/思考的先后顺序与 parts 一致。
+- **留尾巴**: 工具卡片还没有按工具类型定制（Edit 应显示 diff、Read 应显示带行号的片段、Task 应能下钻子 run）；`nested`（subagent 子过程）未渲染。

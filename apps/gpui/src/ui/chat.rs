@@ -3,7 +3,7 @@
 //! 对应 `ChatView.tsx` 与 `.dsp-chat-host` / `.dsp-composer*`。空会话时走
 //! `DesktopEmptyState`（居中的品牌卡片 + 「你想用 Hebbian 做什么」）。
 
-use agent_core::storage::sessions::{Message, Role};
+use agent_core::storage::sessions::{Message, MessagePart, Role};
 use gpui::{div, prelude::*, px, AnyElement, Context, Window};
 
 use crate::assets::Icon;
@@ -181,7 +181,7 @@ fn bubble(
     app: &HebbianApp,
     message: &Message,
     window: &mut Window,
-    cx: &mut gpui::App,
+    cx: &mut Context<HebbianApp>,
 ) -> impl IntoElement {
     let theme = app.theme.clone();
     let is_user = matches!(message.role, Role::User);
@@ -203,21 +203,64 @@ fn bubble(
 
     // 正文直接铺在画布上，不套气泡边框——这与实际跑起来的 `MessageBubble` 一致
     // （`.dsp-message-body` 那套卡片是更早一版设计，现行 shell 没有启用）。
-    let mut body = v_flex().flex_1().min_w_0().child(markdown(
-        format!("msg-{}", message.id),
-        message.content.clone(),
-        &theme,
-        window,
-        cx,
-    ));
+    let mut body = v_flex().flex_1().min_w_0().gap(px(8.));
 
-    // 工具调用以小胶囊排在正文下方（`.dsp-tool-strip`）。
-    if !message.tool_calls.is_empty() {
-        let mut strip = h_flex().flex_wrap().gap(px(7.)).mt(px(10.));
-        for call in &message.tool_calls {
-            strip = strip.child(tool_chip(app, &call.name, true, call.is_error));
+    if message.parts.is_empty() {
+        // 老 jsonl 没有 parts，只有一整块 content。
+        body = body.child(markdown(
+            format!("msg-{}", message.id),
+            message.content.clone(),
+            &theme,
+            window,
+            cx,
+        ));
+        for (i, call) in message.tool_calls.iter().enumerate() {
+            body = body.child(tool_card(
+                app,
+                cx,
+                &format!("{}-tc{}", message.id, i),
+                &call.name,
+                &call.input,
+                call.result.as_deref(),
+                call.duration_ms,
+                call.is_error,
+            ));
         }
-        body = body.child(strip);
+    } else {
+        // 有 parts 就按落盘的时序渲染：文本 / 思考 / 工具调用交错，
+        // 与模型实际产出的顺序一致（原前端也是按 parts 走）。
+        for (i, part) in message.parts.iter().enumerate() {
+            let key = format!("{}-p{}", message.id, i);
+            body = match part {
+                MessagePart::Text { text } => body.child(markdown(
+                    key,
+                    text.clone(),
+                    &theme,
+                    window,
+                    cx,
+                )),
+                MessagePart::Reasoning { text, duration_ms } => {
+                    body.child(reasoning_block(app, cx, &key, text, *duration_ms))
+                }
+                MessagePart::ToolCall {
+                    name,
+                    input,
+                    result,
+                    duration_ms,
+                    is_error,
+                    ..
+                } => body.child(tool_card(
+                    app,
+                    cx,
+                    &key,
+                    name,
+                    input,
+                    result.as_deref(),
+                    *duration_ms,
+                    *is_error,
+                )),
+            };
+        }
     }
 
     body = body.child(meta_row(app, message, is_user));
@@ -249,6 +292,199 @@ fn markdown(
             window,
             cx,
         ))
+}
+
+/// 思考过程折叠块。对应原 UI 的「⏱ 思考过程 N ms ⌄」——默认收起，
+/// 展开后正文用弱化色 + 左侧竖线，与正式回答区分开。
+fn reasoning_block(
+    app: &HebbianApp,
+    cx: &mut Context<HebbianApp>,
+    key: &str,
+    text: &str,
+    duration_ms: Option<u64>,
+) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let expanded = app.state.expanded_parts.contains(key);
+    let key_owned = key.to_string();
+    let duration = match duration_ms {
+        Some(ms) if ms >= 1000 => format!("{:.1}s", ms as f64 / 1000.),
+        Some(ms) => format!("{ms}ms"),
+        None => String::new(),
+    };
+    let body = text.to_string();
+
+    v_flex()
+        .child(
+            h_flex()
+                .id(gpui::SharedString::from(format!("reason-{key}")))
+                .gap(px(5.))
+                .text_size(px(12.))
+                .text_color(theme.muted)
+                .cursor_pointer()
+                .hover(|this| this.text_color(theme.text))
+                .child(Icon::Clock.el(px(12.), theme.faint))
+                .child("思考过程")
+                .child(div().text_color(theme.faint).child(duration))
+                .child(
+                    if expanded {
+                        Icon::ChevronDown.el(px(12.), theme.faint)
+                    } else {
+                        Icon::ChevronRight.el(px(12.), theme.faint)
+                    },
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !this.state.expanded_parts.remove(&key_owned) {
+                        this.state.expanded_parts.insert(key_owned.clone());
+                    }
+                    cx.notify();
+                })),
+        )
+        .when(expanded && !body.is_empty(), |this| {
+            this.child(
+                div()
+                    .mt(px(6.))
+                    .pl(px(12.))
+                    .border_l_2()
+                    .border_color(theme.line)
+                    .text_size(px(12.))
+                    .line_height(px(20.))
+                    .text_color(theme.muted)
+                    .child(body),
+            )
+        })
+}
+
+/// 工具调用卡片。收起时是一行「图标 + 工具名 + 摘要 + 耗时」，
+/// 展开后把入参与结果原样摊开——排查 agent 行为时看的就是这两块。
+#[allow(clippy::too_many_arguments)]
+fn tool_card(
+    app: &HebbianApp,
+    cx: &mut Context<HebbianApp>,
+    key: &str,
+    name: &str,
+    input: &serde_json::Value,
+    result: Option<&str>,
+    duration_ms: Option<u64>,
+    is_error: bool,
+) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let expanded = app.state.expanded_parts.contains(key);
+    let key_owned = key.to_string();
+    let summary = tool_summary(input);
+    let duration = match duration_ms {
+        Some(ms) if ms >= 1000 => format!("{:.1}s", ms as f64 / 1000.),
+        Some(ms) => format!("{ms}ms"),
+        None => String::new(),
+    };
+    let args = serde_json::to_string_pretty(input).unwrap_or_default();
+    let result_text = result.unwrap_or("").to_string();
+
+    v_flex()
+        .rounded(px(5.))
+        .border_1()
+        .border_color(if is_error { theme.danger } else { theme.line })
+        .bg(theme.card)
+        .child(
+            h_flex()
+                .id(gpui::SharedString::from(format!("tool-{key}")))
+                .h(px(30.))
+                .px(px(8.))
+                .gap(px(6.))
+                .text_size(px(12.))
+                .cursor_pointer()
+                .hover(|this| this.bg(theme.accent_soft))
+                .child(
+                    if is_error {
+                        Icon::Ban.el(px(12.), theme.danger)
+                    } else {
+                        Icon::CircleCheck.el(px(12.), theme.green)
+                    },
+                )
+                .child(
+                    div()
+                        .font_weight(gpui::FontWeight(600.))
+                        .text_color(theme.text)
+                        .child(name.to_string()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_color(theme.muted)
+                        .child(summary),
+                )
+                .child(div().text_size(px(11.)).text_color(theme.faint).child(duration))
+                .child(
+                    if expanded {
+                        Icon::ChevronDown.el(px(12.), theme.faint)
+                    } else {
+                        Icon::ChevronRight.el(px(12.), theme.faint)
+                    },
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !this.state.expanded_parts.remove(&key_owned) {
+                        this.state.expanded_parts.insert(key_owned.clone());
+                    }
+                    cx.notify();
+                })),
+        )
+        .when(expanded, |this| {
+            this.child(
+                v_flex()
+                    .px(px(8.))
+                    .pb(px(8.))
+                    .gap(px(6.))
+                    .border_t_1()
+                    .border_color(theme.line)
+                    .child(mono_block(&theme, "入参", args.clone()))
+                    .when(!result_text.is_empty(), |this| {
+                        this.child(mono_block(&theme, "结果", result_text.clone()))
+                    }),
+            )
+        })
+}
+
+/// 工具卡片收起时那句摘要：优先挑最能说明「这次调用干了什么」的字段。
+fn tool_summary(input: &serde_json::Value) -> String {
+    for key in ["command", "file_path", "path", "pattern", "query", "url", "description"] {
+        if let Some(value) = input.get(key).and_then(|v| v.as_str()) {
+            return value.to_string();
+        }
+    }
+    String::new()
+}
+
+/// 等宽小块：工具入参 / 结果都用它，超长时内部滚动而不是把气泡撑爆。
+fn mono_block(
+    theme: &crate::theme::Theme,
+    label: &'static str,
+    body: String,
+) -> impl IntoElement {
+    v_flex()
+        .gap(px(3.))
+        .child(
+            div()
+                .text_size(px(10.))
+                .text_color(theme.faint)
+                .child(label),
+        )
+        .child(
+            div()
+                .id(gpui::SharedString::from(format!("mono-{label}")))
+                .max_h(px(260.))
+                .overflow_y_scroll()
+                .p(px(8.))
+                .rounded(px(6.))
+                .bg(theme.right_bg_top)
+                .font_family("monospace")
+                .text_size(px(11.))
+                .line_height(px(17.))
+                .text_color(theme.text)
+                .child(body),
+        )
 }
 
 /// 消息左侧的头像位：用户是圆形底色块，助手是小星标。
@@ -321,7 +557,7 @@ fn streaming_bubble(
     app: &HebbianApp,
     turn: &StreamingTurn,
     window: &mut Window,
-    cx: &mut gpui::App,
+    cx: &mut Context<HebbianApp>,
 ) -> impl IntoElement {
     let theme = app.theme.clone();
     let mut body = v_flex()

@@ -87,6 +87,9 @@ pub struct AppState {
     pub search_regex: bool,
     pub collapsed: HashSet<String>,
 
+    /// 展开着的工具卡片 / 思考块（按 message id + 序号定位）。
+    pub expanded_parts: HashSet<String>,
+
     // ── 文件树 ──────────────────────────────────────────────────
     /// 已读过的目录：路径 → 这一层的条目。
     pub dirs: HashMap<PathBuf, Vec<DirEntry>>,
@@ -117,6 +120,7 @@ impl AppState {
             search_case: false,
             search_regex: false,
             collapsed: HashSet::new(),
+            expanded_parts: HashSet::new(),
             dirs: HashMap::new(),
             expanded_dirs: HashSet::new(),
             error: None,
