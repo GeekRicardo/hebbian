@@ -102,7 +102,20 @@ pub enum DaemonEvent {
     Started {
         session_id: String,
     },
-    RunStarted,
+    /// 一个 run 开始（架构 §3.1.1）。后端自发起的 run（wakeup/cron/队列）也会第一时间
+    /// emit，脚本据 `trigger` 区分是不是用户输入触发的。
+    RunStarted {
+        run_id: String,
+        /// `user` / `wakeup` / `cron` / `queue` / `resume`
+        trigger: String,
+        /// 当前 RunMode（`default` / `plan` / `auto`）
+        mode: String,
+    },
+    /// 一条消息刚落盘（提案 P2）。`message` 与 session.jsonl 的 Message 形态一致，
+    /// 脚本可据此实时看到 user/wakeup 通知气泡、流式 assistant 定稿，不必等 run 结束。
+    MessageAppended {
+        message: Value,
+    },
     RunFinished {
         input_tokens: u64,
         output_tokens: u64,

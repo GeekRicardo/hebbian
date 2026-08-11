@@ -52,6 +52,20 @@ pub enum WireEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subagent_call_id: Option<String>,
     },
+    /// 思考块的墙钟时长，块结束时到达一次（架构 §3.1.1）。历史加载时前端用这个落盘值
+    /// 定格「思考用时 N 秒」，与流式期间的客户端秒表对齐——修「刷新后思考用时数字变」。
+    ReasoningDuration {
+        ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
+    },
+    /// Anthropic thinking block 的签名（流式一次性整体到达）。surface 端更新内存里最后一个
+    /// Reasoning part 的 signature，落盘随消息持久化。
+    ReasoningSignature {
+        signature: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
+    },
 
     // —— 工具 ——
     ToolCallDelta {
@@ -86,15 +100,43 @@ pub enum WireEvent {
         artifact_path: Option<String>,
         #[serde(default)]
         is_error: bool,
+        /// 结果因超阈值被截断（模型看到的 `result` 是截断版，完整版在 `artifact_path`）。
+        /// surface 据此渲染「(已截断)」标记——三 surface 现在都能看到，不再只有 CLI TUI。
+        #[serde(default)]
+        truncated: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subagent_call_id: Option<String>,
     },
 
     // —— 生命周期 ——
-    /// 注：只携带 `duration_ms`。token 用量走 turn 级 [`WireEvent::Usage`] 实时累加，
-    /// surface 不从这里取 token（与早期 desktop 行为一致）。
+    /// 一个 run 开始（架构 §3.1.1）。surface-session 在装配活 run 后 emit，携带 run 身份
+    /// 与触发源——**不再被 to_wire 丢弃**。前端据 `trigger` 区分是用户发起还是后端自主
+    /// （wakeup/cron/队列），后端自发起的 run 也能第一时间建投影、亮运行态。
+    RunStarted {
+        run_id: String,
+        /// `user` / `wakeup` / `cron` / `queue` / `resume`
+        trigger: String,
+        /// 当前 RunMode（`default` / `plan` / `auto`）。
+        mode: String,
+    },
+    /// 一条消息刚落盘（架构 §3.1 / 提案 P2）。`message` 与 session.jsonl / getSession 的
+    /// Message 形态一致，前端投影用同一套解析：user/wakeup 通知气泡实时出现、流式 assistant
+    /// 按 id 原地定稿。老前端不识别此 type、忽略之（additive）。
+    MessageAppended {
+        message: Value,
+    },
+    /// 注：`duration_ms` + 四个 token 累计。token 之前被 to_wire 丢弃、各 surface 各自
+    /// 重算，现补回无损（架构 §3.1.1）。
     RunFinished {
         duration_ms: u64,
+        #[serde(default)]
+        total_input_tokens: u64,
+        #[serde(default)]
+        total_output_tokens: u64,
+        #[serde(default)]
+        total_cache_read_tokens: u64,
+        #[serde(default)]
+        total_cache_creation_tokens: u64,
     },
     Usage {
         input_tokens: u64,
@@ -110,7 +152,15 @@ pub enum WireEvent {
         waiting_for_task_ids: Vec<String>,
     },
     RunResumed {
+        /// 人话字符串形态（保留兼容）：`bg_task_finished:{task_id}` / `cron_fired:{reason}` /
+        /// `user_message_arrived` / `manual_resume`。
         cause: String,
+        /// bg-task 唤醒时关联的后台 task_id（结构化，之前被拼进字符串丢失）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        /// bg-task 退出码（结构化，之前被 to_wire 整个丢弃）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
     },
 
     // —— Step / Turn / 重试 / 模式 ——
@@ -252,6 +302,10 @@ pub enum WireEvent {
         session_id: String,
         reason: String,
     },
+    MemoryRecalled {
+        session_id: String,
+        items: Vec<MemoryWriteItem>,
+    },
     GoalAchieved {
         condition: String,
         reason: String,
@@ -269,6 +323,58 @@ pub enum WireEvent {
     Error {
         message: String,
     },
+}
+
+/// 事件信封（架构 §3.1）：给每条 [`WireEvent`] 盖上 session 级单调 `seq` + `epoch` + `run_id`。
+///
+/// - **seq**：session 内单调递增（从 1 起），epoch 内连续无洞。订阅方据此去重、续传、检测 gap。
+/// - **epoch**：runtime 创建时的时间戳。runtime 被重建（进程重启 / registry remove 后 ensure）
+///   → epoch 变化 → 订阅方必须 resync（seq 从头，不能跨 epoch 比较）。
+/// - **run_id**：本事件所属 run；session 级事件（标题 / 记忆等派生态）为 `None`。
+///
+/// meta 字段用下划线前缀 `#[serde(flatten)]` 到 WireEvent 的 JSON 上（`_epoch`/`_seq`/`_rid`/`_ts`），
+/// 老前端只读 `type` 字段、忽略这些——**对现有 surface 完全透明**（P1 additive），新前端读 `_seq`
+/// 做投影对齐。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionEnvelope {
+    #[serde(rename = "_epoch")]
+    pub epoch: u64,
+    #[serde(rename = "_seq")]
+    pub seq: u64,
+    #[serde(rename = "_rid", default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(rename = "_ts")]
+    pub ts_ms: i64,
+    #[serde(flatten)]
+    pub event: WireEvent,
+}
+
+/// 一个 run 的触发源（架构 §3.1）。surface-session 装配活 run 时据此填
+/// [`WireEvent::RunStarted::trigger`]，前端区分用户发起 vs 后端自主。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunTrigger {
+    /// 用户在 UI / CLI 主动发消息。
+    User,
+    /// 后台任务完成唤醒。
+    Wakeup,
+    /// cron 定时到点唤醒。
+    Cron,
+    /// 排队消息在上一个 run 结束后起的新 run。
+    Queue,
+    /// 挂起 checkpoint 恢复（进程重启后 resume）。
+    Resume,
+}
+
+impl RunTrigger {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RunTrigger::User => "user",
+            RunTrigger::Wakeup => "wakeup",
+            RunTrigger::Cron => "cron",
+            RunTrigger::Queue => "queue",
+            RunTrigger::Resume => "resume",
+        }
+    }
 }
 
 /// Plan 审批的线 DTO（[`PermissionKind::Plan`] 拍平）。
@@ -331,6 +437,14 @@ pub fn to_wire(event: &Event) -> Option<WireEvent> {
             text: text.clone(),
             subagent_call_id: sub,
         },
+        EventPayload::ReasoningDuration { ms } => WireEvent::ReasoningDuration {
+            ms: *ms,
+            subagent_call_id: sub,
+        },
+        EventPayload::ReasoningSignature { signature } => WireEvent::ReasoningSignature {
+            signature: signature.clone(),
+            subagent_call_id: sub,
+        },
 
         // —— 工具 ——
         EventPayload::ToolCallDelta {
@@ -374,7 +488,7 @@ pub fn to_wire(event: &Event) -> Option<WireEvent> {
             duration_ms,
             artifact_path,
             is_error,
-            ..
+            truncated,
         } => WireEvent::ToolDone {
             index: *index,
             id: call_id.clone(),
@@ -382,15 +496,29 @@ pub fn to_wire(event: &Event) -> Option<WireEvent> {
             duration_ms: *duration_ms,
             artifact_path: artifact_path.clone(),
             is_error: *is_error,
+            truncated: *truncated,
             subagent_call_id: sub,
         },
 
         // —— 生命周期 ——
-        EventPayload::RunFinished { duration_ms, .. } => WireEvent::RunFinished {
+        EventPayload::RunFinished {
+            duration_ms,
+            total_input_tokens,
+            total_output_tokens,
+            total_cache_read_tokens,
+            total_cache_creation_tokens,
+        } => WireEvent::RunFinished {
             duration_ms: *duration_ms,
+            total_input_tokens: *total_input_tokens,
+            total_output_tokens: *total_output_tokens,
+            total_cache_read_tokens: *total_cache_read_tokens,
+            total_cache_creation_tokens: *total_cache_creation_tokens,
         },
         EventPayload::RunFailed { error } => WireEvent::Error {
             message: error.message.clone(),
+        },
+        EventPayload::MessageAppended { message } => WireEvent::MessageAppended {
+            message: message.clone(),
         },
         EventPayload::Usage {
             input_tokens,
@@ -412,9 +540,19 @@ pub fn to_wire(event: &Event) -> Option<WireEvent> {
             resumes_at_ms: *resumes_at_ms,
             waiting_for_task_ids: waiting_for_task_ids.clone(),
         },
-        EventPayload::RunResumed { cause } => WireEvent::RunResumed {
-            cause: resume_cause_str(cause),
-        },
+        EventPayload::RunResumed { cause } => {
+            let (task_id, exit_code) = match cause {
+                ResumeCause::BgTaskFinished { task_id, exit_code } => {
+                    (Some(task_id.clone()), *exit_code)
+                }
+                _ => (None, None),
+            };
+            WireEvent::RunResumed {
+                cause: resume_cause_str(cause),
+                task_id,
+                exit_code,
+            }
+        }
 
         // —— Step / Turn / 重试 / 模式 ——
         EventPayload::StepStarted {
@@ -591,6 +729,10 @@ pub fn to_wire(event: &Event) -> Option<WireEvent> {
             session_id: session_id.clone(),
             items: items.clone(),
         },
+        EventPayload::MemoryRecalled { session_id, items } => WireEvent::MemoryRecalled {
+            session_id: session_id.clone(),
+            items: items.clone(),
+        },
         EventPayload::MemoryExtractionFailed { session_id, reason } => {
             WireEvent::MemoryExtractionFailed {
                 session_id: session_id.clone(),
@@ -611,11 +753,11 @@ pub fn to_wire(event: &Event) -> Option<WireEvent> {
         },
 
         // —— 纯内部 / 调试，不对外 ——
+        // RunStarted 由 surface-session 带 trigger 单独 emit（to_wire 拿不到 trigger），
+        // 这里的内部 RunStarted 仍丢弃，避免重复。
         EventPayload::RunStarted { .. }
         | EventPayload::RunCancelled
         | EventPayload::TurnStarted { .. }
-        | EventPayload::ReasoningSignature { .. }
-        | EventPayload::ReasoningDuration { .. }
         | EventPayload::Log { .. } => return None,
     };
     Some(wire)
@@ -917,6 +1059,64 @@ mod tests {
         );
         let v = serde_json::to_value(to_wire(&ev).unwrap()).unwrap();
         assert_eq!(v["subagent_call_id"], "parent-task-1");
+    }
+
+    /// 信封 flatten 序列化：meta 字段用 `_` 前缀与 WireEvent 的 `type` 同层共存，
+    /// 老前端只读 `type`、忽略 `_seq`——P1 additive 的关键（架构 §3.1）。
+    #[test]
+    fn envelope_flattens_meta_alongside_type() {
+        let env = SessionEnvelope {
+            epoch: 42,
+            seq: 7,
+            run_id: Some("run_abc".into()),
+            ts_ms: 1234,
+            event: WireEvent::TextDelta {
+                text: "hi".into(),
+                subagent_call_id: None,
+            },
+        };
+        let v = serde_json::to_value(&env).unwrap();
+        // WireEvent 的判别字段仍在顶层（老前端据此渲染，不受信封影响）。
+        assert_eq!(v["type"], "text_delta");
+        assert_eq!(v["text"], "hi");
+        // 信封 meta 拍平在旁，下划线前缀不与任何 WireEvent 字段冲突。
+        assert_eq!(v["_epoch"], 42);
+        assert_eq!(v["_seq"], 7);
+        assert_eq!(v["_rid"], "run_abc");
+        assert_eq!(v["_ts"], 1234);
+        // 往返：Rust 端也能读回（in-memory broadcast 用 clone，这里只验 serde 正确性）。
+        let back: SessionEnvelope = serde_json::from_value(v).unwrap();
+        assert_eq!(back.seq, 7);
+        assert!(matches!(back.event, WireEvent::TextDelta { text, .. } if text == "hi"));
+    }
+
+    /// run_id 字段是 WireEvent 里已有的（RunEditsCommitted 等），不能被信封的 `_rid` 覆盖。
+    #[test]
+    fn envelope_meta_does_not_collide_with_wire_run_id() {
+        let env = SessionEnvelope {
+            epoch: 1,
+            seq: 1,
+            run_id: Some("outer".into()),
+            ts_ms: 0,
+            event: WireEvent::RunEditsReverted {
+                run_id: "inner".into(),
+            },
+        };
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["run_id"], "inner", "WireEvent 自己的 run_id 不被信封覆盖");
+        assert_eq!(v["_rid"], "outer", "信封 run_id 走 _rid");
+    }
+
+    /// MessageAppended 无损透传 message payload（提案 P2）。
+    #[test]
+    fn message_appended_passes_through() {
+        let ev = wrap(EventPayload::MessageAppended {
+            message: json!({"id": "msg_1", "role": "user", "content": "hi"}),
+        });
+        let v = serde_json::to_value(to_wire(&ev).unwrap()).unwrap();
+        assert_eq!(v["type"], "message_appended");
+        assert_eq!(v["message"]["id"], "msg_1");
+        assert_eq!(v["message"]["content"], "hi");
     }
 
     #[test]

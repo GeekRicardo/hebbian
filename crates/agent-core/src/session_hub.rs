@@ -9,16 +9,72 @@
 //! （事件 broadcast / HITL pending / cancel / pending inputs / run_mode），surface
 //! 特有部分（provider/model、输入驱动、协议包装）留在各 surface。
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use protocol::{ApprovalDecision, PermissionRequestId, UserAnswer, WireEvent};
+use protocol::{
+    ApprovalDecision, PermissionRequestId, RunTrigger, SessionEnvelope, UserAnswer, WireEvent,
+};
 use tokio::sync::broadcast;
 
 use crate::run_mode::RunMode;
 use crate::tools::hitl::HitlGate;
 use common::runtime::{PendingInputs, PendingUserInput};
+
+/// 事件回放缓冲容量（架构 §3.1）。> broadcast 容量，保证订阅者 Lagged 时缺口仍在 buffer 内、
+/// 可自愈补读，不丢事件。
+const EVENT_BUFFER_CAPACITY: usize = 4096;
+
+/// 生成一个进程内唯一、跨重启不重复的 epoch（架构 §3.1）。用 runtime 创建时的毫秒时间戳
+/// 高位 + 同毫秒计数器低 12 位——runtime 每次重建（进程重启 / registry remove 后 ensure）
+/// 都得到更大的新 epoch，订阅方 epoch 不匹配即触发 resync。
+fn new_epoch() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed) & 0xfff;
+    (ms << 12) | n
+}
+
+/// run 运行时三态（架构 §2）。替换旧的 `active_run: bool` 二态——挂起态不再和 idle 混为一谈，
+/// run 身份（run_id）跨挂起/唤醒保留。
+#[derive(Debug, Clone)]
+pub enum RunState {
+    /// 无活 run。
+    Idle,
+    /// 有 run 正在跑。
+    Running { run_id: String, trigger: RunTrigger },
+    /// run 已挂起等唤醒（bg-task / cron / 用户消息）。run_id 保留，与后续 RunResumed 对得上。
+    Suspended { run_id: String },
+}
+
+/// 单 session 的事件日志：单调 seq + 有界回放缓冲 + broadcast（架构 §3.1）。
+/// seq 分配、缓冲 push、broadcast send 在同一把锁内完成，保证三者顺序一致。
+struct EventLog {
+    epoch: u64,
+    tx: broadcast::Sender<SessionEnvelope>,
+    inner: Mutex<EventLogInner>,
+}
+
+struct EventLogInner {
+    /// 下一个待分配的 seq（从 1 起）。
+    next_seq: u64,
+    buffer: VecDeque<SessionEnvelope>,
+}
+
+/// [`SessionRuntimeState::subscribe_after`] 的返回：一个 live receiver + 需要先重放的缺口事件。
+pub struct Subscription {
+    pub rx: broadcast::Receiver<SessionEnvelope>,
+    /// after_seq 之后、当前 buffer 内的历史事件（按 seq 升序），订阅方先重放再接 live。
+    pub replay: Vec<SessionEnvelope>,
+    pub epoch: u64,
+    /// 无法从 buffer 补齐缺口（epoch 变了 / 落后超出 buffer）→ 调用方须走快照 resync。
+    pub needs_resync: bool,
+}
 
 /// 单个 session 的运行时状态（架构 §7.8.5）。
 ///
@@ -38,8 +94,16 @@ pub struct SessionRuntimeState {
     /// [`answer_question`]: SessionRuntimeState::answer_question
     pub hitl: Mutex<Option<Arc<HitlGate>>>,
 
-    /// 是否有 run 正在跑（活写者存在）。
+    /// 是否有 run 正在跑（活写者存在）。`RunState::Running` 的快速缓存，避免热路径锁
+    /// [`run_state`]；两者由 [`set_active`] / [`clear_active`] / [`suspend_active`] 同步维护。
+    ///
+    /// [`run_state`]: SessionRuntimeState::run_state
+    /// [`set_active`]: SessionRuntimeState::set_active
+    /// [`clear_active`]: SessionRuntimeState::clear_active
+    /// [`suspend_active`]: SessionRuntimeState::suspend_active
     pub active_run: AtomicBool,
+    /// run 运行时三态权威源（架构 §2）。挂起态保留 run_id，区别于 idle。
+    pub run_state: Mutex<RunState>,
     /// 当前活 run 的 cancel 句柄（interrupt 用）。
     pub cancel_flag: Mutex<Option<Arc<AtomicBool>>>,
     /// 当前活 run 的插队输入队列（inject 用）。
@@ -56,45 +120,156 @@ pub struct SessionRuntimeState {
     /// 强制 auto-mode 开关（in-memory，重启回 false）。
     pub force_automode: AtomicBool,
 
-    /// 唯一写者 → 多观察者的事件广播（§7.8.5）。无订阅者时 send 失败可忽略
-    /// （fire-and-forget），有订阅者就逐 [`WireEvent`] 实时收。
-    pub event_tx: broadcast::Sender<WireEvent>,
+    /// 唯一写者 → 多观察者的事件日志（§3.1）：单调 seq + 有界回放缓冲 + broadcast。
+    event_log: EventLog,
 }
 
 impl SessionRuntimeState {
     /// 新建一个 session 运行时状态。`capacity` 是 broadcast 通道容量（慢订阅者落后会丢早帧）。
     pub fn new(session_id: impl Into<String>, capacity: usize, run_mode: RunMode) -> Arc<Self> {
-        let (event_tx, _) = broadcast::channel(capacity);
+        let (tx, _) = broadcast::channel(capacity);
         Arc::new(Self {
             session_id: session_id.into(),
             hitl: Mutex::new(None),
             active_run: AtomicBool::new(false),
+            run_state: Mutex::new(RunState::Idle),
             cancel_flag: Mutex::new(None),
             pending_inputs: Mutex::new(None),
             pending_inputs_accepting: Mutex::new(None),
             run_mode: Mutex::new(run_mode),
             force_automode: AtomicBool::new(false),
-            event_tx,
+            event_log: EventLog {
+                epoch: new_epoch(),
+                tx,
+                inner: Mutex::new(EventLogInner {
+                    next_seq: 1,
+                    buffer: VecDeque::new(),
+                }),
+            },
         })
     }
 
-    /// 成为本 run 的观察者，逐 [`WireEvent`] 实时收。多 surface 可同时订阅同一 run。
-    pub fn subscribe(&self) -> broadcast::Receiver<WireEvent> {
-        self.event_tx.subscribe()
+    /// 本 runtime 的事件 epoch（§3.1）。runtime 重建即变化。
+    pub fn epoch(&self) -> u64 {
+        self.event_log.epoch
     }
 
-    /// 广播一个事件给所有观察者。无订阅者时静默丢弃。
+    /// 成为本 session 的观察者，逐 [`SessionEnvelope`] 实时收。多 surface 可同时订阅。
+    /// **只收订阅之后 emit 的事件**；要补历史缺口用 [`subscribe_after`]。
+    ///
+    /// [`subscribe_after`]: SessionRuntimeState::subscribe_after
+    pub fn subscribe(&self) -> broadcast::Receiver<SessionEnvelope> {
+        self.event_log.tx.subscribe()
+    }
+
+    /// 从 `(epoch, after_seq)` 之后订阅（§3.1）：在缓冲锁内同时订阅 live + 取缺口，保证
+    /// 「重放的历史」与「后续 live」之间无缝无洞。epoch 不匹配或落后超出 buffer →
+    /// `needs_resync=true`，调用方走快照对齐。`after=None`（全新订阅）不重放也不 resync。
+    pub fn subscribe_after(&self, after: Option<(u64, u64)>) -> Subscription {
+        let inner = self.event_log.inner.lock().unwrap();
+        // 在持锁期间订阅：此刻起的 emit 都进 rx，buffer 冻结在当前状态，二者无缝衔接。
+        let rx = self.event_log.tx.subscribe();
+        let epoch = self.event_log.epoch;
+        let (replay, needs_resync) = match after {
+            Some((cli_epoch, after_seq)) if cli_epoch == epoch => {
+                let earliest = inner.buffer.front().map(|e| e.seq);
+                match earliest {
+                    // buffer 覆盖 after_seq+1（含"buffer 为空且 after_seq 已是最新"）→ 补缺口。
+                    Some(first) if first <= after_seq + 1 => (
+                        inner
+                            .buffer
+                            .iter()
+                            .filter(|e| e.seq > after_seq)
+                            .cloned()
+                            .collect(),
+                        false,
+                    ),
+                    None if inner.next_seq == after_seq + 1 => (Vec::new(), false),
+                    // 有洞：最早的 buffer 事件都在 after_seq+1 之后 → 无法补齐。
+                    _ => (Vec::new(), true),
+                }
+            }
+            // epoch 变了 → 必须 resync；全新订阅（None）→ 不重放不 resync（调用方另拉快照）。
+            Some(_) => (Vec::new(), true),
+            None => (Vec::new(), false),
+        };
+        Subscription {
+            rx,
+            replay,
+            epoch,
+            needs_resync,
+        }
+    }
+
+    /// 订阅者 Lagged 时的自愈补读：返回 `after_seq` 之后仍在 buffer 里的事件；
+    /// 缺口超出 buffer（无法补齐）返回 `None`（调用方走 resync）。
+    pub fn events_after(&self, after_seq: u64) -> Option<Vec<SessionEnvelope>> {
+        let inner = self.event_log.inner.lock().unwrap();
+        match inner.buffer.front().map(|e| e.seq) {
+            Some(first) if first <= after_seq + 1 => Some(
+                inner
+                    .buffer
+                    .iter()
+                    .filter(|e| e.seq > after_seq)
+                    .cloned()
+                    .collect(),
+            ),
+            None => Some(Vec::new()),
+            _ => None,
+        }
+    }
+
+    /// 广播一个事件给所有观察者（§3.1）：在缓冲锁内分配 seq、盖信封（epoch + 当前 run_id）、
+    /// push 进回放缓冲、broadcast。无订阅者时 send 静默失败但事件仍留在 buffer 里可回放。
     pub fn emit(&self, event: WireEvent) {
-        let _ = self.event_tx.send(event);
+        let run_id = self.current_run_id();
+        let ts_ms = chrono::Utc::now().timestamp_millis();
+        let mut inner = self.event_log.inner.lock().unwrap();
+        let seq = inner.next_seq;
+        inner.next_seq += 1;
+        let env = SessionEnvelope {
+            epoch: self.event_log.epoch,
+            seq,
+            run_id,
+            ts_ms,
+            event,
+        };
+        if inner.buffer.len() >= EVENT_BUFFER_CAPACITY {
+            inner.buffer.pop_front();
+        }
+        inner.buffer.push_back(env.clone());
+        let _ = self.event_log.tx.send(env);
+    }
+
+    /// 当前活/挂起 run 的 run_id（emit 盖信封用）。Idle 时为 None。
+    pub fn current_run_id(&self) -> Option<String> {
+        match &*self.run_state.lock().unwrap() {
+            RunState::Running { run_id, .. } | RunState::Suspended { run_id } => {
+                Some(run_id.clone())
+            }
+            RunState::Idle => None,
+        }
+    }
+
+    /// 当前 run 运行时三态快照（架构 §2）。
+    pub fn run_state(&self) -> RunState {
+        self.run_state.lock().unwrap().clone()
     }
 
     pub fn is_active(&self) -> bool {
         self.active_run.load(Ordering::SeqCst)
     }
 
-    /// run 开始：登记 HITL 闸门 + cancel 句柄 + 插队队列，置活。
+    /// 是否处于挂起态（区别于 idle）。
+    pub fn is_suspended(&self) -> bool {
+        matches!(&*self.run_state.lock().unwrap(), RunState::Suspended { .. })
+    }
+
+    /// run 开始：登记 HITL 闸门 + cancel 句柄 + 插队队列，置 `Running{run_id, trigger}`。
     pub fn set_active(
         &self,
+        run_id: String,
+        trigger: RunTrigger,
         hitl: Arc<HitlGate>,
         cancel: Arc<AtomicBool>,
         inputs: PendingInputs,
@@ -104,15 +279,33 @@ impl SessionRuntimeState {
         *self.cancel_flag.lock().unwrap() = Some(cancel);
         *self.pending_inputs.lock().unwrap() = Some(inputs);
         *self.pending_inputs_accepting.lock().unwrap() = Some(accepting);
+        *self.run_state.lock().unwrap() = RunState::Running { run_id, trigger };
         self.active_run.store(true, Ordering::SeqCst);
     }
 
-    /// run 结束：清 HITL 闸门 + cancel 句柄 + 插队队列 + accepting 标志，置闲。
+    /// run 结束：清 HITL 闸门 + cancel 句柄 + 插队队列 + accepting 标志，置 `Idle`。
     pub fn clear_active(&self) {
         *self.hitl.lock().unwrap() = None;
         *self.cancel_flag.lock().unwrap() = None;
         *self.pending_inputs.lock().unwrap() = None;
         *self.pending_inputs_accepting.lock().unwrap() = None;
+        *self.run_state.lock().unwrap() = RunState::Idle;
+        self.active_run.store(false, Ordering::SeqCst);
+    }
+
+    /// run 挂起：清 HITL / cancel / 插队闸门（挂起期无活 gate），但保留 run_id 置
+    /// `Suspended`——区别于 idle，且与后续 `RunResumed` 的 run 身份对得上（架构 §2）。
+    pub fn suspend_active(&self) {
+        *self.hitl.lock().unwrap() = None;
+        *self.cancel_flag.lock().unwrap() = None;
+        *self.pending_inputs.lock().unwrap() = None;
+        *self.pending_inputs_accepting.lock().unwrap() = None;
+        let mut guard = self.run_state.lock().unwrap();
+        if let RunState::Running { run_id, .. } = &*guard {
+            *guard = RunState::Suspended {
+                run_id: run_id.clone(),
+            };
+        }
         self.active_run.store(false, Ordering::SeqCst);
     }
 
@@ -248,7 +441,47 @@ mod tests {
             message: "boom".into(),
         });
         let got = rx.try_recv().expect("应收到广播事件");
-        assert!(matches!(got, WireEvent::Error { message } if message == "boom"));
+        assert_eq!(got.seq, 1, "首个事件 seq 从 1 起");
+        assert!(matches!(got.event, WireEvent::Error { message } if message == "boom"));
+    }
+
+    #[test]
+    fn emit_assigns_monotonic_seq_and_epoch() {
+        let rt = SessionRuntimeState::new("s1", 16, RunMode::Default);
+        let mut rx = rt.subscribe();
+        for _ in 0..3 {
+            rt.emit(WireEvent::Error { message: "x".into() });
+        }
+        let a = rx.try_recv().unwrap();
+        let b = rx.try_recv().unwrap();
+        let c = rx.try_recv().unwrap();
+        assert_eq!((a.seq, b.seq, c.seq), (1, 2, 3), "seq 单调连续");
+        assert_eq!(a.epoch, rt.epoch());
+        assert_eq!(a.epoch, c.epoch, "同 runtime epoch 恒定");
+    }
+
+    /// 回归（架构 §3.1 回放）：无订阅者时 emit 的事件仍进 buffer，subscribe_after 能补齐。
+    #[test]
+    fn subscribe_after_replays_missed_events() {
+        let rt = SessionRuntimeState::new("s1", 16, RunMode::Default);
+        // 无订阅者时 emit 3 条（旧设计会全丢）。
+        for _ in 0..3 {
+            rt.emit(WireEvent::Error { message: "x".into() });
+        }
+        // 从 seq=1 之后订阅：应补回 seq 2、3。
+        let sub = rt.subscribe_after(Some((rt.epoch(), 1)));
+        assert!(!sub.needs_resync);
+        assert_eq!(sub.replay.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![2, 3]);
+    }
+
+    /// epoch 不匹配（runtime 重建）→ needs_resync。
+    #[test]
+    fn subscribe_after_flags_resync_on_epoch_mismatch() {
+        let rt = SessionRuntimeState::new("s1", 16, RunMode::Default);
+        rt.emit(WireEvent::Error { message: "x".into() });
+        let sub = rt.subscribe_after(Some((rt.epoch() ^ 0xdead, 0)));
+        assert!(sub.needs_resync, "epoch 变了必须 resync");
+        assert!(sub.replay.is_empty());
     }
 
     #[test]
@@ -259,8 +492,8 @@ mod tests {
         rt.emit(WireEvent::Error {
             message: "x".into(),
         });
-        assert!(matches!(a.try_recv(), Ok(WireEvent::Error { .. })));
-        assert!(matches!(b.try_recv(), Ok(WireEvent::Error { .. })));
+        assert!(matches!(a.try_recv().map(|e| e.event), Ok(WireEvent::Error { .. })));
+        assert!(matches!(b.try_recv().map(|e| e.event), Ok(WireEvent::Error { .. })));
     }
 
     #[test]
@@ -276,6 +509,8 @@ mod tests {
         );
         let inputs: PendingInputs = Arc::new(Mutex::new(Vec::new()));
         rt.set_active(
+            "run-1".into(),
+            RunTrigger::User,
             Arc::new(HitlGate::default()),
             Arc::new(AtomicBool::new(false)),
             inputs.clone(),
@@ -304,6 +539,8 @@ mod tests {
         let inputs: PendingInputs = Arc::new(Mutex::new(Vec::new()));
         let accepting = Arc::new(AtomicBool::new(true));
         rt.set_active(
+            "run-1".into(),
+            RunTrigger::User,
             Arc::new(HitlGate::default()),
             Arc::new(AtomicBool::new(false)),
             inputs.clone(),
@@ -341,6 +578,8 @@ mod tests {
         let gate = Arc::new(HitlGate::default());
         let (request_id, waiter) = gate.open_approval(Some("Bash"), None);
         rt.set_active(
+            "run-1".into(),
+            RunTrigger::User,
             gate.clone(),
             Arc::new(AtomicBool::new(false)),
             Arc::new(Mutex::new(Vec::new())),

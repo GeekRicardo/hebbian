@@ -1829,6 +1829,23 @@ export const useStore = create<AppState>((set, get) => ({
     if (e.type === "memory_extraction_failed") {
       toast.error("记忆提取失败了", { description: "这轮对话会在下次自动补抽" });
     }
+    // 记忆引用（架构 §4.14.5）：Run 起步激活扩散引用了已有记忆，已落一条 memory_recall
+    // marker（在触发它的 user 消息之后）；前台正看着这个会话就 reload，从落盘 marker 渲染
+    // 引用图标。流式内容走独立 slot（currentStream），reload messages 不影响它。
+    if (e.type === "memory_recalled") {
+      if (e.items.length > 0 && get().currentSession?.id === e.session_id) {
+        void api
+          .getSession(e.session_id, activeRequestForSession(get(), e.session_id))
+          .then((fresh) => {
+            set((state) =>
+              state.currentSession?.id === e.session_id
+                ? { currentSession: fresh }
+                : state
+            );
+          })
+          .catch(() => {});
+      }
+    }
   },
 
   handleSessionSubscriptionResynced(sessionId) {
@@ -1846,9 +1863,60 @@ export const useStore = create<AppState>((set, get) => ({
       e.type === "session_title_changed" ||
       e.type === "session_title_generation_failed" ||
       e.type === "memory_extracted" ||
-      e.type === "memory_extraction_failed"
+      e.type === "memory_extraction_failed" ||
+      e.type === "memory_recalled"
     ) {
       get().handleDerivedEvent(e);
+      return;
+    }
+    if (e.type === "run_started") {
+      // 架构 §3.1 / 提案 P1：任何 run 起步都建/激活 slot。前端自己发起的 run 已在
+      // sendForSession 建好 slot（requestId 非空）→ 只确保 running，不覆盖它的
+      // streamingMessageId / 乐观消息。后端自发起的 run（wakeup/cron/queue/resume）无 slot
+      // 或 slot 空闲 → 建一个并置 streamingMessageId，让后续流式事件不再被 `if (!slot)` 丢弃、
+      // isStreaming=true 能实时渲染。这是「后端在跑、前端接不上」的直接修复（F1）。
+      set((state) => {
+        const existing = state.sessionStreams[sessionId];
+        if (existing && existing.requestId !== "") {
+          return { runningSessions: new Set(state.runningSessions).add(sessionId) };
+        }
+        const slot: SessionStream = {
+          ...(existing ?? makeEmptySessionStream()),
+          requestId: e.run_id,
+          streamingMessageId: "streaming",
+        };
+        return {
+          sessionStreams: { ...state.sessionStreams, [sessionId]: slot },
+          runningSessions: new Set(state.runningSessions).add(sessionId),
+        };
+      });
+      return;
+    }
+    if (e.type === "message_appended") {
+      // 架构 §3.1 / 提案 P2：后端落盘一条消息即事件。assistant 段的定稿交给流式 + run 结束
+      // reload（避免与 streaming 双渲）；这里只把后端落盘的 **user 消息**（注入 / wakeup 通知）
+      // 实时插进当前会话——修 F2「wakeup 通知气泡要等 reload 才出现」。按 id 去重、跳过同内容
+      // 的乐观占位（前端自己 inject 时 sendForSession 已乐观插入），防止短暂双份。
+      const msg = e.message;
+      if (msg.role !== "user") return;
+      set((state) => {
+        if (state.currentSession?.id !== sessionId) return state;
+        const msgs = state.currentSession.messages ?? [];
+        if (msgs.some((m) => m.id === msg.id)) return state;
+        if (
+          msgs.some(
+            (m) => m.id.startsWith("pending-user-") && m.content === msg.content,
+          )
+        ) {
+          return state;
+        }
+        return {
+          currentSession: {
+            ...state.currentSession,
+            messages: [...msgs, msg],
+          },
+        };
+      });
       return;
     }
     if (e.type === "context_compaction_started") {
@@ -1936,7 +2004,11 @@ export const useStore = create<AppState>((set, get) => ({
       else toast(e.message, opts);
       return;
     }
-    if (e.type === "run_edits_committed" || e.type === "run_edits_reverted") {
+    if (
+      e.type === "run_edits_committed" ||
+      e.type === "run_edits_reverted" ||
+      e.type === "run_edits_revert_failed"
+    ) {
       set((state) => {
         const next = applyEditEvent(state.sessionEditSnapshots, sessionId, e);
         if (next === null) return state;
@@ -1946,6 +2018,9 @@ export const useStore = create<AppState>((set, get) => ({
           ? { sessionEditSnapshots: next, expandEditsRunId: e.run_id }
           : { sessionEditSnapshots: next };
       });
+      if (e.type === "run_edits_revert_failed") {
+        toast.error(`回退失败：${e.file_path} — ${e.error}`);
+      }
       return;
     }
     if (e.type === "usage") {

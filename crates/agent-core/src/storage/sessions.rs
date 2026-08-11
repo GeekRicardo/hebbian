@@ -95,6 +95,14 @@ pub enum MessageMeta {
     MemoryWrites {
         items: Vec<protocol::MemoryWriteItem>,
     },
+    /// 本轮 Run 起步时激活扩散引用的已有记忆（架构 §4.14.5）。与 [`MemoryWrites`] 对称——
+    /// 后者「写了什么」、前者「引用了什么」。recall 发生在 `Session::inject_memory_recall`
+    /// （run 起步、user 消息落盘之后），故这条 `Role::Marker` 物理上落在触发它的 user 消息
+    /// 之后、本轮 assistant 之前。transcript rebuild 对 `Role::Marker` 走 `_ => {}` 跳过，
+    /// 模型看不到它（引用内容已在 user 消息的 `<memory-recall>` 块里给模型看过）。
+    MemoryRecall {
+        items: Vec<protocol::MemoryWriteItem>,
+    },
     /// `//goal` 一次裁决结果（架构 §4.8.3）。goal judge 在 turn 收尾判 transcript 是否
     /// 满足完成条件后，把这条结果作为 `Role::Marker` append 到 session.jsonl，随会话持久化、
     /// 重启可重建。落在记忆摘要之前（goal 裁决在 turn 结束瞬间、记忆抽取在 RunFinished 之后）。

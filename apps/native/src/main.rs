@@ -441,12 +441,12 @@ async fn send_message(
     let mut events = runtime.state.subscribe();
     let tx_for_events = tx.clone();
     tokio::spawn(async move {
-        while let Ok(event) = events.recv().await {
+        while let Ok(envelope) = events.recv().await {
             let finished = matches!(
-                event,
+                envelope.event,
                 WireEvent::RunFinished { .. } | WireEvent::Error { .. }
             );
-            let _ = tx_for_events.send(UiEvent::Wire(event));
+            let _ = tx_for_events.send(UiEvent::Wire(envelope.event));
             if finished {
                 break;
             }

@@ -1163,7 +1163,7 @@ async fn subscribe_session_events(
     permission_store: State<'_, Option<Arc<PermissionStore>>>,
     subs: State<'_, SessionSubscriptions>,
     session_id: String,
-    on_event: Channel<protocol::WireEvent>,
+    on_event: Channel<protocol::SessionEnvelope>,
 ) -> AppResult<()> {
     let cancel = {
         let mut map = subs.0.lock().unwrap();
@@ -1182,20 +1182,45 @@ async fn subscribe_session_events(
         .map_err(|e| AppError::msg(e.to_string()))?;
     let mut rx = runtime.state.subscribe();
     let hitl = hitl.inner().clone();
+    let runtime_for_loop = runtime.clone();
     tokio::spawn(async move {
+        // 记录已投递的最大 seq：Lagged 时据此从回放缓冲自愈补读，不再静默丢事件（架构 §3.1）。
+        let mut last_seq: u64 = 0;
         loop {
             if cancel.load(Ordering::Relaxed) {
                 break;
             }
             match rx.recv().await {
-                Ok(event) => {
-                    if !handle_desktop_runtime_event(&app, &session_id, &hitl, event, &on_event) {
+                Ok(envelope) => {
+                    last_seq = envelope.seq;
+                    if !handle_desktop_runtime_event(&app, &session_id, &hitl, envelope, &on_event) {
                         break;
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    tracing::warn!(session_id = %session_id, skipped, "desktop session 事件订阅落后，已跳过旧事件");
+                    // 落后：从缓冲补读 last_seq 之后的事件（缓冲 4096 > broadcast 1024，通常够）。
+                    match runtime_for_loop.state.events_after(last_seq) {
+                        Some(missed) => {
+                            tracing::warn!(session_id = %session_id, skipped, recovered = missed.len(), "desktop 订阅落后，已从回放缓冲补齐");
+                            let mut broken = false;
+                            for env in missed {
+                                last_seq = env.seq;
+                                if !handle_desktop_runtime_event(&app, &session_id, &hitl, env, &on_event) {
+                                    broken = true;
+                                    break;
+                                }
+                            }
+                            if broken {
+                                break;
+                            }
+                        }
+                        None => {
+                            // 缺口超出缓冲，无法补齐：让前端整体 resync（重拉快照）。
+                            tracing::warn!(session_id = %session_id, skipped, "desktop 订阅落后超出缓冲，请求前端 resync");
+                            let _ = app.emit("session-subscription-resynced", &session_id);
+                        }
+                    }
                 }
             }
         }
@@ -1207,10 +1232,12 @@ fn handle_desktop_runtime_event(
     app: &AppHandle,
     session_id: &str,
     hitl: &Arc<HitlState>,
-    event: protocol::WireEvent,
-    on_event: &Channel<protocol::WireEvent>,
+    envelope: protocol::SessionEnvelope,
+    on_event: &Channel<protocol::SessionEnvelope>,
 ) -> bool {
-    match &event {
+    // 内层 WireEvent 供 native 出口（island / 微信转发 / hitl 追踪）检查；信封整体转发前端
+    // （携带 _seq，前端投影据此去重/续传）。
+    match &envelope.event {
         protocol::WireEvent::PermissionRequested { request_id, .. } => {
             hitl.track_remote(request_id.clone(), session_id.to_string());
         }
@@ -1223,10 +1250,10 @@ fn handle_desktop_runtime_event(
         _ => {}
     }
     if let Some(client) = app.try_state::<crate::hebisland_client::HebislandClient>() {
-        chat::push_engine_event_to_island(&client, &event);
+        chat::push_engine_event_to_island(&client, &envelope.event);
     }
-    crate::channel_forward::maybe_forward(app, session_id, &event);
-    let sent = on_event.send(event).is_ok();
+    crate::channel_forward::maybe_forward(app, session_id, &envelope.event);
+    let sent = on_event.send(envelope).is_ok();
     if !sent {
         tracing::debug!(session_id, "前端事件通道已关闭，停止订阅");
     }

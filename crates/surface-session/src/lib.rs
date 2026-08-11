@@ -183,18 +183,26 @@ impl SessionRuntime {
         self.state.is_active()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn set_active(
         &self,
+        run_id: String,
+        trigger: protocol::RunTrigger,
         hitl: Arc<agent_core::tools::hitl::HitlGate>,
         cancel: Arc<AtomicBool>,
         inputs: PendingInputs,
         accepting: Arc<AtomicBool>,
     ) {
-        self.state.set_active(hitl, cancel, inputs, accepting);
+        self.state
+            .set_active(run_id, trigger, hitl, cancel, inputs, accepting);
     }
 
     pub fn clear_active(&self) {
         self.state.clear_active();
+    }
+
+    pub fn suspend_active(&self) {
+        self.state.suspend_active();
     }
 
     pub fn inject(&self, input: TurnInput) -> bool {
@@ -564,6 +572,14 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, input: TurnInput) -> Result<
             subagent_call_id: None,
             run_duration_ms: None,
         };
+        // 落盘即事件（架构 §3.1 / 提案 P2）：新 run 首条 user message 由 surface 落盘，
+        // 落成后 emit `MessageAppended`。wakeup / cron 触发的新 run，其首条就是系统通知
+        // （meta=SystemNotification），前端据此实时插气泡，不必等 run 结束 reload；用户手输
+        // 的首条前端有乐观占位，按内容去重跳过不会双份。run 内后续插队消息由 agent_loop
+        // drain → persister.append_user 各自 emit，两条路互补覆盖所有 user 落盘点。
+        if let Ok(message) = serde_json::to_value(&user_msg) {
+            runtime.emit_engine_event(protocol::WireEvent::MessageAppended { message });
+        }
         sessions::append_message(data_dir, session_id, user_msg)?;
     }
 
@@ -739,12 +755,13 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, input: TurnInput) -> Result<
         .ok()
         .flatten()
         .map(|ckpt| {
-            // checkpoint 已被本 turn 接管，删文件 + 摘除调度器对该 run 的登记，
-            // 防止 cron/bg-task 之后又触发一次重复 resume。
+            // checkpoint 已被本 turn 接管，删文件 + 只摘除**触发本次 resume 的那个** arm，
+            // 防止它之后又触发一次重复 resume。**不用 discard_run**——那会连同该 run 里仍在
+            // 跑的其它后台任务的完成 watch 一并删掉，害它们完成后再也不 emit（提案 P2）。
             let _ = run_checkpoint::delete(data_dir, session_id);
-            WakeupScheduler::global().discard_run(session_id, &ckpt.run_id);
             let cause = match &ckpt.phase {
                 agent_core::storage::run_checkpoint::RunPhase::AwaitingCron { reason, .. } => {
+                    WakeupScheduler::global().discard_cron(session_id, &ckpt.run_id);
                     ResumeCause::CronFired {
                         original_reason: reason.clone(),
                     }
@@ -752,14 +769,18 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, input: TurnInput) -> Result<
                 agent_core::storage::run_checkpoint::RunPhase::AwaitingBackgroundTask {
                     task_id,
                     ..
-                } => ResumeCause::BgTaskFinished {
-                    task_id: task_id.clone(),
-                    exit_code: None,
-                },
+                } => {
+                    WakeupScheduler::global().discard_bg_task(session_id, task_id);
+                    ResumeCause::BgTaskFinished {
+                        task_id: task_id.clone(),
+                        exit_code: None,
+                    }
+                }
             };
             RunResumeState::from_checkpoint(ckpt, cause)
         });
 
+    let is_resume = resume_state.is_some();
     let mut handle = match resume_state {
         Some(rs) => core_session.resume_with_runtime_inputs(
             cancel_flag.clone(),
@@ -777,14 +798,41 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, input: TurnInput) -> Result<
         ),
     };
 
+    // 触发源（架构 §3.1）：meta 是 SystemNotification 说明 wakeup/cron（idle 注入或 suspended
+    // resume 两条路径都带此 meta）；否则 checkpoint 恢复算 resume，普通用户消息算 user。
+    let trigger = match &meta {
+        Some(agent_core::storage::sessions::MessageMeta::SystemNotification { kind, .. })
+            if kind == "cron_fired" =>
+        {
+            protocol::RunTrigger::Cron
+        }
+        Some(agent_core::storage::sessions::MessageMeta::SystemNotification { .. }) => {
+            protocol::RunTrigger::Wakeup
+        }
+        _ if is_resume => protocol::RunTrigger::Resume,
+        _ => protocol::RunTrigger::User,
+    };
+    let run_id_str = handle.id().to_string();
+
     // 把活 run 的真 HitlGate 挂进运行时状态：surface 的审批 / 提问回应经统一控制入口
     // 直接戳它，observer 不再自造 oneshot gate 阻塞 drive loop。
     runtime.set_active(
+        run_id_str.clone(),
+        trigger,
         handle.hitl().clone(),
         cancel_flag,
         pending_inputs,
         pending_inputs_accepting,
     );
+
+    // RunStarted：surface-session 带 run 身份 + 触发源单独 emit（to_wire 丢弃内部 RunStarted，
+    // 因它拿不到 trigger）。后端自发起的 run（wakeup/cron/queue）也能让前端第一时间建投影、
+    // 亮运行态、可取消——修「后端在跑前端没接上」（架构 §3.1 / §2）。
+    runtime.emit_engine_event(protocol::WireEvent::RunStarted {
+        run_id: run_id_str,
+        trigger: trigger.as_str().to_string(),
+        mode: run_mode.as_str().to_ascii_lowercase(),
+    });
 
     let mut observer = WebObserver {
         runtime: runtime.clone(),
@@ -792,7 +840,12 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, input: TurnInput) -> Result<
     };
     let summary = handle.drive(&mut observer).await;
 
-    runtime.clear_active();
+    // 挂起态保留 run_id（Suspended），其余置 Idle（架构 §2）——必须在读 summary.outcome 后。
+    if matches!(summary.outcome, TurnOutcome::Suspended) {
+        runtime.suspend_active();
+    } else {
+        runtime.clear_active();
+    }
     // 清除本轮可能被 stop() 设上的 flag，让输入循环的下一轮 recv 不会把它当
     // 成「新 run 启动前的 stop 请求」而跳过用户刚发的新消息。
     runtime.stop_flag.store(false, Ordering::SeqCst);

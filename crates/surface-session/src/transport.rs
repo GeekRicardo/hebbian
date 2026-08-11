@@ -357,10 +357,14 @@ pub async fn handle_connection(stream: UnixStream, ctx: Arc<TransportCtx>) -> Re
                         let mut rx = rt.state.subscribe();
                         loop {
                             match rx.recv().await {
-                                Ok(event) => {
+                                Ok(envelope) => {
+                                    // 实验性 transport（§7.6 非默认路径）：转发内层 WireEvent，
+                                    // 信封 seq 暂不透传（远程 transport 的可靠性重构另议）。
                                     if write_line(
                                         &mut write_half,
-                                        &HebcoreResponse::Event { event },
+                                        &HebcoreResponse::Event {
+                                            event: envelope.event,
+                                        },
                                     )
                                     .await
                                     .is_err()

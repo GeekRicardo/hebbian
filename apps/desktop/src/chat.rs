@@ -423,11 +423,22 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         .ok()
         .flatten()
         .map(|ckpt| {
-            // checkpoint 已经被新消息接管，清掉文件 + 摘除调度器对该 run 的登记，
-            // 防止 cron/bg-task 之后又触发一次重复 resume。
+            // checkpoint 已经被新消息接管，清掉文件 + 只摘除**触发本次挂起的那个** arm，
+            // 防止它之后又触发一次重复 resume。不用 discard_run——那会误删该 run 里仍在跑的
+            // 其它后台任务的完成 watch（提案 P2）。
             let _ = agent_core::storage::run_checkpoint::delete(data_dir, &args.session_id);
-            agent_core::wakeup::WakeupScheduler::global()
-                .discard_run(&args.session_id, &ckpt.run_id);
+            let sched = agent_core::wakeup::WakeupScheduler::global();
+            match &ckpt.phase {
+                agent_core::storage::run_checkpoint::RunPhase::AwaitingCron { .. } => {
+                    sched.discard_cron(&args.session_id, &ckpt.run_id);
+                }
+                agent_core::storage::run_checkpoint::RunPhase::AwaitingBackgroundTask {
+                    task_id,
+                    ..
+                } => {
+                    sched.discard_bg_task(&args.session_id, task_id);
+                }
+            }
             agent_core::agent_loop::RunResumeState::from_checkpoint(
                 ckpt,
                 protocol::ResumeCause::UserMessageArrived,

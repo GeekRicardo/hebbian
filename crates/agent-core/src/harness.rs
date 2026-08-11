@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::{
-    agent_loop::{self, EventSink, LoopParams},
+    agent_loop::{self, EventSink, AgentRunConfig},
     context::transcript::Transcript,
     definition::CompactionPolicy,
     hooks::HookManager,
@@ -145,7 +145,13 @@ impl Harness {
 
     /// 启动一个 run，立即返回独享句柄。
     pub fn spawn_run(&self, client: Arc<dyn ModelClient>, params: RunParams) -> RunHandle {
-        let run_id = RunId::new();
+        // resume 复用挂起前的原 run_id（架构 §2 / 提案 P2）：一个逻辑 run 挂起再唤醒仍是
+        // 同一身份，不再每次 RunId::new() 造成身份断裂。全新 run 才生成新 id。
+        let run_id = params
+            .resume_from
+            .as_ref()
+            .map(|rs| RunId::from(rs.run_id.clone()))
+            .unwrap_or_else(RunId::new);
         let state = Arc::new(RunState::new(run_id.clone()));
         let run_mode_shared = Arc::new(Mutex::new(params.run_mode));
 
@@ -166,15 +172,25 @@ impl Harness {
         let (run_tx, run_rx) = mpsc::channel::<Event>(1024);
         let recorder = params.recorder.clone();
         // Run 落盘协调器（架构 §4.9.5）：data_dir + session_id 都给定时构造。本体随 run task
-        // 移进 LoopParams.persister 在 agent_loop 主体单点落盘；handle（sink 端 clone）插进
+        // 移进 AgentRunConfig.persister 在 agent_loop 主体单点落盘；handle（sink 端 clone）插进
         // core_sink，对每个 Event 做纯内存累积 + partial 写帧。`None` 时整条落盘链跳过。
-        let persister = match (&params.data_dir, &params.session_id) {
+        let mut persister = match (&params.data_dir, &params.session_id) {
             (Some(dd), Some(sid)) => Some(crate::run_persister::RunPersister::new(
                 dd.clone(),
                 sid.clone(),
             )),
             _ => None,
         };
+        // 落盘即事件（架构 §3.1 / 提案 P2）：persister append 成功后 emit `MessageAppended`
+        // 到本 run 的事件流。捕获 run_tx + state（与 core_sink 同一通道），不经 core_sink 故
+        // 无 Arc 环、也不进 observe 累积（MessageAppended 非增量事件）。
+        if let Some(p) = persister.as_mut() {
+            let tx = run_tx.clone();
+            let st = state.clone();
+            p.set_emit(Arc::new(move |payload| {
+                let _ = tx.try_send(st.event(payload));
+            }));
+        }
         let persister_handle = persister.as_ref().map(|p| p.handle());
         let last_message_handle = persister
             .as_ref()
@@ -341,7 +357,7 @@ impl Harness {
                 .register(sid.clone(), force_automode_shared.clone());
         }
 
-        // panic 安全：run_loop task panic 时 Drop guard 保证 runs 表清理（架构 §4.9.3）。
+        // panic 安全：run_agent task panic 时 Drop guard 保证 runs 表清理（架构 §4.9.3）。
         // 即使 task  panic，unwind 时 guard 的 Drop 仍然执行——不会残留僵尸 run。
         // partial 文件由 daemon 启动时的 recover_all_dead_partials 兜底恢复。
         struct RunCleanup {
@@ -368,7 +384,7 @@ impl Harness {
                 run_id: cleanup_run_id,
                 session_id: cleanup_session_id,
             };
-            let params = LoopParams {
+            let params = AgentRunConfig {
                 client: client.as_ref(),
                 registry,
                 hitl,
@@ -402,7 +418,7 @@ impl Harness {
                 subagent_bypass: false,
                 persister,
             };
-            if let Err(e) = agent_loop::run_loop(params, sink).await {
+            if let Err(e) = agent_loop::run_agent(params, sink).await {
                 warn!(error = %e, "run failed");
             }
         });

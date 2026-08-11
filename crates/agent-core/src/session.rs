@@ -705,7 +705,37 @@ impl Session {
         if act.activated.is_empty() {
             return text; // gate：零命中，不联想
         }
-        // ActivatedMemory → MemoryRecallItem：按档位读详情（L2 全文 / L1 概览 / L0 无）。
+        // Auto 漂移门控（提案 P5）：同话题连续轮次不重复注入（记忆已在 transcript 里，重复前置
+        // 只会让模型行为随措辞微扰忽有忽无——「怪」的来源）。Always 跳过门控每轮强制注入。
+        if mode == RecallMode::Auto {
+            if let Some(sid) = self.session_id.as_deref() {
+                const DRIFT_THRESHOLD: f32 = 0.5;
+                if !crate::memory_recall::recall_should_inject_auto(
+                    sid,
+                    &act.query_tokens,
+                    DRIFT_THRESHOLD,
+                ) {
+                    return text;
+                }
+            }
+        }
+        // 激活强化（Hebbian 闭环，架构 §4.14.8）：命中并将注入的记忆即「fire」，把 last_active
+        // 打到 now → age 归零 → 下次深睡重算 importance 回上限，越用越易浮现。异步 spawn 不阻塞
+        // 本轮对话（每条一次小文件原子写，记忆总量少，off 热路径无感）。只强化真正注入的（漂移
+        // 门控放行后），被门控挡掉的轮次不算激活。
+        {
+            let dd = dd.to_path_buf();
+            let project_wd = project_wd.clone();
+            let ids: Vec<String> = act.activated.iter().map(|a| a.l0.id.clone()).collect();
+            tokio::spawn(async move {
+                for id in ids {
+                    let _ = crate::storage::memory::bump_last_active(&dd, project_wd.as_deref(), &id);
+                }
+            });
+        }
+        // ActivatedMemory → MemoryRecallItem：recall 只给 L0/L1 概览，**绝不内联 L2 全文**
+        // （提案 P5）——旧 episode 全文前置在当前问题之前会锚定模型到过时结论；要全文让模型
+        // 显式 ReadMemory 取。
         let items: Vec<crate::system_prompt::MemoryRecallItem> = act
             .activated
             .iter()
@@ -714,11 +744,8 @@ impl Session {
                 use crate::storage::memory::{read, MemoryLevel};
                 let detail = match a.level {
                     RecallLevel::L0 => None,
-                    RecallLevel::L1 => {
+                    RecallLevel::L1 | RecallLevel::L2 => {
                         read(dd, project_wd.as_deref(), &a.l0.id, MemoryLevel::Overview).ok()
-                    }
-                    RecallLevel::L2 => {
-                        read(dd, project_wd.as_deref(), &a.l0.id, MemoryLevel::Full).ok()
                     }
                 };
                 crate::system_prompt::MemoryRecallItem {
@@ -735,6 +762,59 @@ impl Session {
             mode,
             query.len()
         );
+
+        // 引用痕迹（架构 §4.14.5）：把本轮引用的记忆作为一条 `Role::Marker` 落盘 + emit
+        // `MemoryRecalled`，前端在该轮 user 消息之后渲染引用图标、hover 看引用了哪几条。与
+        // MemoryWrites 对称落盘链：此刻 user 消息已由 surface 落盘（本函数在 append_user 内、
+        // 早于 assistant），故 marker 物理上落在 user 之后、assistant 之前。scope 由 id 前缀推。
+        if let Some(sid) = self.session_id.clone() {
+            let refs: Vec<protocol::MemoryWriteItem> = act
+                .activated
+                .iter()
+                .map(|a| protocol::MemoryWriteItem {
+                    id: a.l0.id.clone(),
+                    summary: a.l0.summary.clone(),
+                    scope: if a.l0.id.starts_with("proj/") {
+                        "project".to_string()
+                    } else {
+                        "global".to_string()
+                    },
+                })
+                .collect();
+            if let Some(dir) = self.data_dir.as_deref() {
+                let marker = crate::storage::sessions::Message {
+                    id: crate::storage::sessions::new_id(),
+                    role: crate::storage::sessions::Role::Marker,
+                    content: String::new(),
+                    attachments: Vec::new(),
+                    tool_calls: Vec::new(),
+                    parts: Vec::new(),
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    meta: Some(crate::storage::sessions::MessageMeta::MemoryRecall {
+                        items: refs.clone(),
+                    }),
+                    subagent_call_id: None,
+                    run_duration_ms: None,
+                };
+                if let Err(e) = crate::storage::sessions::append_message(dir, &sid, marker) {
+                    tracing::warn!(error = %e, "记忆引用 marker 落盘失败，仅内存态可见");
+                }
+            }
+            // 实时性 best-effort：desktop 接了 derived_sink → 前台即时 reload 从 marker 渲染；
+            // CLI/hebweb 未接（None）→ 靠后续 reload 显示，marker 已落盘不丢。run_id/seq 对
+            // derived 事件是装饰性的（to_wire 只读 payload），用占位即可。
+            if let Some(sink) = &self.derived_sink {
+                sink(protocol::Event::now(
+                    protocol::RunId::new(),
+                    0,
+                    protocol::EventPayload::MemoryRecalled {
+                        session_id: sid,
+                        items: refs,
+                    },
+                ));
+            }
+        }
+
         crate::system_prompt::prepend_memory_recall(text, &items)
     }
 }

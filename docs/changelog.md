@@ -11621,3 +11621,160 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
   - `cd apps/desktop && pnpm exec tsc --noEmit`
   - `cargo check --workspace`
 - **留尾巴**: `liveTimeline` / wakeup 排序仍是运行中渲染辅助层；这次先修真相源、notification 锚点和 Continue 误显示，未重写其完整展示语义。
+
+---
+
+## 2026-07-13：P2 落盘即事件 MessageAppended + run_id resume 连续性 + bg-watch 精确摘除
+
+- **Why**: 落地「前后端协同 v2」提案 P2。① 注入/wakeup 的 user 消息落盘后不产生任何事件，前端要等 run 结束 reload 才看到通知气泡——「后端在跑、通知不出现」的直接成因；② resume 每次 `RunId::new()` 造成 run 身份断裂（RunSuspended/RunResumed run_id 对不上）；③ cron/用户消息触发 resume 时 `discard_run` 把同一 run 里仍在跑的后台 bash 的完成 watch 一并删掉，那条 bash 完成后再也不 emit `BgTaskFinished`（定时炸弹）。
+- **改动列表**:
+  - [crates/protocol/src/event.rs](../crates/protocol/src/event.rs) / [wire.rs](../crates/protocol/src/wire.rs): 新增 `EventPayload::MessageAppended{message: Value}` + `WireEvent::MessageAppended` + to_wire 透传。message 与 session.jsonl 逐字段一致，前端投影用同一套解析。
+  - [crates/agent-core/src/run_persister.rs](../crates/agent-core/src/run_persister.rs): 新增 `MessageEmit` 回调 + `set_emit`；`append_user`（注入/wakeup）/ `flush_segment`（assistant 段）/ `finish`（末段定稿带耗时）落盘成功后 emit `MessageAppended`（序列化失败静默跳过——落盘是正确性关键、事件是 best-effort）。新增回归测试锁死三处 emit + id/耗时一致。
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs): `spawn_run` 装配 persister 时接入 emit 闭包（捕获 `run_tx`+`state`，与 core_sink 同通道、不经 core_sink 故无 Arc 环、不进 observe 累积）；`resume_from` 存在时**复用其 run_id** 而非 `RunId::new()`（run 身份连续）。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): `RunResumeState` 加 `run_id` 字段，`from_checkpoint` 从 `ckpt.run_id` 填。
+  - [crates/agent-core/src/wakeup.rs](../crates/agent-core/src/wakeup.rs): 新增 `discard_cron`（只摘 cron）/ `discard_bg_task`（只摘指定 task_id），`discard_run`（全清）保留给 cancel/Finished。新增两个回归测试锁死「discard_cron 保留同 run 兄弟 bg watch」。
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs) / [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): resume 路径按 `ckpt.phase` 调 `discard_cron` / `discard_bg_task`，不再 `discard_run` 全清。
+- **影响范围**: protocol / agent-core / surface-session / desktop chat.rs。**additive 透明**——老前端不识别 `message_appended` 忽略之；MessageAppended 走 run_tx→drive→observer→to_wire→broadcast 与其它事件同路。
+- **验证**:
+  - `cargo check --workspace` 通过。
+  - `cargo test -p protocol --lib`：11 项（含 MessageAppended 透传）。
+  - `cargo test -p agent-core --lib`：run_persister emit + wakeup discard 3 项新回归通过；harness/agent_loop/run_persister 子集 23 项通过（emit 接线 + run_id 连续不破坏 run 驱动）。
+- **留尾巴**:
+  - MessageAppended 的**现象级 A/B**（wakeup 气泡实时出现）要等 P3 前端投影消费它——当前前端忽略此事件（additive），P2 单独不改变用户可见行为（同 P1 的相位性质）。
+  - CLI daemon 仍丢弃 MessageAppended（catch-all → None），`Envelope` 透传留 P4。
+  - **未做（挪 P3/P4）**：`submit_message` 统一入口 + `inject_user_message` idle 静默丢消息修复 + `QueueChanged` 队列收归——这三者是前端命令面的语义，与 P3 前端重写强耦合，放 P3 一起做避免无谓 churn；`PendingMessageMeta` 全保真（当前只有 SystemNotification 变体，wakeup meta 不受影响，价值低）暂缓。
+
+---
+
+## 2026-07-12：P1 后端可靠事件流地基（信封 seq/epoch + 回放缓冲 + RunState 三态 + RunStarted）
+
+- **Why**: 落地「前后端协同 v2」提案 P1（[docs/设计提案-前后端协同v2.md](设计提案-前后端协同v2.md)）。旧事件流是 fire-and-forget 的 `broadcast::Sender<WireEvent>`，无 seq、无回放、Lagged 静默跳过；只要 run 能被后端自主发起（wakeup/cron/queue），前端就成了「可能中途加入、可能掉线」的订阅者，订阅建立前 / Lagged 时丢的事件永久丢失——这是「后端在跑、前端没接上」的根因之一。本相搭可靠性基座，additive、对现有前端完全透明。
+- **改动列表**:
+  - [crates/protocol/src/wire.rs](../crates/protocol/src/wire.rs): 新增 `SessionEnvelope{epoch, seq, run_id, ts_ms, #[flatten] event}`（meta 序列化为 `_epoch`/`_seq`/`_rid`/`_ts`，下划线前缀避免与 WireEvent 的 `run_id` 字段冲突）+ `RunTrigger` 枚举；WireEvent 新增 `RunStarted{run_id,trigger,mode}` / `ReasoningDuration` / `ReasoningSignature`，`RunFinished` 补 4 个 token 字段、`ToolDone` 补 `truncated`、`RunResumed` 补结构化 `{task_id, exit_code}`；to_wire 相应无损化，内部 RunStarted 仍丢弃（改由 surface-session 带 trigger emit）。新增 flatten 往返 + 字段不冲突两个测试。
+  - [crates/agent-core/src/session_hub.rs](../crates/agent-core/src/session_hub.rs): `event_tx: broadcast::Sender<WireEvent>` → `EventLog{epoch, tx: broadcast<SessionEnvelope>, 4096 容量回放缓冲}`；`emit` 在缓冲锁内分配 seq + 盖信封（run_id 从 RunState 读，所以所有 emit 调用点签名不变）+ push + broadcast；新增 `subscribe_after`/`events_after`/`epoch`；`active_run: AtomicBool` 旁加 `run_state: Mutex<RunState>`（`Idle`/`Running{run_id,trigger}`/`Suspended{run_id}` 三态），`set_active` 加 run_id+trigger 参数、新增 `suspend_active`（保留 run_id 置 Suspended）。新增 seq 单调 / 回放补齐 / epoch resync 三个回归测试。
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): run_turn 装配活 run 后按 meta/resume 状态算 trigger、`set_active(run_id, trigger, ...)`、emit `WireEvent::RunStarted`；drive 后按 outcome 走 `suspend_active`（Suspended）或 `clear_active`（其余）。SessionRuntime 委托方法同步。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `subscribe_session_events` 的 Channel 与 `handle_desktop_runtime_event` 改收 `SessionEnvelope`（native 出口检查 `.event`，整封转发前端带 `_seq`）；订阅循环记 `last_seq`，Lagged 时 `events_after` 从缓冲自愈补读，补不齐才 `emit("session-subscription-resynced")` 让前端重拉快照（此前该事件前端在听、后端从不发，是死代码——现接线）。
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs)（隐式）/ [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs) / [apps/native/src/main.rs](../apps/native/src/main.rs) / [crates/surface-session/src/transport.rs](../crates/surface-session/src/transport.rs): 订阅端适配收 `SessionEnvelope`（web 直接序列化整封天然透传 `_seq`；cli/native/transport 取内层 `.event`）。
+  - [docs/架构.md](../docs/架构.md): 新增 §3.1.2 事件信封；§13 追加决策行（推翻旧「事件流不承担 replay」）。
+- **影响范围**: protocol / agent-core / surface-session / 四个订阅 surface。**对现有前端 additive 透明**（信封 meta 拍平、老前端只读 `type`）；协议只增字段/variant，旧 jsonl 与旧客户端无感。run_id resume 连续性、`MessageAppended`（落盘即事件）留 P2。
+- **验证**:
+  - `cargo check --workspace` 通过；`cargo check -p hebbian`（desktop）通过。
+  - `cargo test -p protocol --lib`（10 项，含 flatten 往返 / `_rid` 不覆盖 WireEvent.run_id）通过。
+  - `cargo test -p agent-core --lib session_hub`（9 项，含 seq 单调 / 无订阅者回放补齐 / epoch resync）通过。
+- **留尾巴**:
+  - P1 是基座，**单独不产生用户可见行为变化**——「后端在跑前端接上并实时输出」要等 P3 前端投影消费 `_seq` + RunStarted 建 slot。P1 的 A/B 验证是单测 + 无回归，非现象级（这是相位性质，非省略）。
+  - CLI daemon 仍丢弃 RunStarted（catch-all → None）；`DaemonEvent::Envelope` 透传留 P4。
+  - RunState 的 Suspended 暂不带 reason/resumes_at（前端挂起态仍靠既有 `listBackgroundTasks` 推导）；run_id resume 连续性（harness `spawn_run` 接受 `Option<RunId>`）+ cron resume 按 task_id 精确摘除 bg watch 留 P2。
+
+---
+
+## 2026-07-12：全盘诊断前后端协同问题，新增设计提案文档（前后端协同 v2）
+
+- **Why**: 用户反馈四组长期体感问题——后端自发起的 run（wakeup/notification 续跑）前端不出流式、长对话卡顿、插队消息行为怪异、记忆系统"说不上的怪"。全盘审查确认为结构性设计缺陷而非零散 bug：① 事件流无 seq/回放，`wakeup-fired`/`pendingWakeups` 前端整套状态机是从未接线的死代码，流式渲染绑死在"本地发起"前提上（slot 只由 sendUserMessage 创建）；② 消息列表零虚拟化 + run 结束全量 reload 击穿全部气泡 memo；③ 流式与落盘是两套数据模型，靠 reload 硬切换；④ 记忆系统的漂移门控/衰减/强化/深睡分档为死代码或装饰性实现，注入语义与 base_system.md 静态指令矛盾。
+- **改动列表**: 新增 [docs/设计提案-前后端协同v2.md](设计提案-前后端协同v2.md)——可靠事件流（epoch/seq 信封 + ring buffer 回放 + resync 协议）、RunState 三态状态机、submit_message 统一提交入口、MessageAppended/RunStarted 事件补齐、前端统一 TimelineItem 投影架构、虚拟化 + markdown 内容寻址缓存、记忆双标签语义 + 强化/衰减闭环，以及 P1–P5 迁移路径与架构.md 合入清单。
+- **影响范围**: 仅新增文档，未动任何代码与协议。提案推翻架构.md §7.5"事件流不承担 replay"既定决策，**待用户评审通过后**再按提案 §11 合入架构.md 并实施。
+- **留尾巴**: 提案待评审；评审通过后按 P1（后端可靠事件流）→ P2（submit 统一）→ P3（前端投影重写 + 虚拟化）→ P4（codegen/CLI 对齐）→ P5（记忆闭环）推进，其中虚拟化可独立提前。
+
+---
+
+## 2026-07-13：P4 CLI 事件对齐 + 补齐 P2 闭环缺口（新 run 首条 user message 落盘即事件）
+
+- **Why**: 收尾 P2/P4。① P4：CLI daemon 的 `translate_wire_event` 对新增的 `RunStarted` / `MessageAppended` 走 catch-all→None，heb NDJSON 调试流看不到这两个事件，AI 脚本无法据 `trigger` 区分「自己 heb input 触发」还是「后端 wakeup/cron 自主起 run」，也看不到 user/wakeup 气泡实时落盘。② P2 闭环缺口（本次复现发现）：`MessageAppended` 只在 agent_loop drain（run 内插队消息）与 assistant 段落盘时 emit；而**新 run 的首条 user message 由 surface-session `run_turn` 直接 `append_message` 落盘，从不 emit**。这意味着 wakeup / cron 触发的新 run——其首条正是系统通知（`meta=SystemNotification`，前端无乐观占位）——落盘后不发事件，气泡要等 run 结束 reload 才出现，正是用户投诉「后端已经在跑、前端没及时接上并输出」的直接现象。前端 `message_appended` handler（P3 已做，注释明写「修 F2 wakeup 通知气泡要等 reload」）一直在等这条后端事件，闭环缺的就是这一环。
+- **改动列表**:
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): `run_turn` 新 run 首条 user message `append_message` 前，先 `serde_json::to_value` 再 `emit_engine_event(WireEvent::MessageAppended)`。两条 emit 路径互补覆盖所有 user 落盘点：surface 管「新 run 首条」，agent_loop drain→`persister.append_user` 管「run 内后续插队」。用户手输首条前端有 `pending-user-` 乐观占位、按内容去重跳过不双份；wakeup/cron 首条无占位 → 实时插气泡。
+  - [apps/cli/src/ipc.rs](../apps/cli/src/ipc.rs): `DaemonEvent::RunStarted` 从无字段变体补 `{run_id, trigger, mode}`（该变体此前从未被构造，纯死变体，加字段非破坏）；新增 `MessageAppended{message}` 变体。
+  - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): `translate_wire_event` 补 `WireEvent::RunStarted` / `WireEvent::MessageAppended` 两个 arm（此前落 catch-all→None）。
+  - [docs/heb-cli-debug.md](heb-cli-debug.md): §3 事件表补 `run_started`（`run_id/trigger/mode`，注明后端自发起 run 也 emit）与 `message_appended` 两行。
+- **影响范围**: surface-session / hebbian-cli / docs。**additive**——`DaemonEvent` 新增/补字段，旧脚本忽略未知事件与字段；surface emit 走既有 broadcast 与其它事件同路，desktop/hebweb 前端 handler 已就绪（P3）。无协议破坏、无 jsonl 格式变化。
+- **验证**:
+  - `cargo check --workspace` 通过；`cargo build -p hebbian-cli` 通过；`pnpm exec tsc --noEmit`（desktop）通过。
+  - `cargo test -p agent-core --lib run_persister`：4 项通过（含 `append_emits_message_appended_events`）。
+  - **现象级 A/B（heb CLI）**：`heb new` + `heb input "只回一个字：好"`。
+    - 修前：`message_appended` 只出 assistant 一条（`role=assistant`），user 首条缺失；`run_started` 无字段。
+    - 修后：`run_started` 带 `{run_id, trigger:"user", mode:"default"}`；`message_appended` 出两条——先 `role=user`（首条落盘即事件）后 `role=assistant`。对照基线在 `/tmp/heb-p4.log`（修前）与 `/tmp/heb-p4b.log`（修后）。
+- **留尾巴**:
+  - wakeup/cron 触发新 run 的**现象级 A/B**（`trigger=wakeup` + 首条 `message_appended` 带 `meta=SystemNotification` 实时出气泡）本次未单独脚本复现——需构造一个到期 cron / 后台任务完成触发点，留作 P3 前端投影落地后连同「后端自主 run 前端实时接上」一起做端到端验证。当前已证 user 路径同一 575 代码点 emit 正常，wakeup 仅 `meta` 不同，走同一分支。
+  - `DaemonEvent` 仍是手写而非 ts-rs codegen；P4 原计划的「协议 codegen」（消除 wire.rs / types.ts / ipc.rs 三处手工映射漂移）是独立大工程，暂缓。
+
+---
+
+## 2026-07-13：P5 记忆激活强化 / 遗忘衰减闭环（Hebbian 立身之本落地）
+
+- **Why**: 项目叫 Hebbian（fire together, wire together），但 `importance` / `last_active` 两个字段长期是**纯装饰状态**——落盘、upsert 保留，却从不被强化 / 衰减 / 排序读取。结果记忆权重不随使用变化：一条极少命中的旧 episode 和一条每次都用的核心事实在召回里同等对待。这是用户投诉「记忆整个说不上的怪」的根因之一（另一半是漂移门控缺失 + L2 内联，已在前一批 P5 修）。本条把强化-衰减环补成真的。
+- **改动列表**:
+  - [crates/agent-core/src/storage/memory.rs](../crates/agent-core/src/storage/memory.rs): 新增纯函数 `importance_from_age(kind, age_days)`（recency 指数衰减：Stable floor 0.4 / 半衰期 180d，Episode floor 0.1 / 半衰期 30d）；`bump_last_active`（召回命中即把 last_active 打到 now → age 归零 → 强化到顶）；`consolidate_importance`（深睡按 last_active 时效重算全量 + 回收遗忘候选，返回 `ConsolidateReport`）；`load_importance`（id→importance 供召回排序读取）。新增两个单测：`importance_curve_reinforces_and_decays_by_kind`（曲线钉死：age0→1.0 / 半衰期→中点 / episode 比 stable 掉得快 / 久远逼近地板不穿透）、`bump_last_active_reinforces_then_sleep_decays`（强化↑→深睡衰减↓→episode 进遗忘候选→再强化脱离候选的完整 A/B）。
+  - [crates/agent-core/src/memory_consolidate.rs](../crates/agent-core/src/memory_consolidate.rs): 深睡尾部对 global + project 两作用域各调一次 `consolidate_importance`（纯本地、无模型调用，与建边分开——即便某作用域不足两条无从建边也照常衰减）。
+  - [crates/agent-core/src/session.rs](../crates/agent-core/src/session.rs): `inject_memory_recall` 漂移门控放行后、命中记忆真正注入时，**异步 spawn** 对每条 activated id `bump_last_active`（off 热路径，不阻塞对话；只强化真注入的，被门控挡掉的轮次不算激活）。
+  - [crates/agent-core/src/memory_recall.rs](../crates/agent-core/src/memory_recall.rs): `activate` 加载 id→importance，种子打分加 `IMPORTANCE_WEIGHT(0.2)*(importance-0.5)` 微调；**保留 `has_strong_signal` 硬门槛**——importance 再高也不能把无 token/tag 命中的记忆凭空拽成种子。新增单测 `importance_biases_seed_strength`（reinforced 记忆激活强度 > decayed，不依赖种子阈值边界，稳健）。
+  - [docs/架构.md](../docs/架构.md): 新增 §4.14.8「激活强化 / 遗忘衰减（Hebbian 闭环）」；§13 追加决策行（软遗忘不硬删 + 强化即时/衰减批量的取舍）。
+- **影响范围**: 仅 agent-core（storage/memory、memory_recall、memory_consolidate、session）。落盘格式无变化（importance/last_active 字段本就存在，老记忆缺字段走默认 0.5 / 退回 updated_at，向后兼容）。无协议改动、无 surface 改动、对前端透明。
+- **验证**:
+  - `cargo check --workspace` 通过。
+  - `cargo test -p agent-core --lib memory`：39 项通过（含 4 条新增：曲线 / 强化-衰减 A/B / 排序偏置 + 既有 upsert 保留 importance 回归）。
+  - `cargo test -p agent-core --lib memory_recall::`：10 项通过（含之前 P5 误改破坏、现已修复的跨 token 强边扩散 `activate_seeds_then_spreads_along_links`）。
+  - `cargo test -p agent-core --lib session::` / `memory_consolidate::`：全绿。
+- **取舍**:
+  - **遗忘只软不硬**：`forget_candidates` 只标记 + 审计**不删记忆文件**——删用户记忆是破坏性操作，且低 importance 已让它们在召回排序里自然沉底（软遗忘足够）。硬删留人工 / 后续显式开关。
+  - **强化即时、衰减批量**：强化是 fire-together 语义上必须命中当下发生（否则 last_active 不再是「上次激活时刻」）；衰减是缓慢时间过程，放深睡用户不等待的空闲时段批量重算最省。两端共用同一条 recency 曲线，无双重实现。
+- **留尾巴**:
+  - **现象级 A/B 用单测而非 surface 复现**：强化-衰减是可单元化的纯属性（曲线 + 时间戳），单测 A/B（强化前后 importance / 遗忘候选翻转）比跑真实深睡（要等 idle 阈值 + 模型链）更稳、更快钉死，符合「能固化成回归就固化」。真实深睡的端到端触发（idle 到期 → 建边 + 衰减一起跑）未单独脚本复现，属既有深睡链路，未改其触发条件。
+  - episode 硬删遗忘、importance 直接进 `<memory-index>` 排序展示（当前只影响激活扩散种子，不改注入清单排序）、jieba/IDF 分词（当前 CJK bigram）均留后续。
+
+---
+
+## 2026-07-13：P3 收尾——确认卡顿根因已由内容寻址 memo 消除，否决 DOM 窗口化
+
+- **Why**: 收尾 P3「长会话卡顿」。用户投诉「对话多时前端很卡」。P3 诊断定位根因：run 结束 `getSession` 全量 reload → 所有 message 对象引用失效 → 每个 `memo(MessageBubble)` 击穿 → 一次同步 commit 把全部 N 条正文重新解析成 mdast（ReactMarkdown 无缓存），成 O(N) 卡顿尖峰，会话越长越明显。
+- **结论（已实施 + 设计决策）**:
+  - **根因修复（已实施）**：`MemoizedMarkdown`（`MarkdownRenderer.tsx`）按 markdown 字符串值 `React.memo` bail-out——父级 MessageBubble 因新对象引用重渲时，只要正文字符串没变就跳过、不重解析 mdast。final 消息正文永不变 → 历史气泡永不重解析，O(N) 尖峰被打掉。已进 hebweb 构建产物。
+  - **否决 DOM 窗口化（真·虚拟化）**：读通 `ChatView.tsx` 后确认整套滚动系统深度依赖「所有消息都在 DOM 里」——`querySelectorAll("[data-message-id]")`（锚点采样 / 浮动 user 检测 / prev-user 导航 / find 定位）、`target.offsetTop`（scroll-to-message）、`el.scrollHeight`（sticky-bottom）、find 的 `scrollIntoView`。卸载屏外节点会同时打断每一条：锚点找不到节点→滚动跳飞、offsetTop 失真、sticky-bottom 需精确总高 spacer 但各卡片高度千差万别。窗口化要把这套最脆弱的滚动逻辑全重写，风险与用户投诉的「卡」正相关（引入滚动 bug 更糟），收益（稳态 DOM 节点开销，数百条量级温和）不抵风险。**根因是 O(N) 重解析尖峰而非 DOM 节点数**，已由 memo 精准解决，窗口化是打错靶的过度手术，否决。
+  - **`content-visibility: auto` 候选（暂缓）**：架构兼容的稳态优化（保留 DOM 节点、只跳过屏外渲染），但与项目已禁用原生 scroll anchoring + 自研 offsetTop 锚定循环有交互——屏外元素用 `contain-intrinsic-size` 估算高度会污染锚点 offsetTop，滚过未渲染区可能跳动。属于「必须在真实滚动流里逐一验证」的改动，不宜盲上；本轮浏览器扩展未连、无法现场验证，暂缓待 app 实测确认无副作用再定。
+- **影响范围**: 无新代码改动（memo 修复已在前批 P3 落地）。本条为设计决策记录 + 收尾判断。
+- **验证**:
+  - memo 修复：`pnpm build`（apps/desktop）通过、进 dist bundle；`pnpm exec tsc --noEmit` 通过。
+  - **现象级实测未做**：本轮 Claude 浏览器扩展未连接，无法用 hebweb + Playwright 驱动大会话（`~/.hebbian/sessions/202606071335-5afbf6f9`，747 条）实测滚动流畅度 / 重渲耗时。hebweb 已起在 `http://127.0.0.1:38080` 供人工验证。
+- **留尾巴**:
+  - **大会话滚动流畅度的端到端实测**：需连浏览器扩展（Playwright）或人工打开 hebweb 加载 747 条会话感受。memo 的 O(N)→O(变化条数) 是 React.memo on pure string prop 的机械正确性，但「稳态是否还需要 content-visibility」要真机滚动才能定。
+  - **`liveTimeline` 双数据源投影重写**（流式与落盘两套模型靠 reload 硬切）留作独立重构——当前工作正常，重写风险高、无 app 无法验证，不在本轮盲改。
+
+---
+
+## 2026-07-13：记忆备份 + 全量重抽（gpt-5.6-luna）+ 召回引用图标（三件套）
+
+- **Why**: 用户要求：① 备份现有记忆；② 用新的强化-衰减系统从所有已有对话重新抽取一次；③ 前端加一个引用图标、hover 看本轮引用了哪些记忆。
+- **① 备份**: 打包 global + 所有 project 记忆（含 links / .md 全量）到 `~/.hebbian/backups/memory-<ts>.tar.gz`（2164 条，tar 校验可完整恢复）。运维操作，无代码。
+- **② 全量重抽（策略 B：清空重来，用户拍板）**:
+  - [crates/agent-core/src/memory_extract.rs](../crates/agent-core/src/memory_extract.rs): 抽出 `extract_with_models(data_dir, session_id, models)` 核心入口——不读 `settings.memory.models`、绕过 `active()` 门控，供批量重抽注入临时模型链。`extract_for_session` 变成读 settings 后调它的 wrapper（语义逐字节不变）。
+  - [apps/cli/src/bin/reextract_memory.rs](../apps/cli/src/bin/reextract_memory.rs): 一次性运维 driver（cargo auto-discover bin）。清空 global+project 全部 .md/links → 归零所有 session 游标 → 按 session id 升序（≈时间）**顺序**逐个用 `gpt-5.6-luna @ Sub2api` 重抽。顺序跑是刻意的：extract 内置去重靠"现有 L0 清单"作上下文、边抽边建，并发会让两个 session 互相看不到对方刚写的记忆产生近似重复。带单会话测试模式（第三参数=session_id → 不清空只抽一个，供全量前验证模型链）。
+  - **模型链不动用户 settings**：命令行指定 provider+model，重抽用 luna 不改用户配置的 memory.models。
+- **③ 召回引用图标（架构 §4.14.5，新设计）**:
+  - 协议：新增 `EventPayload::MemoryRecalled` + `WireEvent::MemoryRecalled` + to_wire arm（复用 `MemoryWriteItem{id,summary,scope}`）；[crates/protocol](../crates/protocol)。
+  - agent-core：新增 `MessageMeta::MemoryRecall { items }`；`Session::inject_memory_recall` 在漂移门控放行、真正注入时落一条 `Role::Marker`（物理上落在已持久化的 user 消息之后、assistant 之前）+ 经 `derived_sink` emit `MemoryRecalled`。scope 由 id 前缀（`proj/`→project）推。
+  - 前端：`types.ts` 加 `memory_recall` marker + `memory_recalled` 事件；`useStore` 加 `memory_recalled` handler（复用 memory_extracted 的 getSession reload，流式内容走独立 slot 不受影响）；新增 `MemoryRecallSummary.tsx`（Quote 图标 + "引用了 N 条记忆" + **hover** 弹层列引用详情，项目/全局徽章）；`MessageBubble` 加 memory_recall marker 独立渲染分支（不进 MessageList 的 hoist，独立成行落在 user 之后）。
+- **影响范围**: agent-core / protocol / hebbian-cli（新 bin）/ desktop 前端 / docs。协议 **additive**（新 variant，老前端/CLI 忽略未知）；memory 落盘格式无变化；召回 marker 走既有 Role::Marker 链（transcript rebuild 天然跳过，模型看不到）。derived_sink：desktop 已接（实时），heb/hebweb 传 None（靠 reload，marker 已落盘不丢）。
+- **验证**:
+  - `cargo check --workspace` 通过；`cargo test -p protocol --lib` 11 项；`cargo test -p agent-core --lib session::` 3 项；`pnpm exec tsc --noEmit` + `pnpm build` 通过。
+  - **② 现象级**：单会话测试 `reextract_memory ... <sid>` → luna 抽出 3 条，全链路通；全量后台跑中（清空 2176 文件、归零 743 游标、逐个重抽，累计写入随进度增长）。
+  - **③ 现象级（heb CLI）**：hebbian workdir 新会话问「model-gateway 失败重试 + common 包名」→ session.jsonl 出现 `memory_recall` marker，引用 4 条相关记忆（且是刚重抽出的新 id），顺序确认 **user → memory_recall marker → assistant**。
+- **留尾巴**:
+  - **③ 前端 hover 图标的现象级实测未做**：浏览器扩展未连，无法 Playwright 驱动看 hover 弹层；tsc + build 通过、marker 走与 memory_writes 同链（已知可渲染）、后端 marker 已验证落盘。hebweb 已重建带新 UI，可人工打开会话 `202607130531-ad347762` 看引用图标。
+  - **② 全量重抽仍在后台跑**（743 个 session，luna，预计 2-3h）。完成后 global+project 记忆库即全部由 luna 重抽生成，带初始 importance=0.5 / last_active=now，纳入 §4.14.8 强化-衰减演化。
+  - reextract driver 是一次性运维 bin，非常驻 heb 子命令；若日后要做常规「重抽某会话」能力再 surface 化。
+
+---
+
+## 2026-07-28 — 前后端事件类型对齐 + agent loop pi 风格命名
+
+- **Why**: 用户报前后端事件/流同步有问题；同时要求把 agent-core 的 loop 按 pi 的风格改。调查发现前端 `EngineEvent` 类型是后端 `WireEvent` 的手写副本，已漂移 5 处（缺 `reasoning_duration` / `reasoning_signature` 事件、`tool_done.truncated` / `run_resumed.task_id` / `run_resumed.exit_code` 字段），`run_edits_revert_failed` 事件完全没处理。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/types.ts`: `EngineEvent` 补齐 `reasoning_duration` / `reasoning_signature` variant；`tool_done` 加 `truncated` 字段；`run_resumed` 加 `task_id` / `exit_code` 字段；`StreamingAssistantPart.tool_call` 加 `truncated`；`MessagePart.tool_call` 加 `truncated`；`StreamingAssistantPart.reasoning` 加 `signature`；`MessagePart.reasoning` 加 `signature`。注释从引用已不存在的 `engine/mod.rs` 改为引用 `crates/protocol/src/wire.rs` 的 `WireEvent`（唯一真相源）。
+  - `apps/desktop/frontend/src/desktop/ui/store/slotReducer.ts`: 从 `if (e.type === "xxx")` 链式判断改为 `switch(e.type)` 结构 + `default` case；新增 `reasoning_duration` / `reasoning_signature` 处理（回填最后一个 reasoning 段的 `duration_ms` / `signature`）；`applyNestedEvent` 也加这两个事件的处理（子 agent 推理事件也能正确落盘）。
+  - `apps/desktop/frontend/src/desktop/ui/store/streamingParts.ts`: `applyToolDone` 加 `truncated` 字段写入。
+  - `apps/desktop/frontend/src/desktop/ui/store/useStore.ts`: `run_edits_revert_failed` 事件接入 `applyEditEvent` + toast 提示。
+  - `crates/agent-core/src/agent_loop.rs`: `run_loop` → `run_agent`，`LoopParams` → `AgentRunConfig`（pi 风格命名，对齐 `../pi/crates/pi-agent/src/agent_loop.rs` 的 `run_agent` / `AgentConfig`）。加 pi 风格文档注释。
+  - `crates/agent-core/src/harness.rs` / `subagent/runner.rs` / `run_mode.rs`: 跟随重命名。
+- **影响范围**: agent-core（命名变更，不改逻辑） / desktop 前端（事件类型补齐，additive 不破坏老前端） / protocol（无变化，只是前端镜像修复）。`cargo check --workspace` 通过；`tsc --noEmit` 通过；agent-core 64 个纯函数测试通过。
+- **留尾巴**:
+  - **agent_loop 测试需 mock model server**：`agent_loop::tests::` 下的集成测试跑完整 `run_agent` 循环，需要 mock model API，在本机环境会卡住。编译通过 + 纯函数测试通过 = 逻辑没回归，但完整集成测试未在本轮验证。
+  - **Loop 内部结构重构未做**：计划中提到把 `dispatch.rs` (4,547行) 逻辑内联进 `run_agent`、精简 `harness.rs` 的 observer 层，本轮只做了命名对齐。内部结构重构风险高、需要逐步搬入 + 每步验证，留作后续独立 PR。
+  - **WireEvent → TS 类型自动生成未做**：当前仍是手写镜像，靠注释提醒同步。后续可从 `WireEvent` serde schema 自动生成 TS 类型，彻底消除手写漂移。

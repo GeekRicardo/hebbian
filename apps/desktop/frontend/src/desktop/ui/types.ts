@@ -187,6 +187,13 @@ export type MessageMeta =
       type: "memory_writes";
       items: MemoryWriteItem[];
     }
+  // 架构 §4.14.5：本轮 Run 起步时激活扩散引用的已有记忆。与 memory_writes 对称——
+  // 后者「写了什么」、前者「引用了什么」。落在触发它的 user 消息之后、assistant 之前，
+  // 渲染成一个引用图标，hover 看引用了哪几条记忆。
+  | {
+      type: "memory_recall";
+      items: MemoryWriteItem[];
+    }
   // 架构 §4.8.3：一次 //goal 裁决结果。goal judge 在 turn 收尾判 transcript 是否达成后
   // 落一条 marker，渲染成带彩色竖线的结果块。渲染时"提"进相邻消息气泡：set 进触发它的
   // user 气泡，progress/achieved/impossible 进所属 assistant 气泡（Stop hook 之后、操作行上方）。
@@ -285,6 +292,8 @@ export type MessagePart =
       is_error?: boolean;
       /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2） */
       artifact_path?: string | null;
+      /** 结果因超阈值被截断（模型看到的 `result` 是截断版，完整版在 `artifact_path`）。 */
+      truncated?: boolean;
     };
 
 export type StreamingAssistantPart =
@@ -297,6 +306,8 @@ export type StreamingAssistantPart =
       text: string;
       started_at_ms?: number | null;
       duration_ms?: number | null;
+      /** Anthropic thinking block 签名（流式 signature_delta 一次性整体到达）。 */
+      signature?: string | null;
     }
   | {
       type: "tool_call";
@@ -312,6 +323,8 @@ export type StreamingAssistantPart =
       is_error?: boolean;
       /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2） */
       artifact_path?: string | null;
+      /** 结果因超阈值被截断（模型看到的 `result` 是截断版，完整版在 `artifact_path`）。 */
+      truncated?: boolean;
       /**
        * AutoMode judge 正在评估这次工具调用（架构 §4.4.4）：渲染层据此给卡片加
        * 「黄色呼吸」效果。judge 出结果（放行执行 / 拒绝 / 转人工）后清除。
@@ -624,17 +637,29 @@ export interface BranchInfo {
 /**
  * 引擎事件——后端通过 Tauri Channel 流式推送给前端。
  *
- * 维护注意：此类型必须与 `apps/desktop/src/engine/mod.rs` 的 `EngineEvent` 枚举
- * 保持字段级同步。新增/修改 EventPayload variant 时需同时更新：
- * 1. protocol::event::EventPayload（crates/protocol/src/event.rs）
- * 2. engine/mod.rs EngineEvent
- * 3. chat.rs agent_event_to_engine_event 翻译函数
- * 4. 本文件 EngineEvent 类型 + store/slotReducer.ts applyEventToSlot 处理函数
+ * 维护注意：此类型必须与 `crates/protocol/src/wire.rs` 的 `WireEvent` 枚举
+ * 保持字段级同步。新增/修改 WireEvent variant 时需同时更新：
+ * 1. protocol::wire::WireEvent（crates/protocol/src/wire.rs）— 唯一真相源
+ * 2. protocol::wire::to_wire（crates/protocol/src/wire.rs）— EventPayload → WireEvent 转换
+ * 3. 本文件 EngineEvent 类型 — WireEvent 的 TS 镜像
+ * 4. store/slotReducer.ts + store/useStore.ts — 事件处理
  */
 export type EngineEvent =
   | { type: "text_delta"; text: string; subagent_call_id?: string | null }
   | { type: "text_done"; full_text: string; subagent_call_id?: string | null }
   | { type: "reasoning"; text: string; subagent_call_id?: string | null }
+  | {
+      /** 思考块的墙钟时长，块结束时到达一次。前端用落盘值定格「思考用时 N 秒」。 */
+      type: "reasoning_duration";
+      ms: number;
+      subagent_call_id?: string | null;
+    }
+  | {
+      /** Anthropic thinking block 的签名（流式一次性整体到达）。 */
+      type: "reasoning_signature";
+      signature: string;
+      subagent_call_id?: string | null;
+    }
   | {
       type: "tool_call_delta";
       index: number;
@@ -654,6 +679,8 @@ export type EngineEvent =
       is_error?: boolean;
       /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2） */
       artifact_path?: string | null;
+      /** 结果因超阈值被截断（模型看到的 `result` 是截断版，完整版在 `artifact_path`）。 */
+      truncated?: boolean;
       subagent_call_id?: string | null;
     }
   | {
@@ -669,8 +696,32 @@ export type EngineEvent =
       subagent_call_id?: string | null;
     }
   | {
+      /**
+       * 架构 §3.1 / 提案 P1：一个 run 开始（含后端自发起的 wakeup/cron/queue/resume）。
+       * 前端据此建 slot、亮运行态——后端自主发起的 run 也能第一时间接上流式，而不是等
+       * run 结束 reload 才"啪"地出结果。`trigger` = user|wakeup|cron|queue|resume。
+       */
+      type: "run_started";
+      run_id: string;
+      trigger: string;
+      mode: string;
+    }
+  | {
+      /**
+       * 架构 §3.1 / 提案 P2：一条消息刚落盘（注入 user / wakeup 通知 / assistant 段定稿）。
+       * `message` 与 session.jsonl / getSession 的 Message 形态一致。前端据此实时渲染
+       * user/wakeup 气泡、按 id 把流式 assistant 原地定稿，不再乐观造消息、不再等 reload。
+       */
+      type: "message_appended";
+      message: Message;
+    }
+  | {
       type: "run_finished";
       duration_ms: number;
+      total_input_tokens?: number;
+      total_output_tokens?: number;
+      total_cache_read_tokens?: number;
+      total_cache_creation_tokens?: number;
     }
   | {
       /** turn 级 token 用量增量（run 进行中就来）：前端实时累加 token_stats、刷新 cache 指示器。 */
@@ -691,6 +742,10 @@ export type EngineEvent =
       /** 架构 §4.12：Run 从挂起态恢复。 */
       type: "run_resumed";
       cause: string;
+      /** bg-task 唤醒时关联的后台 task_id。 */
+      task_id?: string | null;
+      /** bg-task 退出码。 */
+      exit_code?: number | null;
     }
   | {
       type: "permission_requested";
@@ -892,6 +947,13 @@ export type EngineEvent =
       type: "memory_extraction_failed";
       session_id: string;
       reason: string;
+    }
+  | {
+      /** 一个 Run 起步时激活扩散引用了若干条已有记忆（架构 §4.14.5）。已落一条 memory_recall
+       *  marker；前端正看着这个会话就 reload，从落盘 marker 渲染引用图标。 */
+      type: "memory_recalled";
+      session_id: string;
+      items: MemoryWriteItem[];
     }
   | {
       /** //goal 目标判定：本轮未达成，自动续跑。前端弹 toast 提示进度。 */

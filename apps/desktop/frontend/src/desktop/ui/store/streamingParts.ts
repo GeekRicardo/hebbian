@@ -188,6 +188,7 @@ export function applyToolDone(
     status: "done",
     is_error: event.is_error ?? false,
     artifact_path: event.artifact_path ?? null,
+    truncated: event.truncated ?? false,
   };
   return next;
 }

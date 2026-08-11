@@ -49,6 +49,14 @@ pub enum EventPayload {
     },
     RunCancelled,
 
+    /// 一条消息刚落盘到 session.jsonl（架构 §3.1 / 提案 P2）。任何进入 transcript 的消息
+    /// ——注入的 user / wakeup 通知 / assistant 段定稿——落盘后 emit 此事件，`message` 是
+    /// 与 session.jsonl 逐字段一致的序列化 `Message`。前端据此实时渲染气泡（wakeup 通知不再
+    /// 等 run 结束 reload 才出现）、并把流式 assistant 原地定稿（id = 落盘 id），不再乐观造消息。
+    MessageAppended {
+        message: Value,
+    },
+
     /// Run 进入挂起态（架构 §4.12）。模型调挂起工具后
     /// 当前 ToolStep 完成、agent_loop 落 RunCheckpoint 并退出 task 时 emit。
     /// surface 看到这条不要清 slot——稍后会有 `RunResumed`。
@@ -300,6 +308,13 @@ pub enum EventPayload {
     MemoryExtractionFailed {
         session_id: String,
         reason: String,
+    },
+    /// 一个 Run 起步时激活扩散引用了若干条已有记忆（架构 §4.14.5）。surface 在该轮
+    /// user 消息之后渲染一个引用图标，hover 看引用了哪几条记忆。与 MemoryExtracted 对称：
+    /// 后者是「本轮写入了什么」，前者是「本轮引用了什么」，复用同一条 `Role::Marker` 落盘链。
+    MemoryRecalled {
+        session_id: String,
+        items: Vec<MemoryWriteItem>,
     },
 
     // —— Todo / Plan（架构 §4.4.5 / §4.4.6） ——

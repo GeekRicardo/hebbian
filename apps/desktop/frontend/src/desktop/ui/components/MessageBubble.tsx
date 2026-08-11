@@ -66,10 +66,11 @@ import { FOCUS_TOOL_CALL_EVENT } from "@/desktop/ui/lib/focusToolCall";
 import { toast } from "sonner";
 import { animations } from "@/assets/animations";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
-import { markdownComponents } from "@/desktop/ui/components/MarkdownRenderer";
+import { markdownComponents, MemoizedMarkdown } from "@/desktop/ui/components/MarkdownRenderer";
 import { openLink } from "@/desktop/ui/lib/openLink";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
 import { MemoryWriteSummary } from "@/desktop/ui/components/MemoryWriteSummary";
+import { MemoryRecallSummary } from "@/desktop/ui/components/MemoryRecallSummary";
 import { GoalResultSummary } from "@/desktop/ui/components/GoalResultSummary";
 import { HookOutcomeSummary } from "@/desktop/ui/components/HookOutcomeSummary";
 import { AvatarPreview } from "@/desktop/ui/components/AvatarField";
@@ -1118,9 +1119,7 @@ function RenderedMarkdown({ text }: { text: string }) {
         !expanded && "max-h-48"
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-        {text}
-      </ReactMarkdown>
+      <MemoizedMarkdown markdown={text} />
     </div>
   );
 }
@@ -1808,9 +1807,7 @@ function NestedTaskContent({
               key={part.key}
               className="markdown-segment text-[13px] leading-relaxed text-muted-foreground"
             >
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                {part.text}
-              </ReactMarkdown>
+              <MemoizedMarkdown markdown={part.text} />
             </div>
           );
         }
@@ -2951,6 +2948,15 @@ export const MessageBubble = memo(function MessageBubble({
     );
   }
 
+  if (message.role === "marker" && message.meta?.type === "memory_recall") {
+    // 引用图标缩进对齐消息正文（px-6 + 头像 w-8 + gap-3 = 68px），不贴头像左缘。
+    return (
+      <div className="pl-[68px] pr-6 select-none">
+        <MemoryRecallSummary items={message.meta.items} />
+      </div>
+    );
+  }
+
   if (message.role === "marker" && message.meta?.type === "goal_outcome") {
     const { kind, condition, reason, iteration } = message.meta;
     // 左 padding 68px = px-6(24) + 头像 w-8(32) + gap-3(12)，让 goal 块左缘
@@ -3171,12 +3177,7 @@ export const MessageBubble = memo(function MessageBubble({
     body = message.content ? (
       message.content.includes("```") ? (
         <div className="markdown-segment">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={markdownComponents}
-          >
-            {message.content}
-          </ReactMarkdown>
+          <MemoizedMarkdown markdown={message.content} />
         </div>
       ) : (
         <div className="whitespace-pre-wrap">{message.content}</div>

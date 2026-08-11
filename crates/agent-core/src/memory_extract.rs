@@ -78,7 +78,17 @@ pub async fn extract_for_session(
     if !app_settings.memory.active() {
         return Ok(None);
     }
+    extract_with_models(data_dir, session_id, &app_settings.memory.models).await
+}
 
+/// 用**指定模型链**抽取（不读 `settings.memory.models`）。批量重抽运维入口用它注入临时
+/// 模型（如某次 gpt-5.6-luna 全量重抽），既不改用户配置、也绕过 `active()` 门控——调用方
+/// 已经决定要抽。语义与 [`extract_for_session`] 完全一致，只是模型链来源不同。
+pub async fn extract_with_models(
+    data_dir: &Path,
+    session_id: &str,
+    models: &[settings::MemoryModelRef],
+) -> Result<Option<ExtractionResult>, ExtractError> {
     // 抽取由 `RunFinished` 触发，但本轮 assistant 是 surface 在 drive() 返回**之后**才
     // append 到 jsonl 的——两条路径并发。若不等待就读 session，会出现：①抽取漏看本轮
     // 回复（cursor 只推进到 user）；②抽取产出的 marker 物理上落在 assistant 之前，
@@ -111,7 +121,7 @@ pub async fn extract_for_session(
     // fallback 链：逐个模型尝试，每个最多重试 MAX_RETRIES_PER_MODEL 次。
     // 全链耗尽时也写一条 "failed" 审计——成功 / 失败都在 .memory_log.jsonl 留痕，
     // 便于事后排查「这段为什么没抽出来」（游标已保留，下个 Run 会补抽）。
-    let raw = match run_fallback_chain(data_dir, &app_settings.memory.models, &prompt).await {
+    let raw = match run_fallback_chain(data_dir, models, &prompt).await {
         Ok(raw) => raw,
         Err(e) => {
             mem_warn!("Extract", "失败 session={session_id}：{e}");

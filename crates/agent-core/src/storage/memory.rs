@@ -310,6 +310,144 @@ pub fn read(
     }
 }
 
+// ── 激活强化 / 遗忘衰减（Hebbian 闭环，架构 §4.14.8）──────────────────────────
+//
+// importance ∈ [0,1] 是每条记忆的当前重要度，喂给激活扩散的种子打分（越高越易浮现）。
+// 它由一条纯函数从「距上次激活的时长」+ kind 单向导出（[`importance_from_age`]）：
+//   - **强化（fire）**：召回命中一条记忆即 `bump_last_active` 把 last_active 打到 now →
+//     age=0 → importance 重回上限。频繁用到的记忆自然保持高位。
+//   - **衰减（forget）**：深睡 `consolidate_importance` 按 last_active 时效重算全量 →
+//     久不激活的记忆按 kind 半衰期滑向地板；episode 半衰期短、地板低，最终成遗忘候选。
+// 两端共用同一条 recency 曲线，无需额外记「激活计数」——last_active 一个时间戳承载全部状态。
+
+/// stable 记忆地板（跨会话稳定事实，衰减慢、留得住）。
+const STABLE_FLOOR: f32 = 0.4;
+/// episode 记忆地板（具体事件，衰减快、可遗忘）。
+const EPISODE_FLOOR: f32 = 0.1;
+/// stable 半衰期（天）：约半年不激活才掉到地板中点。
+const STABLE_HALF_LIFE_DAYS: f32 = 180.0;
+/// episode 半衰期（天）：约一个月不激活即明显褪色。
+const EPISODE_HALF_LIFE_DAYS: f32 = 30.0;
+/// episode importance 跌破此值 → 遗忘候选（约 5.5 个月未激活）。
+const FORGET_IMPORTANCE: f32 = 0.12;
+
+/// 纯函数：由「距上次激活的天数」+ kind 导出当前 importance。
+/// `age_days=0`（刚被激活）→ 上限 1.0；随时长按 kind 半衰期指数滑向地板。
+/// 单调、无副作用——强化与衰减都落在这一条曲线上，便于单测钉死。
+fn importance_from_age(kind: MemoryKind, age_days: f32) -> f32 {
+    let (floor, half_life) = match kind {
+        MemoryKind::Stable => (STABLE_FLOOR, STABLE_HALF_LIFE_DAYS),
+        MemoryKind::Episode => (EPISODE_FLOOR, EPISODE_HALF_LIFE_DAYS),
+    };
+    let age = age_days.max(0.0);
+    let recency = 0.5_f32.powf(age / half_life); // 1.0 刚激活 → 0 久远
+    (floor + (1.0 - floor) * recency).clamp(floor, 1.0)
+}
+
+/// 距 RFC3339 时刻的天数（解析失败 → 0，按「刚激活」保守处理，不误伤）。
+fn age_days_since(rfc3339: &str, now: chrono::DateTime<chrono::Utc>) -> f32 {
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .map(|t| (now - t.with_timezone(&chrono::Utc)).num_seconds() as f32 / 86_400.0)
+        .unwrap_or(0.0)
+        .max(0.0)
+}
+
+/// 召回命中即强化：把一条记忆的 last_active 打到 now（age 归零 → importance 回上限）。
+/// 只改 last_active + updated_at 不动正文，走 upsert 同款原子写。off 热路径调用（见 session.rs）。
+pub fn bump_last_active(data_dir: &Path, workdir: Option<&Path>, id: &str) -> AppResult<()> {
+    let (scope, slug) = parse_id(id).ok_or_else(|| AppError::msg(format!("非法记忆 id：{id}")))?;
+    let root = memory_root(data_dir, workdir, scope)?;
+    let path = record_path(&root, &slug);
+    let Some(mut rec) = read_existing(&path) else {
+        return Ok(()); // 记忆已被删/不存在：强化无对象，静默跳过
+    };
+    rec.last_active = chrono::Utc::now().to_rfc3339();
+    lock::write_atomic(&path, render_md(&rec).as_bytes())?;
+    Ok(())
+}
+
+/// 深睡衰减一轮的结果。
+#[derive(Debug, Default, Clone)]
+pub struct ConsolidateReport {
+    /// 本轮 importance 被重算写回的条数。
+    pub recomputed: usize,
+    /// 跌破遗忘阈值的 episode id（**不自动删**——删用户记忆是破坏性操作，只标记 + 审计，
+    /// 低 importance 已让它们在召回排序里自然沉底，软遗忘足够；硬删留人工/后续显式开关）。
+    pub forget_candidates: Vec<String>,
+}
+
+/// 深睡尾部调用：按 last_active 时效重算某作用域全量 importance 并写回。
+/// 目录不存在 → 空报告（新项目无记忆，非错误）。
+pub fn consolidate_importance(
+    data_dir: &Path,
+    workdir: Option<&Path>,
+    scope: MemoryScope,
+) -> AppResult<ConsolidateReport> {
+    let root = memory_root(data_dir, workdir, scope)?;
+    let entries = match std::fs::read_dir(&root) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ConsolidateReport::default()),
+        Err(e) => return Err(e.into()),
+    };
+    let now = chrono::Utc::now();
+    let mut report = ConsolidateReport::default();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let Some(mut rec) = read_existing(&path) else {
+            continue;
+        };
+        let next = importance_from_age(rec.kind, age_days_since(&rec.last_active, now));
+        // 只在有实际变化时写回，避免深睡把全量记忆无谓 rewrite。
+        if (next - rec.importance).abs() > f32::EPSILON {
+            rec.importance = next;
+            lock::write_atomic(&path, render_md(&rec).as_bytes())?;
+            report.recomputed += 1;
+        }
+        if matches!(rec.kind, MemoryKind::Episode) && rec.importance <= FORGET_IMPORTANCE {
+            report.forget_candidates.push(rec.id.clone());
+        }
+    }
+    mem_log!(
+        "Sleep",
+        "{} 作用域 importance 重算 {} 条，遗忘候选 {} 条",
+        scope.prefix(),
+        report.recomputed,
+        report.forget_candidates.len()
+    );
+    Ok(report)
+}
+
+/// 某作用域 id → importance 映射，供召回种子打分读取（reinforced 记忆更易浮现）。
+/// 目录不存在 → 空表。
+pub fn load_importance(
+    data_dir: &Path,
+    workdir: Option<&Path>,
+    scope: MemoryScope,
+) -> AppResult<std::collections::HashMap<String, f32>> {
+    let root = memory_root(data_dir, workdir, scope)?;
+    let entries = match std::fs::read_dir(&root) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(std::collections::HashMap::new())
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let mut out = std::collections::HashMap::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        if let Some(rec) = read_existing(&path) {
+            out.insert(rec.id, rec.importance);
+        }
+    }
+    Ok(out)
+}
+
 /// 追加一条审计日志到该作用域 memory 目录下的 `.memory_log.jsonl`。
 pub fn append_log(
     data_dir: &Path,
@@ -801,6 +939,55 @@ mod tests {
         let rec = read_existing(&path).unwrap();
         assert_eq!(rec.importance, 0.9, "upsert 应保留已强化的 importance");
         assert_eq!(rec.summary, "v2", "内容应已更新");
+    }
+
+    #[test]
+    fn importance_curve_reinforces_and_decays_by_kind() {
+        // 刚激活（age=0）→ 上限 1.0（强化到顶）。
+        assert!((importance_from_age(MemoryKind::Stable, 0.0) - 1.0).abs() < 1e-4);
+        assert!((importance_from_age(MemoryKind::Episode, 0.0) - 1.0).abs() < 1e-4);
+        // 半衰期处 → 落到 floor + (1-floor)/2（recency=0.5）。
+        let stable_half = importance_from_age(MemoryKind::Stable, STABLE_HALF_LIFE_DAYS);
+        assert!((stable_half - (STABLE_FLOOR + (1.0 - STABLE_FLOOR) * 0.5)).abs() < 1e-4);
+        // 同样时长下 episode 衰减更快（半衰期短）→ importance 更低。
+        let stable_30 = importance_from_age(MemoryKind::Stable, 30.0);
+        let episode_30 = importance_from_age(MemoryKind::Episode, 30.0);
+        assert!(episode_30 < stable_30, "同 30 天 episode 应比 stable 掉得更狠");
+        // 久远 → 各自逼近地板，不穿透。
+        assert!(importance_from_age(MemoryKind::Stable, 3650.0) >= STABLE_FLOOR - 1e-4);
+        assert!(importance_from_age(MemoryKind::Episode, 3650.0) >= EPISODE_FLOOR - 1e-4);
+        assert!(importance_from_age(MemoryKind::Episode, 3650.0) <= FORGET_IMPORTANCE);
+    }
+
+    #[test]
+    fn bump_last_active_reinforces_then_sleep_decays() {
+        let dd = tmp_dir();
+        // 写一条 episode，手动把 last_active 拨到很久以前（模拟长期不用）。
+        write(&dd, None, MemoryScope::Global, "ep", MemoryKind::Episode,
+            "bug", &[], "老事件", "## 详情\n根因 Y。").unwrap();
+        let path = dd.join("memory").join("ep.md");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let stale = raw.lines().map(|l| if l.starts_with("last_active: ") {
+            "last_active: 2020-01-01T00:00:00+00:00".to_string()
+        } else { l.to_string() }).collect::<Vec<_>>().join("\n");
+        std::fs::write(&path, stale).unwrap();
+
+        // 深睡衰减：久未激活的 episode → importance 掉到地板、进遗忘候选。
+        let report = consolidate_importance(&dd, None, MemoryScope::Global).unwrap();
+        assert_eq!(report.recomputed, 1);
+        assert!(report.forget_candidates.contains(&"global/ep".to_string()),
+            "长期不激活的 episode 应成遗忘候选");
+        assert!(read_existing(&path).unwrap().importance <= FORGET_IMPORTANCE);
+
+        // 强化：召回命中 → bump_last_active 把 age 归零 → 再重算 importance 回上限、脱离遗忘候选。
+        bump_last_active(&dd, None, "global/ep").unwrap();
+        let report2 = consolidate_importance(&dd, None, MemoryScope::Global).unwrap();
+        assert!(report2.forget_candidates.is_empty(), "刚强化过的 episode 不该是遗忘候选");
+        assert!(read_existing(&path).unwrap().importance > 0.9, "刚激活 importance 应回到高位");
+
+        // load_importance 供召回排序读取。
+        let imp = load_importance(&dd, None, MemoryScope::Global).unwrap();
+        assert!(*imp.get("global/ep").unwrap() > 0.9);
     }
 
     #[test]

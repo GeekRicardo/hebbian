@@ -436,7 +436,7 @@ impl WakeupScheduler {
             .count()
     }
 
-    /// session 被 cancel / Finished 时调用，清理未消费的 watch / cron。
+    /// session 被 cancel / Finished（run 真正结束）时调用，清理该 run 全部未消费 watch / cron。
     pub fn discard_run(&self, session_id: &str, run_id: &str) {
         let mut inner = self.inner.lock().unwrap();
         inner
@@ -445,6 +445,25 @@ impl WakeupScheduler {
         inner
             .bg_watches
             .retain(|w| !(w.session_id == session_id && w.run_id == run_id));
+    }
+
+    /// resume 路径专用：只摘除该 run 的 **cron** 登记，**不动 bg_watches**（架构 §4.12 / 提案 P2）。
+    /// 修 cron 唤醒续跑时把同一 run 里仍在跑的后台 bash 完成通知一并删掉的 bug——那条 bash
+    /// 完成后就再也不会 emit `BgTaskFinished`。cron 到点已消费，只需删它自己。
+    pub fn discard_cron(&self, session_id: &str, run_id: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        inner
+            .crons
+            .retain(|c| !(c.session_id == session_id && c.run_id == run_id));
+    }
+
+    /// resume 路径专用：只摘除指定 `task_id` 的 bg watch（触发本次唤醒的那个），
+    /// 同 run 其它后台任务的 watch 保留（架构 §4.12 / 提案 P2）。
+    pub fn discard_bg_task(&self, session_id: &str, task_id: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        inner
+            .bg_watches
+            .retain(|w| !(w.session_id == session_id && w.task_id == task_id));
     }
 
     /// 进程重启后扫描所有 session 的 `run_checkpoint.json`，把未过期的
@@ -812,5 +831,48 @@ mod tests {
         );
         // 两条 watch 都已是终态，均被摘除。
         assert_eq!(scheduler.inner.lock().unwrap().bg_watches.len(), 0);
+    }
+
+    /// 回归（提案 P2）：同一 run 既 ScheduleWakeup 挂起（cron）、又有仍在跑的后台 bash（bg watch）。
+    /// cron 到点 resume 时 `discard_cron` 只删 cron，**不能连带删掉那条 bash 的完成 watch**——
+    /// 否则 bash 完成后再也不 emit。修前用 `discard_run` 会把同 run 全部 watch 一并删。
+    #[test]
+    fn discard_cron_keeps_sibling_bg_watch() {
+        use tokio::sync::mpsc;
+        let (tx, _rx) = mpsc::unbounded_channel::<WakeupEvent>();
+        let scheduler = WakeupScheduler {
+            inner: Mutex::new(SchedulerInner::default()),
+            tx,
+        };
+        // 同一个 run 同时 arm 了 cron（ScheduleWakeup）和一个后台 bash 的完成 watch。
+        scheduler.arm_cron("sess".into(), "run_A".into(), 0, "check".into());
+        scheduler.arm_bg_task("sess".into(), "run_A".into(), "bash_sibling".into(), None);
+
+        // cron 到点 resume：只摘 cron。
+        scheduler.discard_cron("sess", "run_A");
+
+        let inner = scheduler.inner.lock().unwrap();
+        assert_eq!(inner.crons.len(), 0, "cron 应被摘除");
+        assert_eq!(inner.bg_watches.len(), 1, "同 run 的后台 bash watch 必须保留");
+        assert_eq!(inner.bg_watches[0].task_id, "bash_sibling");
+    }
+
+    /// `discard_bg_task` 只摘指定 task_id，同 run 其它 watch 保留。
+    #[test]
+    fn discard_bg_task_only_removes_named_task() {
+        use tokio::sync::mpsc;
+        let (tx, _rx) = mpsc::unbounded_channel::<WakeupEvent>();
+        let scheduler = WakeupScheduler {
+            inner: Mutex::new(SchedulerInner::default()),
+            tx,
+        };
+        scheduler.arm_bg_task("sess".into(), "run_A".into(), "bash_1".into(), None);
+        scheduler.arm_bg_task("sess".into(), "run_A".into(), "bash_2".into(), None);
+
+        scheduler.discard_bg_task("sess", "bash_1");
+
+        let inner = scheduler.inner.lock().unwrap();
+        assert_eq!(inner.bg_watches.len(), 1, "只摘 bash_1");
+        assert_eq!(inner.bg_watches[0].task_id, "bash_2");
     }
 }

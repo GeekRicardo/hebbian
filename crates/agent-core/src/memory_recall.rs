@@ -14,6 +14,7 @@
 //! 零额外文件（不过度设计）。
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 
 use crate::storage::memory::{self, MemoryL0, MemoryScope};
 
@@ -47,6 +48,10 @@ const GENERIC_TERMS: &[&str] = &[
     "文件",
     "项目",
 ];
+
+/// importance 在种子打分里的权重（§4.14.8）。压得比 token 命中小：importance∈[0.1,1.0]，
+/// (imp-0.5) ∈ [-0.4,0.5]，乘 0.2 → 微调 ∈ [-0.08,0.1]，只在种子阈值 0.18 边界起作用。
+const IMPORTANCE_WEIGHT: f32 = 0.2;
 
 const SPECIFIC_TERMS: &[&str] = &[
     "memory",
@@ -170,6 +175,16 @@ pub fn activate(
         return Activation::default();
     }
 
+    // 激活强化-衰减闭环（架构 §4.14.8）：id → importance，喂给种子打分。reinforced 记忆
+    // （近期召回过）importance 高、更易过种子阈值；decayed 记忆低、更易沉底被遗忘。
+    let mut importance: HashMap<String, f32> =
+        memory::load_importance(data_dir, None, MemoryScope::Global).unwrap_or_default();
+    if let Some(wd) = project_workdir {
+        if let Ok(m) = memory::load_importance(data_dir, Some(wd), MemoryScope::Project) {
+            importance.extend(m);
+        }
+    }
+
     let query_tokens = tokenize(query);
     if query_tokens.is_empty() {
         return Activation::default();
@@ -204,9 +219,15 @@ pub fn activate(
         score += (tag_hits as f32 * 0.14).min(0.42);
         score += (strong_overlap as f32 * 0.10).min(0.30);
         score += (generic_hits as f32 * 0.025).min(0.08);
+        // importance 微调（§4.14.8）：reinforced 记忆（近期召回）加分、decayed 减分，
+        // 让「越用越浮现 / 久不用沉底」在种子阈值上生效。中性 0.5 不动分；权重压得比
+        // token 命中小，只在边界起作用，不喧宾夺主。has_strong_signal 硬门槛不受影响——
+        // importance 再高也不能凭空把无 token/tag 命中的记忆拽成种子。
+        let imp = importance.get(&m.id).copied().unwrap_or(0.5);
+        score += IMPORTANCE_WEIGHT * (imp - 0.5);
         let has_strong_signal = specific_hits > 0 || tag_hits > 0 || strong_overlap >= 2;
         if has_strong_signal && score >= 0.18 {
-            seed_strength.insert(i, score.min(1.0));
+            seed_strength.insert(i, score.max(0.0).min(1.0));
         }
         memory_signals.push(signals);
     }
@@ -243,6 +264,10 @@ pub fn activate(
                     let same_topic = !query_specific.is_empty()
                         && !query_specific.is_disjoint(&neighbor.specific);
                     let tag_topic = !query_tokens.is_disjoint(&neighbor.tags);
+                    // 强边旁路是**有意设计**：深睡建的「症状↔根因」高权边让跨 token 联想成立
+                    // （B 是 A 的根因，语义相关但无共享词）——这正是图召回的价值。spurious 边
+                    // 的治理属于深睡建边质量（P5 深睡分档），不在这里卡 token 交集，否则会把
+                    // 合法联想一并废掉。
                     let strong_link = w >= 0.85 && sval >= 0.30;
                     if !same_topic && !tag_topic && !strong_link {
                         continue;
@@ -293,6 +318,37 @@ pub fn activate(
         seed_ids,
         query_tokens,
     }
+}
+
+/// 每 session 上一轮**实际注入** recall 时用的 query token 集（Auto 漂移门控用）。
+/// 进程级、重启即清——重启后首轮当漂移注入一次，成本可忽略，无需持久化。
+fn last_recall_tokens_store() -> &'static Mutex<HashMap<String, HashSet<String>>> {
+    static STORE: std::sync::OnceLock<Mutex<HashMap<String, HashSet<String>>>> =
+        std::sync::OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Auto 模式漂移门控（架构 §4.14 / 提案 P5）：与本 session **上一轮注入**的 query token 比对。
+/// 话题未漂移（重合度 ≥ threshold）→ 返回 `false`：跳过重复注入（那些记忆已在 transcript 里，
+/// 再前置一遍只会让模型行为随措辞微扰忽有忽无——正是「怪」的来源）。漂移 / 首轮 → 返回 `true`
+/// 并把本轮 tokens 记为新基准。这让 `Auto` 真正区别于 `Always`（每轮强制注入、不走门控）。
+///
+/// 对比基准是「上次注入」而非「上一轮」：话题缓慢平移时，漂移从上次注入点累计，避免每轮都
+/// 因微小变化被判同话题而永不更新。
+pub fn recall_should_inject_auto(
+    session_id: &str,
+    cur_tokens: &HashSet<String>,
+    threshold: f32,
+) -> bool {
+    let mut store = last_recall_tokens_store().lock().unwrap();
+    let drifted = match store.get(session_id) {
+        Some(prev) => topic_drifted(prev, cur_tokens, threshold),
+        None => true,
+    };
+    if drifted {
+        store.insert(session_id.to_string(), cur_tokens.clone());
+    }
+    drifted
 }
 
 /// 话题漂移检测（架构 §3.1 / 批5）：当前 query token 集与上轮的重合度低于阈值 → 漂移。
@@ -611,4 +667,64 @@ mod tests {
         let act = activate(&dd, None, "今天天气真好适合爬山", &RecallParams::default());
         assert!(act.activated.is_empty(), "无关查询应零激活");
     }
+
+    /// 回归（§4.14.8 Hebbian 闭环）：importance 影响种子强度——两条同样命中查询的记忆，
+    /// reinforced（高 importance）的应比 decayed（低 importance）的激活更强、排序更靠前。
+    #[test]
+    fn importance_biases_seed_strength() {
+        use crate::storage::memory::{write, MemoryKind};
+        let dd = std::env::temp_dir().join(format!("heb-recall-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dd).unwrap();
+        // 两条都带 tag「schema」，对查询命中力度相同——唯一差别是 importance。
+        for slug in ["hot", "cold"] {
+            write(&dd, None, MemoryScope::Global, slug, MemoryKind::Stable,
+                "schema", &["schema".into()], &format!("schema 迁移策略 {slug}"), "正文").unwrap();
+        }
+        // 手动拨 importance：hot 高（近期强化）、cold 低（久未激活衰减）。
+        for (slug, imp) in [("hot", "0.95"), ("cold", "0.15")] {
+            let path = dd.join("memory").join(format!("{slug}.md"));
+            let raw = std::fs::read_to_string(&path).unwrap();
+            let edited = raw.lines().map(|l| if l.starts_with("importance: ") {
+                format!("importance: {imp}")
+            } else { l.to_string() }).collect::<Vec<_>>().join("\n");
+            std::fs::write(&path, edited).unwrap();
+        }
+        let act = activate(&dd, None, "schema 迁移怎么做", &RecallParams::default());
+        let strength = |id: &str| act.activated.iter()
+            .find(|a| a.l0.id == id).map(|a| a.strength);
+        let hot = strength("global/hot").expect("hot 应被激活");
+        let cold = strength("global/cold");
+        // reinforced 记忆强度更高；decayed 记忆要么更弱、要么被压到阈值下不激活。
+        assert!(cold.map_or(true, |c| hot > c),
+            "reinforced(高 importance) 应比 decayed(低 importance) 激活更强，hot={hot} cold={cold:?}");
+    }
+
+    /// 回归（提案 P5）：Auto 漂移门控——首轮注入、同话题连续轮跳过、漂移后重注入。
+    /// 让 Auto 真正区别于 Always（每轮强制注入）。
+    #[test]
+    fn recall_auto_drift_gate_skips_same_topic() {
+        let sid = format!("sess-{}", uuid::Uuid::new_v4());
+        let topic_a: HashSet<String> =
+            ["memory", "recall", "gate"].iter().map(|s| s.to_string()).collect();
+        let topic_a2: HashSet<String> =
+            ["memory", "recall", "spread"].iter().map(|s| s.to_string()).collect();
+        let topic_b: HashSet<String> =
+            ["wakeup", "cron", "suspend"].iter().map(|s| s.to_string()).collect();
+
+        // 首轮：无上轮基准 → 注入。
+        assert!(recall_should_inject_auto(&sid, &topic_a, 0.5), "首轮应注入");
+        // 同话题（2/3 重合 ≥ 0.5）→ 跳过。
+        assert!(
+            !recall_should_inject_auto(&sid, &topic_a2, 0.5),
+            "同话题连续轮应跳过重复注入"
+        );
+        // 漂移到完全不同话题（0 重合）→ 重注入，并把 B 记为新基准。
+        assert!(recall_should_inject_auto(&sid, &topic_b, 0.5), "话题漂移应重新注入");
+        // B 之后再来 B → 跳过。
+        assert!(
+            !recall_should_inject_auto(&sid, &topic_b, 0.5),
+            "漂移后同话题应再次跳过"
+        );
+    }
+
 }

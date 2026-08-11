@@ -134,7 +134,19 @@ fn translate_wire_event(event: &WireEvent, usage: &mut UsageTotals) -> Option<Da
             is_error: *is_error,
             subagent_call_id: subagent_call_id.clone(),
         }),
-        WireEvent::RunFinished { duration_ms } => {
+        WireEvent::RunStarted {
+            run_id,
+            trigger,
+            mode,
+        } => Some(DaemonEvent::RunStarted {
+            run_id: run_id.clone(),
+            trigger: trigger.clone(),
+            mode: mode.clone(),
+        }),
+        WireEvent::MessageAppended { message } => Some(DaemonEvent::MessageAppended {
+            message: message.clone(),
+        }),
+        WireEvent::RunFinished { duration_ms, .. } => {
             let ev = DaemonEvent::RunFinished {
                 input_tokens: usage.input_tokens,
                 output_tokens: usage.output_tokens,
@@ -158,7 +170,7 @@ fn translate_wire_event(event: &WireEvent, usage: &mut UsageTotals) -> Option<Da
         WireEvent::RunSuspended { reason, .. } => Some(DaemonEvent::RunSuspended {
             reason: reason.clone(),
         }),
-        WireEvent::RunResumed { cause } => Some(DaemonEvent::RunResumed {
+        WireEvent::RunResumed { cause, .. } => Some(DaemonEvent::RunResumed {
             cause: cause.clone(),
         }),
         WireEvent::PermissionRequested {
@@ -285,8 +297,9 @@ fn spawn_event_pump(runtime: Arc<surface_session::SessionRuntime>) {
         let mut usage = UsageTotals::default();
         loop {
             match rx.recv().await {
-                Ok(event) => {
-                    if let Some(ev) = translate_wire_event(&event, &mut usage) {
+                Ok(envelope) => {
+                    // 信封 seq 供未来 DaemonEvent::Envelope 透传（P4）；当前仍翻内层 WireEvent。
+                    if let Some(ev) = translate_wire_event(&envelope.event, &mut usage) {
                         emit_event(&ev);
                     }
                 }

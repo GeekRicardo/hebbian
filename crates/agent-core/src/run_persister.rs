@@ -118,8 +118,14 @@ impl PartialActor {
 ///
 /// [`flush_segment`]: RunPersister::flush_segment
 /// [`finish`]: RunPersister::finish
+/// 落盘即事件回调（架构 §3.1 / 提案 P2）：每条消息 append 成功后 emit `MessageAppended`。
+/// 由 [`RunPersister::set_emit`] 在 run 装配时接入本 run 的事件流（捕获 run_tx + state）。
+pub type MessageEmit = Arc<dyn Fn(EventPayload) + Send + Sync>;
+
 pub struct RunPersister {
     inner: Arc<Mutex<PersistState>>,
+    /// 落盘即事件：append 成功后 emit `MessageAppended`（前端实时渲染，不等 reload）。
+    emit: Option<MessageEmit>,
     /// 本 run 最后一条成功落盘的 assistant message。surface 不再自行累积返回值，
     /// 收尾时从这里取（架构 §7.8.3 事件累积归一）——assistant message 的产出点
     /// 收敛到 agent_core 唯一一份，desktop `send_message` 的 `Message` 返回值即取自此。
@@ -185,8 +191,25 @@ impl RunPersister {
                 last_segment_id: None,
                 last_message: last_message.clone(),
             })),
+            emit: None,
             last_message,
             msg_id,
+        }
+    }
+
+    /// 接入落盘即事件回调（架构 §3.1 / 提案 P2）。run 装配时调用，把本 run 的
+    /// `MessageAppended` emit 到事件流。未接入（None）时行为不变（只落盘不 emit）。
+    pub fn set_emit(&mut self, emit: MessageEmit) {
+        self.emit = Some(emit);
+    }
+
+    /// 消息落盘成功后 emit `MessageAppended`（前端实时渲染）。序列化失败静默跳过——
+    /// 落盘是正确性关键，事件是 best-effort UI 反馈（架构 §4.14.4 同款分层）。
+    fn emit_appended(&self, msg: &Message) {
+        if let Some(emit) = &self.emit {
+            if let Ok(value) = serde_json::to_value(msg) {
+                emit(EventPayload::MessageAppended { message: value });
+            }
         }
     }
 
@@ -232,9 +255,13 @@ impl RunPersister {
             subagent_call_id: None,
             run_duration_ms: None,
         };
-        if let Err(e) = sessions::append_message(&st.data_dir, &st.session_id, msg) {
+        if let Err(e) = sessions::append_message(&st.data_dir, &st.session_id, msg.clone()) {
             warn!(error = %e, "append_user 落盘失败");
+            return;
         }
+        drop(st);
+        // 落盘成功即 emit：注入的 user / wakeup 通知气泡实时出现，不等 run 结束 reload。
+        self.emit_appended(&msg);
     }
 
     /// 段边界：把当前累积段落成一条 assistant message 落盘（无内容则跳过），重置累积器
@@ -252,6 +279,10 @@ impl RunPersister {
         };
         // 锁外等 actor 清完 partial 中间态（actor 退出则立即 Err，降级继续）。
         let _ = ack.await;
+        // assistant 段落盘即 emit：前端把流式 assistant 按 id 原地定稿（架构 §3.1 / 提案 P2）。
+        if let Some(m) = &msg {
+            self.emit_appended(m);
+        }
         msg
     }
 
@@ -300,10 +331,15 @@ impl RunPersister {
         let _ = reset_ack.await;
         let _ = delete_ack.await;
         // 返回值带上耗时（surface 透传用）：build 时 flush_locked 不盖，这里补上。
-        msg.map(|mut m| {
+        let final_msg = msg.map(|mut m| {
             m.run_duration_ms = Some(run_duration_ms);
             m
-        })
+        });
+        // 收尾若落了新末段（None = 末段已被中间 flush 预落、已 emit 过）→ emit 带耗时的定稿版。
+        if let Some(m) = &final_msg {
+            self.emit_appended(m);
+        }
+        final_msg
     }
 
     /// cancel/fail 收尾：补落残留尾段 + 紧跟一条 `Interrupted` marker，删 partial。
@@ -595,5 +631,47 @@ mod tests {
             0,
             "finish 返回后 partial 必须已物理删除（#5 happens-before，否则会被二次折叠）"
         );
+    }
+
+    /// 回归（提案 P2 落盘即事件）：接入 emit 后，append_user / flush_segment / finish 落盘成功
+    /// 都要 emit `MessageAppended`，且 message 与落盘一致（前端据此实时渲染、按 id 定稿）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn append_emits_message_appended_events() {
+        let dir = temp_dir("msg-appended");
+        let session = sessions::create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        let sid = session.id.clone();
+
+        let mut persister = RunPersister::new(dir.clone(), sid.clone());
+        let handle = persister.handle();
+        let state = RunState::new(RunId::new());
+
+        // 收集 emit 出来的事件。
+        let seen: Arc<Mutex<Vec<Message>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_for_sink = seen.clone();
+        persister.set_emit(Arc::new(move |payload| {
+            if let EventPayload::MessageAppended { message } = payload {
+                let msg: Message = serde_json::from_value(message).unwrap();
+                seen_for_sink.lock().unwrap().push(msg);
+            }
+        }));
+
+        // 注入的 user（wakeup 通知同款路径）→ 应 emit 一条 MessageAppended。
+        persister.append_user("插队消息".into(), Vec::new(), None);
+        // assistant 段落盘 → 应 emit。
+        handle.observe(&state.event(EventPayload::TextDelta { text: "回答".into() }));
+        let seg = persister.finish(500).await.expect("末段应落盘");
+
+        let events = seen.lock().unwrap();
+        assert_eq!(events.len(), 2, "append_user + finish 各 emit 一条");
+        assert!(
+            events.iter().any(|m| m.role == Role::User && m.content == "插队消息"),
+            "注入 user 消息应 emit MessageAppended"
+        );
+        let assistant = events
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .expect("assistant 定稿应 emit");
+        assert_eq!(assistant.id, seg.id, "emit 的 assistant id = 落盘 id（前端据此定稿）");
+        assert_eq!(assistant.run_duration_ms, Some(500), "定稿版带 run 耗时");
     }
 }

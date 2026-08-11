@@ -30,6 +30,6 @@ pub use permission::{
 pub use submission::{Op, Submission, UserInput};
 pub use todo::{PlanComment, TodoItem, TodoStatus};
 pub use wire::{
-    approval_decision_str, resume_cause_str, risk_str, suspend_reason_str, to_wire, WireEvent,
-    WirePlanPermission, WireTodoItem,
+    approval_decision_str, resume_cause_str, risk_str, suspend_reason_str, to_wire, RunTrigger,
+    SessionEnvelope, WireEvent, WirePlanPermission, WireTodoItem,
 };

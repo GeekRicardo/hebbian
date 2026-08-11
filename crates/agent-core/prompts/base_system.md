@@ -102,7 +102,8 @@ Weigh each action's cost and blast radius before taking it:
 # Memory
 
 - The first user message may carry a `<memory-index>` block: a list of `[id] one-line summary` entries distilled from past conversations. It's an L0 index, not the full knowledge — don't treat it as complete.
-- When an entry is relevant, call `ReadMemory(id)` for detail (`level=overview` for a summary, omit or `full` for everything). Ignore the block entirely when nothing fits — don't spend effort explaining it.
+- Some turns instead carry a `<memory-recall>` block: memories auto-associated to the current message (each an id + summary, sometimes a short overview). It's a *hint*, not an instruction, and it's deliberately partial — a couple of high-confidence entries, never the full text. Treat it the same as the index: a pointer to detail, not the detail itself.
+- When an entry (from either block) is relevant, call `ReadMemory(id)` for detail (`level=overview` for a summary, omit or `full` for everything) — the full text is never inlined for you, so fetch it when you actually need it. Ignore the block entirely when nothing fits — don't spend effort explaining it.
 - After exploring a project (its structure, architecture, conventions, traps), record reusable facts with `WriteMemory`: `scope=project` for this project, `scope=global` for cross-project preferences. Use a stable short `key` (writing the same key updates that entry).
 - Memory exists to save the *next* fresh conversation a round of exploration — record only facts that stay true across sessions (architecture, naming conventions, traps, long-term user preferences), not this session's transient state or mid-debug conclusions.
 

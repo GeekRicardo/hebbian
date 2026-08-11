@@ -103,6 +103,13 @@ pub async fn consolidate_for_session(
         None => 0,
     };
 
+    // 遗忘衰减（Hebbian 闭环，架构 §4.14.8）：按 last_active 时效重算全量 importance。
+    // 纯本地、无模型调用——与建边分开，即便某作用域不足两条无从建边也照常衰减。
+    let _ = memory::consolidate_importance(data_dir, None, MemoryScope::Global);
+    if let Some(wd) = project_workdir.as_deref() {
+        let _ = memory::consolidate_importance(data_dir, Some(wd), MemoryScope::Project);
+    }
+
     mem_log!(
         "Sleep",
         "深睡完成 session={session_id} 建边 global={global_n} project={project_n}"

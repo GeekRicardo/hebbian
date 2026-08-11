@@ -80,7 +80,7 @@ impl LiveRunModeRegistry {
         INSTANCE.get_or_init(LiveRunModeRegistry::new)
     }
 
-    /// Harness spawn_run 时注册。返回注册的 SharedRunMode 供 LoopParams 使用。
+    /// Harness spawn_run 时注册。返回注册的 SharedRunMode 供 AgentRunConfig 使用。
     pub fn register(&self, session_id: String, shared: SharedRunMode) {
         self.inner.lock().unwrap().insert(session_id, shared);
     }

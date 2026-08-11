@@ -110,7 +110,8 @@ daemon stdout 是 **NDJSON 流**——每行一个 JSON 对象，字段 `event` 
 | `event` | 字段 | 含义 |
 |---------|------|------|
 | `started` | `session_id` | daemon 就绪，第一条事件 |
-| `run_started` | — | 一轮 agent loop 开始 |
+| `run_started` | `run_id, trigger, mode` | 一轮 agent loop 开始。`trigger` ∈ user/wakeup/cron/queue/resume——**后端自发起的 run（wakeup/cron/队列）也会 emit**，脚本据此区分是不是自己刚 `heb input` 触发的 |
+| `message_appended` | `message` | 一条消息刚落盘（与 session.jsonl 的 Message 同形）。user/wakeup 通知气泡实时出现、流式 assistant 按 id 定稿都走这条，不必等 `run_finished` |
 | `run_finished` | `input_tokens, output_tokens, cache_read_tokens, duration_ms` | 一轮正常结束 |
 | `run_failed` | `error` | 一轮失败（provider 4xx / 网络 / panic） |
 | `run_cancelled` | — | `heb stop` 触发 |

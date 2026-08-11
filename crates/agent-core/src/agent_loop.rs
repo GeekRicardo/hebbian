@@ -211,11 +211,15 @@ fn append_compact_boundary(
 }
 
 /// Run 从挂起态恢复时携带的初始状态（架构 §4.12.6）。Harness 在 spawn_run 时
-/// 把它放进 [`LoopParams`]——agent_loop 入口据此恢复计数器，并 emit
+/// 把它放进 [`AgentRunConfig`]——agent_loop 入口据此恢复计数器，并 emit
 /// `RunResumed { cause }` 而不是 `RunStarted`。
 #[derive(Debug, Clone)]
 pub struct RunResumeState {
     pub cause: ResumeCause,
+    /// 挂起前的原 run_id（架构 §2 / 提案 P2）：resume 复用它，让一个逻辑 run 挂起再唤醒
+    /// 仍是同一身份——`RunSuspended` / `RunResumed` / 信封 run_id 前后一致，bg watch / Edits /
+    /// span 归属不断裂。
+    pub run_id: String,
     pub iteration: u32,
     pub model_step_index: u32,
     pub tool_step_index: u32,
@@ -236,6 +240,7 @@ impl RunResumeState {
     ) -> Self {
         Self {
             cause,
+            run_id: ckpt.run_id.clone(),
             iteration: ckpt.iteration,
             model_step_index: ckpt.model_step_index,
             tool_step_index: ckpt.tool_step_index,
@@ -249,7 +254,7 @@ impl RunResumeState {
 }
 
 /// 运行 agent loop 的入参集合
-pub struct LoopParams<'a> {
+pub struct AgentRunConfig<'a> {
     pub client: &'a dyn ModelClient,
     pub registry: Arc<ToolRegistry>,
     pub hitl: Arc<HitlGate>,
@@ -530,11 +535,19 @@ fn maybe_emit_pending_set_marker(data_dir: Option<&std::path::Path>, session_id:
         hebbian.run.iterations = Empty,
     )
 )]
-pub async fn run_loop(
-    params: LoopParams<'_>,
+/// Agent loop — 核心编排循环（pi 风格）。
+///
+/// 流式调用模型 → 收集 tool_calls → 派发工具 → hooks/compaction → 下一个 turn，
+/// 直到模型不再产出 tool_calls（EndTurn）或触发取消 / 上限 / 挂起 / 失败。
+///
+/// 参考：pi `run_agent`（`../pi/crates/pi-agent/src/agent_loop.rs`）——同一循环模式，
+/// hebbian 在其上扩展了 hooks / compaction / HITL / AutoMode / subagent / wakeup /
+/// edits / pending inputs drain / persister 等能力。
+pub async fn run_agent(
+    params: AgentRunConfig<'_>,
     on_event: EventSink,
 ) -> Result<AssistantOutput, ModelError> {
-    let LoopParams {
+    let AgentRunConfig {
         client,
         registry,
         hitl,
@@ -2412,8 +2425,8 @@ mod tests {
         let mut policy = CompactionPolicy::default();
         policy.token_budget = 10_100;
 
-        let result = run_loop(
-            LoopParams {
+        let result = run_agent(
+            AgentRunConfig {
                 client: &client,
                 registry: Arc::new(ToolRegistry::new(vec![Box::new(MediumStubTool)])),
                 hitl: Arc::new(HitlGate::default()),
@@ -2536,8 +2549,8 @@ mod tests {
         );
         let persister_handle = persister.handle();
 
-        let result = run_loop(
-            LoopParams {
+        let result = run_agent(
+            AgentRunConfig {
                 client: &client,
                 registry: Arc::new(ToolRegistry::new(Vec::new())),
                 hitl: Arc::new(HitlGate::default()),
@@ -2680,8 +2693,8 @@ mod tests {
         let state = Arc::new(RunState::new(RunId::new()));
         let workspace = Workspace::new(data_dir.path().to_path_buf(), Vec::new());
 
-        let result = run_loop(
-            LoopParams {
+        let result = run_agent(
+            AgentRunConfig {
                 client: client.as_ref(),
                 registry: Arc::new(ToolRegistry::new(Vec::new())),
                 hitl: Arc::new(HitlGate::default()),
@@ -2746,8 +2759,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = Workspace::new(tmp.path().to_path_buf(), Vec::new());
 
-        let result = run_loop(
-            LoopParams {
+        let result = run_agent(
+            AgentRunConfig {
                 client: &FailingModelClient,
                 registry: Arc::new(ToolRegistry::new(Vec::new())),
                 hitl: Arc::new(HitlGate::default()),
@@ -2810,8 +2823,8 @@ mod tests {
         let workspace = Workspace::new(tmp.path().to_path_buf(), Vec::new());
         let policy = CompactionPolicy::default();
 
-        let result = run_loop(
-            LoopParams {
+        let result = run_agent(
+            AgentRunConfig {
                 client: &client,
                 registry: Arc::new(ToolRegistry::new(Vec::new())),
                 hitl: Arc::new(HitlGate::default()),
@@ -2878,8 +2891,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = Workspace::new(tmp.path().to_path_buf(), Vec::new());
 
-        let result = run_loop(
-            LoopParams {
+        let result = run_agent(
+            AgentRunConfig {
                 client: &client,
                 registry: Arc::new(ToolRegistry::new(Vec::new())),
                 hitl: Arc::new(HitlGate::default()),
@@ -2951,8 +2964,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = Workspace::new(tmp.path().to_path_buf(), Vec::new());
 
-        let result = run_loop(
-            LoopParams {
+        let result = run_agent(
+            AgentRunConfig {
                 client: &client,
                 registry: Arc::new(ToolRegistry::new(Vec::new())),
                 hitl: Arc::new(HitlGate::default()),
@@ -3029,8 +3042,8 @@ mod tests {
         let injected_once = Arc::new(AtomicBool::new(false));
         let injected_once_for_sink = injected_once.clone();
 
-        let result = run_loop(
-            LoopParams {
+        let result = run_agent(
+            AgentRunConfig {
                 client: &client,
                 registry: Arc::new(ToolRegistry::new(Vec::new())),
                 hitl: Arc::new(HitlGate::default()),
@@ -3160,8 +3173,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = Workspace::new(tmp.path().to_path_buf(), Vec::new());
 
-        let err = run_loop(
-            LoopParams {
+        let err = run_agent(
+            AgentRunConfig {
                 client: &client,
                 registry: Arc::new(ToolRegistry::new(Vec::new())),
                 hitl: Arc::new(HitlGate::default()),
@@ -3337,8 +3350,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = Workspace::new(tmp.path().to_path_buf(), Vec::new());
 
-        let result = run_loop(
-            LoopParams {
+        let result = run_agent(
+            AgentRunConfig {
                 client: &client,
                 registry: Arc::new(ToolRegistry::new(Vec::new())),
                 hitl: Arc::new(HitlGate::default()),

@@ -10,7 +10,7 @@ use common::CancelFlag;
 use model_gateway::types::{ModelError, TranscriptEntry};
 use protocol::{AgentRef, Event, RunId};
 
-use crate::agent_loop::{self, EventSink, LoopParams};
+use crate::agent_loop::{self, EventSink, AgentRunConfig};
 use crate::context::transcript::Transcript;
 use crate::run_state::RunState;
 use crate::storage::subagents::{SubagentDefinition, DEFAULT_MAX_ITERATIONS};
@@ -235,7 +235,7 @@ impl SubagentRunner {
         );
         let max_iter = def.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
 
-        let params = LoopParams {
+        let params = AgentRunConfig {
             client: child_client.as_ref(),
             registry: Arc::new(child_registry),
             hitl: self.parent_hitl.clone(),
@@ -273,7 +273,7 @@ impl SubagentRunner {
             call_tag: model_gateway::types::ModelCallTag::Subagent,
         };
 
-        let output = agent_loop::run_loop(params, child_sink).await?;
+        let output = agent_loop::run_agent(params, child_sink).await?;
         Ok(output.text)
     }
 
