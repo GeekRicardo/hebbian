@@ -40,6 +40,12 @@ pub enum CoreUpdate {
     Settings(Box<agent_core::storage::settings::Settings>),
     /// 供应商列表刷新完成（模型选择器用）。
     Providers(Vec<model_gateway::config::Provider>),
+    /// 某个文件的 diff 两侧文本。
+    DiffLoaded {
+        rel_path: String,
+        before: String,
+        after: String,
+    },
     /// 可用的 skill 列表（`//` 命令面板用）。
     Skills(Vec<agent_core::tools::skill::Skill>),
     /// git 状态读完了。`None` 表示这个目录不是 git 仓库。
@@ -193,6 +199,21 @@ impl Core {
         self.inner.rt.spawn(async move {
             let skills = this.local_client().list_skills(&workdir);
             this.emit(CoreUpdate::Skills(skills));
+        });
+    }
+
+    /// 取某个文件的改动两侧文本。`staged` 决定比的是「暂存了什么」还是「还没暂存的」。
+    pub fn load_diff(&self, workdir: PathBuf, rel_path: String, staged: bool) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            match agent_core::git_scm::diff_file(&workdir, &rel_path, staged) {
+                Ok((before, after)) => this.emit(CoreUpdate::DiffLoaded {
+                    rel_path,
+                    before,
+                    after,
+                }),
+                Err(err) => this.emit_err(format!("取不到这个文件的改动：{err}")),
+            }
         });
     }
 

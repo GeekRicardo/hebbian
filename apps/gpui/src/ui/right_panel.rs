@@ -167,7 +167,7 @@ fn panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
         .child(match app.workbench {
             Workbench::Files => file_panel(app, cx, workdir).into_any_element(),
             Workbench::Todo => todo_panel(app).into_any_element(),
-            Workbench::Git => git_panel(app).into_any_element(),
+            Workbench::Git => git_panel(app, cx).into_any_element(),
             other => empty_panel(app, other).into_any_element(),
         })
 }
@@ -282,7 +282,7 @@ fn todo_panel(app: &HebbianApp) -> impl IntoElement {
 
 /// Git 面板：分支 + 改动文件清单。状态字符按 porcelain 原样显示，
 /// 未跟踪用问号、已暂存走强调色，与命令行里看到的对得上。
-fn git_panel(app: &HebbianApp) -> impl IntoElement {
+fn git_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();
     let Some(git) = app.state.git.as_ref() else {
         return div()
@@ -293,10 +293,12 @@ fn git_panel(app: &HebbianApp) -> impl IntoElement {
             .into_any_element();
     };
 
+    // 文件列表按内容高度（封顶 200px），剩下的全给 diff——
+    // 两边都 flex_1 时会按内容比例分，diff 长文本反而被挤没。
     let mut list = v_flex()
         .id("git-list")
-        .flex_1()
-        .min_h_0()
+        .flex_none()
+        .max_h(px(200.))
         .overflow_y_scroll()
         .px(px(12.))
         .child(
@@ -327,6 +329,7 @@ fn git_panel(app: &HebbianApp) -> impl IntoElement {
             .into_any_element();
     }
 
+    let root = std::path::PathBuf::from(&git.root);
     for file in &git.files {
         let mark = if file.untracked {
             "?".to_string()
@@ -335,11 +338,29 @@ fn git_panel(app: &HebbianApp) -> impl IntoElement {
         } else {
             file.y.clone()
         };
+        let rel = file.path.clone();
+        let staged = file.staged;
+        let root = root.clone();
+        let selected = app
+            .state
+            .diff
+            .as_ref()
+            .is_some_and(|(p, _)| p == &file.path);
         list = list.child(
             h_flex()
+                .id(gpui::SharedString::from(format!("git-{}", file.path)))
                 .py(px(5.))
+                .px(px(4.))
+                .rounded(px(6.))
                 .gap(px(8.))
                 .text_size(px(12.))
+                .cursor_pointer()
+                .when(selected, |this| this.bg(theme.accent_soft))
+                .hover(|this| this.bg(theme.accent_soft))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.state.core.load_diff(root.clone(), rel.clone(), staged);
+                    cx.notify();
+                }))
                 .child(
                     div()
                         .w(px(12.))
@@ -365,7 +386,117 @@ fn git_panel(app: &HebbianApp) -> impl IntoElement {
                 ),
         );
     }
-    list.into_any_element()
+    v_flex()
+        .flex_1()
+        .min_h_0()
+        .child(list)
+        .children(diff_view(app))
+        .into_any_element()
+}
+
+/// 逐行 diff。没变的大段折叠成「省略 N 行」，只留改动附近三行上下文。
+fn diff_view(app: &HebbianApp) -> Option<impl IntoElement> {
+    let (path, lines) = app.state.diff.as_ref()?;
+    let theme = app.theme.clone();
+    let (added, removed) = crate::diff::stats(lines);
+
+    let mut body = v_flex()
+        .id("diff-body")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .font_family("monospace")
+        .text_size(px(11.));
+
+    for entry in crate::diff::collapse(lines, 3) {
+        body = match entry {
+            None => body.child(
+                div()
+                    .px(px(8.))
+                    .py(px(2.))
+                    .text_color(theme.faint)
+                    .bg(theme.right_bg_top)
+                    .child("⋯"),
+            ),
+            Some(line) => {
+                use crate::diff::DiffKind;
+                let (bg, fg, sign) = match line.kind {
+                    DiffKind::Insert => (
+                        crate::theme::with_alpha(theme.green, 0.12),
+                        theme.text,
+                        "+",
+                    ),
+                    DiffKind::Delete => (
+                        crate::theme::with_alpha(theme.danger, 0.12),
+                        theme.text,
+                        "-",
+                    ),
+                    DiffKind::Equal => (gpui::transparent_black(), theme.muted, " "),
+                };
+                body.child(
+                    h_flex()
+                        .w_full()
+                        .px(px(6.))
+                        .bg(bg)
+                        .text_color(fg)
+                        .child(
+                            div()
+                                .w(px(30.))
+                                .flex_none()
+                                .text_color(theme.faint)
+                                .child(
+                                    line.new_no
+                                        .or(line.old_no)
+                                        .map(|n| n.to_string())
+                                        .unwrap_or_default(),
+                                ),
+                        )
+                        .child(div().w(px(10.)).flex_none().child(sign))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .child(line.text.clone()),
+                        ),
+                )
+            }
+        };
+    }
+
+    Some(
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .border_t_1()
+            .border_color(theme.line)
+            .child(
+                h_flex()
+                    .h(px(28.))
+                    .px(px(12.))
+                    .gap(px(8.))
+                    .justify_between()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(px(11.))
+                            .text_color(theme.text)
+                            .child(path.clone()),
+                    )
+                    .child(
+                        h_flex()
+                            .gap(px(6.))
+                            .flex_none()
+                            .text_size(px(11.))
+                            .child(div().text_color(theme.green).child(format!("+{added}")))
+                            .child(div().text_color(theme.danger).child(format!("−{removed}"))),
+                    ),
+            )
+            .child(body),
+    )
 }
 
 /// 还没搬过来的面板：给出这块将来放什么，而不是一片空白。

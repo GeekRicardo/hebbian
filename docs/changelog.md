@@ -11949,3 +11949,14 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 仅 `apps/gpui`。新增一个本机偏好文件，不影响任何对话数据，删掉只会回到默认排序。
 - **验证**: xdotool 把 hebbian 从第 4 组拖到第 1 组——界面顺序立即变化，`gpui-ui.json` 里 `project_order` 以 hebbian 开头。新增 2 条单测（保存的顺序优先 / 空顺序保持原样），共 11 条通过。
 - **留尾巴**: 拖动过程中没有「其他项让位」的动画预览（原前端有 translateY 补位）；对话行不能跨项目拖。
+
+### 2026-08-11 — gpui surface 加逐行 diff（自写 LCS，不引依赖）
+
+- **Why**: 「改了哪些文件」有了，但看不到具体改了什么——对一个 agent 界面来说 diff 是主要信息载体。
+- **改动**:
+  - `apps/gpui/src/diff.rs`（新）: 自己写行级 LCS diff 而不是引第三方 crate——需求只有「两段文本按行比、标出增删」这一件事，三十行够用，省一个依赖。**带规模保护**：LCS 是 O(n·m)，超过 2000 行就退化成「整段删 + 整段增」，信息量降一点但不会把界面卡死。另有 `collapse`：没变的大段折叠成「⋯」，只留改动附近三行上下文。
+  - `apps/gpui/src/core.rs` / `state.rs`: `load_diff` 走 `git_scm::diff_file` 取两侧文本，在 UI 侧算 diff。
+  - `apps/gpui/src/ui/right_panel.rs`: Git 面板里点文件即在下方展开 diff，增行绿底、删行红底、行号在左，标题行显示 `+n −m`。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: 在 fixture 仓库里改一行后点该文件——diff 显示 `+1 −0` 与绿底的 `+// tweak`。**过程中修掉一个自己的布局错**：文件列表与 diff 都写了 `flex_1`，结果按内容比例分配、长 diff 反而被挤成 0 高；改成列表按内容高度（封顶 200px）、剩下全给 diff。新增 6 条单测（增 / 删 / 替换 / 全同 / 超限退化 / 折叠），共 17 条通过。
+- **留尾巴**: 只有 Git 面板能看 diff，Edit 工具卡片里还没内嵌 diff；不能暂存 / 撤销单个文件（`git_scm` 的 stage / discard 已就绪，只差入口）。

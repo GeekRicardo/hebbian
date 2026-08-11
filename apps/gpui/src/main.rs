@@ -6,6 +6,7 @@
 
 mod assets;
 mod core;
+mod diff;
 mod prefs;
 mod state;
 mod theme;

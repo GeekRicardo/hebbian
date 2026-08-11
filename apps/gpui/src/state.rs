@@ -88,6 +88,9 @@ pub struct AppState {
     pub search_regex: bool,
     pub collapsed: HashSet<String>,
 
+    /// 当前正在看的改动：文件相对路径 + 逐行 diff。
+    pub diff: Option<(String, Vec<crate::diff::DiffLine>)>,
+
     /// 可用 skill（`//` 命令面板）。
     pub skills: Vec<agent_core::tools::skill::Skill>,
 
@@ -135,6 +138,7 @@ impl AppState {
             search_case: false,
             search_regex: false,
             collapsed: HashSet::new(),
+            diff: None,
             skills: Vec::new(),
             git: None,
             open_files: Vec::new(),
@@ -191,6 +195,13 @@ impl AppState {
             }
             CoreUpdate::Providers(providers) => {
                 self.providers = providers;
+            }
+            CoreUpdate::DiffLoaded {
+                rel_path,
+                before,
+                after,
+            } => {
+                self.diff = Some((rel_path, crate::diff::line_diff(&before, &after)));
             }
             CoreUpdate::Skills(skills) => {
                 self.skills = skills;
