@@ -46,6 +46,8 @@ pub enum CoreUpdate {
     LogTail { name: String, lines: Vec<String> },
     /// 权限规则读完了（全局层的 allow / deny）。
     Permissions { allow: Vec<String>, deny: Vec<String> },
+    /// 注册表里还活着的后台任务。
+    LiveTasks(Vec<crate::state::LiveTask>),
     /// 运行模式改好了。
     RunModeChanged(agent_core::run_mode::RunMode),
     /// 全局设置读完了。
@@ -418,6 +420,37 @@ impl Core {
             // 新的在前，与消息流的阅读方向一致。
             runs.reverse();
             this.emit(CoreUpdate::Edits(runs));
+        });
+    }
+
+    /// 读这个会话在**本进程**注册表里的活后台任务。
+    ///
+    /// 注册表是进程内的：gpui 自己跑 run，所以这里看到的就是它自己起的那些。
+    /// 别的 surface（Desktop / heb）起的后台任务在它们各自进程里，这边看不到——
+    /// 这是 in-process 架构的既有边界（架构 §7.5），不是这里漏读了。
+    pub fn refresh_live_tasks(&self, session_id: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let registry = agent_core::tools::background::registry_for_session(&session_id);
+            let tasks = registry
+                .list()
+                .into_iter()
+                .filter(|shell| shell.is_background())
+                .map(|shell| {
+                    use agent_core::tools::background::ShellState;
+                    let state = shell.state();
+                    crate::state::LiveTask {
+                        task_id: shell.task_id.clone(),
+                        command: shell.command.clone(),
+                        running: matches!(state, ShellState::Running),
+                        exit_code: match state {
+                            ShellState::Exited { code } => code,
+                            _ => None,
+                        },
+                    }
+                })
+                .collect();
+            this.emit(CoreUpdate::LiveTasks(tasks));
         });
     }
 

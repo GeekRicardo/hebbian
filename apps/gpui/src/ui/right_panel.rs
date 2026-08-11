@@ -509,12 +509,13 @@ fn diff_view(app: &HebbianApp) -> Option<impl IntoElement> {
     )
 }
 
-/// 后台任务面板。与原前端同源：从 `session.messages` 派生，跑完的任务永久保留。
-/// 实时输出与倒计时要 join 运行期注册表，gpui 侧还没暴露那个接口，所以这里只有历史与状态。
+/// 后台任务面板。与原前端同源：历史从 `session.messages` 派生（跑完的永久保留），
+/// 再用本进程注册表 join 出「还在跑」的实时状态。
 fn tasks_panel(app: &HebbianApp) -> impl IntoElement {
     let theme = app.theme.clone();
     let tasks = crate::state::derive_background_tasks(&app.state.messages);
-    if tasks.is_empty() {
+    let live = &app.state.live_tasks;
+    if tasks.is_empty() && live.is_empty() {
         return div()
             .p(px(14.))
             .text_size(px(12.))
@@ -530,6 +531,47 @@ fn tasks_panel(app: &HebbianApp) -> impl IntoElement {
         .overflow_y_scroll()
         .px(px(12.))
         .py(px(6.));
+
+    // 注册表里还活着的排在最前——它们是此刻正在发生的事。
+    for t in live {
+        list = list.child(
+            v_flex()
+                .py(px(6.))
+                .gap(px(3.))
+                .border_b_1()
+                .border_color(theme.line)
+                .child(
+                    h_flex()
+                        .gap(px(6.))
+                        .text_size(px(11.))
+                        .text_color(theme.faint)
+                        .child(Icon::Terminal.el(px(11.), theme.faint))
+                        .child("命令")
+                        .child(
+                            div()
+                                .text_color(if t.running { theme.accent } else { theme.green })
+                                .child(if t.running {
+                                    "运行中".to_string()
+                                } else {
+                                    match t.exit_code {
+                                        Some(0) | None => "已结束".to_string(),
+                                        Some(code) => format!("退出码 {code}"),
+                                    }
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .font_family("monospace")
+                        .text_size(px(11.))
+                        .text_color(theme.muted)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(t.command.clone()),
+                ),
+        );
+    }
 
     for task in &tasks {
         use crate::state::BackgroundKind;
@@ -1146,6 +1188,13 @@ fn rail(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
                         this.right_collapsed = false;
                         if item == Workbench::Terminal {
                             this.ensure_terminal(cx);
+                        }
+                        // 活任务只在切进来时读一次——注册表是进程内内存，
+                        // 每帧都读会在没有后台任务时白白抢锁。
+                        if item == Workbench::Tasks {
+                            if let Some(id) = this.state.current_id().map(str::to_string) {
+                                this.state.core.refresh_live_tasks(id);
+                            }
                         }
                     }
                     cx.notify();

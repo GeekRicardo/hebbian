@@ -120,6 +120,9 @@ pub struct AppState {
     /// 当前会话的运行模式。切会话时从 session 读，切模式时即时更新。
     pub run_mode: agent_core::run_mode::RunMode,
 
+    /// 注册表里还活着的后台任务。每次渲染后台面板时现读，不缓存。
+    pub live_tasks: Vec<LiveTask>,
+
     /// 这个会话改过的文件（按 run 分组，新的在前）。
     pub edits: Vec<agent_core::edits::metadata::RunEditEntry>,
     /// 从这个会话分叉出去的旁支。
@@ -176,6 +179,7 @@ impl AppState {
             file_baselines: HashMap::new(),
             open_files: Vec::new(),
             active_file: None,
+            live_tasks: Vec::new(),
             run_mode: agent_core::run_mode::RunMode::Default,
             edits: Vec::new(),
             branches: Vec::new(),
@@ -252,6 +256,9 @@ impl AppState {
             CoreUpdate::Permissions { allow, deny } => {
                 self.perm_allow = allow;
                 self.perm_deny = deny;
+            }
+            CoreUpdate::LiveTasks(tasks) => {
+                self.live_tasks = tasks;
             }
             CoreUpdate::RunModeChanged(mode) => {
                 self.run_mode = mode;
@@ -434,6 +441,16 @@ pub enum BackgroundKind {
     Bash,
     Cron,
     Subagent,
+}
+
+/// 注册表里还活着的后台任务（运行中的实时状态）。
+/// transcript 派生只知道「有没有 result」，活的输出与真实退出码要从注册表拿。
+#[derive(Debug, Clone)]
+pub struct LiveTask {
+    pub task_id: String,
+    pub command: String,
+    pub running: bool,
+    pub exit_code: Option<i32>,
 }
 
 /// 从消息里挑出后台任务。
