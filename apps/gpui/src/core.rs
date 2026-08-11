@@ -40,6 +40,8 @@ pub enum CoreUpdate {
     Settings(Box<agent_core::storage::settings::Settings>),
     /// 供应商列表刷新完成（模型选择器用）。
     Providers(Vec<model_gateway::config::Provider>),
+    /// git 状态读完了。`None` 表示这个目录不是 git 仓库。
+    GitStatus(Option<Box<agent_core::git_scm::GitProjectStatus>>),
     /// 某个文件读完了（编辑区打开）。
     FileLoaded { path: PathBuf, text: String },
     /// 某个目录读完了（文件树按需展开）。
@@ -153,6 +155,18 @@ impl Core {
             match this.local_client().list_providers() {
                 Ok(file) => this.emit(CoreUpdate::Providers(file.providers)),
                 Err(err) => this.emit_err(err),
+            }
+        });
+    }
+
+    /// 读一次工作目录的 git 状态。不是仓库不算错——很多对话的目录本来就没进 git，
+    /// 这种情况回 None 让面板显示「不是 git 仓库」，而不是弹一条报错。
+    pub fn refresh_git(&self, workdir: PathBuf) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            match agent_core::git_scm::status(&workdir) {
+                Ok(status) => this.emit(CoreUpdate::GitStatus(Some(Box::new(status)))),
+                Err(_) => this.emit(CoreUpdate::GitStatus(None)),
             }
         });
     }

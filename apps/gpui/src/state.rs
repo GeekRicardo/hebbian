@@ -88,6 +88,9 @@ pub struct AppState {
     pub search_regex: bool,
     pub collapsed: HashSet<String>,
 
+    /// 工作目录的 git 状态。`None` = 还没读或不是仓库。
+    pub git: Option<agent_core::git_scm::GitProjectStatus>,
+
     /// 编辑区当前打开的文件（路径 + 正文）。
     pub open_file: Option<(PathBuf, String)>,
 
@@ -128,6 +131,7 @@ impl AppState {
             search_case: false,
             search_regex: false,
             collapsed: HashSet::new(),
+            git: None,
             open_file: None,
             todos: Vec::new(),
             expanded_parts: HashSet::new(),
@@ -167,7 +171,8 @@ impl AppState {
                 self.todos.clear();
                 if let Some(workdir) = session.workdir.clone() {
                     self.expanded_dirs.insert(workdir.clone());
-                    self.core.list_dir(workdir);
+                    self.core.list_dir(workdir.clone());
+                    self.core.refresh_git(workdir);
                 }
                 self.current = Some(session);
             }
@@ -179,6 +184,9 @@ impl AppState {
             }
             CoreUpdate::Providers(providers) => {
                 self.providers = providers;
+            }
+            CoreUpdate::GitStatus(status) => {
+                self.git = status.map(|s| *s);
             }
             CoreUpdate::FileLoaded { path, text } => {
                 self.open_file = Some((path, text));

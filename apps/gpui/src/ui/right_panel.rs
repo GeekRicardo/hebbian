@@ -138,6 +138,7 @@ fn panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
         .child(match app.workbench {
             Workbench::Files => file_panel(app, cx, workdir).into_any_element(),
             Workbench::Todo => todo_panel(app).into_any_element(),
+            Workbench::Git => git_panel(app).into_any_element(),
             other => empty_panel(app, other).into_any_element(),
         })
 }
@@ -244,6 +245,94 @@ fn todo_panel(app: &HebbianApp) -> impl IntoElement {
                         .text_ellipsis()
                         .whitespace_nowrap()
                         .child(text),
+                ),
+        );
+    }
+    list.into_any_element()
+}
+
+/// Git 面板：分支 + 改动文件清单。状态字符按 porcelain 原样显示，
+/// 未跟踪用问号、已暂存走强调色，与命令行里看到的对得上。
+fn git_panel(app: &HebbianApp) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let Some(git) = app.state.git.as_ref() else {
+        return div()
+            .p(px(14.))
+            .text_size(px(12.))
+            .text_color(theme.muted)
+            .child("这个目录不是 git 仓库")
+            .into_any_element();
+    };
+
+    let mut list = v_flex()
+        .id("git-list")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .px(px(12.))
+        .child(
+            h_flex()
+                .py(px(8.))
+                .gap(px(6.))
+                .text_size(px(12.))
+                .text_color(theme.text)
+                .child(Icon::GitBranch.el(px(13.), theme.accent))
+                .child(git.branch.clone())
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(theme.faint)
+                        .child(format!("{} 处改动", git.files.len())),
+                ),
+        );
+
+    if git.files.is_empty() {
+        return list
+            .child(
+                div()
+                    .py(px(8.))
+                    .text_size(px(12.))
+                    .text_color(theme.muted)
+                    .child("工作区是干净的"),
+            )
+            .into_any_element();
+    }
+
+    for file in &git.files {
+        let mark = if file.untracked {
+            "?".to_string()
+        } else if file.staged {
+            file.x.clone()
+        } else {
+            file.y.clone()
+        };
+        list = list.child(
+            h_flex()
+                .py(px(5.))
+                .gap(px(8.))
+                .text_size(px(12.))
+                .child(
+                    div()
+                        .w(px(12.))
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(if file.untracked {
+                            theme.faint
+                        } else if file.staged {
+                            theme.green
+                        } else {
+                            theme.amber
+                        })
+                        .child(mark),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_color(theme.muted)
+                        .child(file.path.clone()),
                 ),
         );
     }
