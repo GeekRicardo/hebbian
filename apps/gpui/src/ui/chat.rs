@@ -498,7 +498,8 @@ fn tool_card(
     let theme = app.theme.clone();
     let expanded = app.state.expanded_parts.contains(key);
     let key_owned = key.to_string();
-    let action = crate::tool_label::action_label(name);
+    // 卡片头是三段：工具名（粗）+ 这次在做什么 + 作用对象（等宽）。
+    let description = crate::tool_label::call_description(name, input);
     let summary = crate::tool_label::call_summary(name, input);
     let duration = match duration_ms {
         Some(ms) if ms >= 1000 => format!("{:.1}s", ms as f64 / 1000.),
@@ -531,9 +532,16 @@ fn tool_card(
                 )
                 .child(
                     div()
+                        .flex_none()
                         .font_weight(gpui::FontWeight(600.))
                         .text_color(theme.text)
-                        .child(action),
+                        .child(name.to_string()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(theme.muted)
+                        .child(description),
                 )
                 .child(
                     div()
@@ -542,7 +550,9 @@ fn tool_card(
                         .overflow_hidden()
                         .text_ellipsis()
                         .whitespace_nowrap()
-                        .text_color(theme.muted)
+                        .font_family("monospace")
+                        .text_size(px(11.))
+                        .text_color(theme.text)
                         .child(summary),
                 )
                 .child(div().text_size(px(11.)).text_color(theme.faint).child(duration))
@@ -662,6 +672,8 @@ fn meta_row(
     let stamp = crate::state::format_message_time(message.created_at, now_ms());
     let content = message.content.clone();
     let fork_id = message.id.clone();
+    let edit_id = message.id.clone();
+    let regen_id = message.id.clone();
 
     h_flex()
         .mt(px(8.))
@@ -718,12 +730,10 @@ fn meta_row(
                     "编辑",
                     theme.clone(),
                 )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    // 编辑要把消息塞回输入框、截断其后历史再重跑，
-                    // 截断那步 core 里还没暴露入口，先说清楚而不是假装能点。
-                    this.state.error =
-                        Some("「编辑后重跑」还没接上，可以先复制内容手动重发".to_string());
-                    cx.notify();
+                .on_click(cx.listener(move |this, _, _, _| {
+                    if let Some(sid) = this.state.current_id().map(str::to_string) {
+                        this.state.core.edit_message(sid, edit_id.clone());
+                    }
                 })),
             )
         })
@@ -734,9 +744,10 @@ fn meta_row(
                 "重新生成",
                 theme,
             )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.state.error = Some("「重新生成」还没接上".to_string());
-                cx.notify();
+            .on_click(cx.listener(move |this, _, _, _| {
+                if let Some(sid) = this.state.current_id().map(str::to_string) {
+                    this.state.core.regenerate(sid, regen_id.clone(), is_user);
+                }
             })),
         )
 }

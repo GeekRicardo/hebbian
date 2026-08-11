@@ -12179,3 +12179,15 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **改动**: `apps/gpui/src/ui/chat.rs` 按条件分流两种空态；新增 `no_session_state`，两个按钮都接真动作（新建对话 → `create_session`；供应商配置 → 打开设置并直接切到「供应商」页）。
 - **影响范围**: 仅 `apps/gpui`。32 条单测通过。
 - **验证**: 不带 `HEBBIAN_GPUI_OPEN` 启动 → 出现渐变方块 + 标题 + 说明 + 两个按钮；点「供应商配置」→ 设置面板打开且停在「供应商」页。
+
+### 2026-08-11 — 接上「编辑后重跑 / 重新生成」；工具卡片头改成三段（我又漏了一层）
+
+- **编辑 / 重新生成**：之前给的是「还没接上」提示。其实 core 里两块拼图都有——`sessions::truncate_after` / `truncate_inclusive` 砍历史，`TurnInput::with_continue_run(true)` 不追加用户消息直接续跑。所以不需要新增 core 入口：
+  - 助手消息「重新生成」→ `truncate_inclusive`（砍掉它及其之后）→ 以最后一条用户消息为末尾续跑；
+  - 用户消息「重新生成」→ `truncate_after`（只砍它之后）→ 用同样内容重跑；
+  - 用户消息「编辑」→ 取回原文 + `truncate_inclusive` → 原文填回输入框，用户改完再发。
+  - **顺序很重要**：先砍盘、把新历史推给 UI，再起 run；反过来会把刚生成的新回复也砍掉。
+- **工具卡片头**：我又漏了一层。原前端是**三段**——`工具名`（粗）+ `callDescription` + `callSummary`（等宽）。而 `callDescription` **优先用模型自己在入参里写的 `description`**（Bash 推荐带一句简短意图，比通用动词具体得多），没有才回退到动作名。我上一版把工具名换成了动作名、丢掉了 description 这一层。现在三段齐全。
+- **影响范围**: 仅 `apps/gpui`。新增 1 条单测（description 优先于动作名），共 33 条通过。
+- **验证**: 点「编辑」→ 原文回到输入框、该消息及其后历史被砍（消息数 5→0，因为它是首条）；工具卡片显示「Bash 查看编译产物占用 `du -sh target/`」「Read 读取文件 `fingerprint_manager.cc:120`」。
+- **留尾巴**: 「重新生成」起 run 这条路径本机没有可用模型，只验到砍历史 + 发起 run，真实重跑需在有 provider 的环境复核。

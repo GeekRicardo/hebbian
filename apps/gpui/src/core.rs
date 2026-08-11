@@ -72,6 +72,8 @@ pub enum CoreUpdate {
     Skills(Vec<agent_core::tools::skill::Skill>),
     /// git 状态读完了。`None` 表示这个目录不是 git 仓库。
     GitStatus(Option<Box<agent_core::git_scm::GitProjectStatus>>),
+    /// 「编辑后重跑」把原文交回来，填进输入框。
+    EditDraft(String),
     /// 某个文件存好了，附上落盘的内容（用来更新「有没有未保存改动」的基线）。
     FileSaved { path: PathBuf, text: String },
     /// 某个文件读完了（编辑区打开）。
@@ -197,6 +199,93 @@ impl Core {
             match this.local_client().list_providers() {
                 Ok(file) => this.emit(CoreUpdate::Providers(file.providers)),
                 Err(err) => this.emit_err(err),
+            }
+        });
+    }
+
+    /// 重新生成：把这条消息之后（含它自己，若是助手消息）的历史砍掉，再让模型重跑一遍。
+    ///
+    /// - 助手消息：砍掉它及其之后 → 以最后一条用户消息为末尾续跑；
+    /// - 用户消息：只砍它之后 → 用同样内容重跑（原 UI 的「用同样内容重跑」）。
+    ///
+    /// **这会永久删掉那之后的历史**，所以先砍盘再起 run，顺序反了会把新回复也砍掉。
+    pub fn regenerate(&self, session_id: String, message_id: String, is_user: bool) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let truncated = if is_user {
+                agent_core::storage::sessions::truncate_after(
+                    &this.inner.data_dir,
+                    &session_id,
+                    &message_id,
+                )
+            } else {
+                agent_core::storage::sessions::truncate_inclusive(
+                    &this.inner.data_dir,
+                    &session_id,
+                    &message_id,
+                )
+            };
+            if let Err(err) = truncated {
+                return this.emit_err(err);
+            }
+            // 砍完先把新历史推给 UI，再起 run——否则界面上还留着已经删掉的消息。
+            this.open_session(session_id.clone());
+            this.run_continue(session_id);
+        });
+    }
+
+    /// 编辑后重跑：把这条用户消息连同其后历史砍掉，正文交回 UI 填进输入框。
+    pub fn edit_message(&self, session_id: String, message_id: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let text = agent_core::storage::sessions::load(&this.inner.data_dir, &session_id)
+                .ok()
+                .and_then(|s| {
+                    s.messages
+                        .iter()
+                        .find(|m| m.id == message_id)
+                        .map(|m| m.content.clone())
+                })
+                .unwrap_or_default();
+            if let Err(err) = agent_core::storage::sessions::truncate_inclusive(
+                &this.inner.data_dir,
+                &session_id,
+                &message_id,
+            ) {
+                return this.emit_err(err);
+            }
+            this.open_session(session_id);
+            this.emit(CoreUpdate::EditDraft(text));
+        });
+    }
+
+    /// 不追加用户消息、直接续跑一轮（重新生成用）。
+    fn run_continue(&self, session_id: String) {
+        let this = self.clone();
+        self.inner.rt.spawn(async move {
+            let runtime = match this
+                .inner
+                .runtimes
+                .ensure(
+                    &this.inner.data_dir,
+                    this.inner.permission_store.clone(),
+                    &session_id,
+                )
+                .await
+            {
+                Ok(runtime) => runtime,
+                Err(err) => return this.emit_err(err),
+            };
+            this.subscribe(session_id.clone());
+            let input = TurnInput::text(String::new()).with_continue_run(true);
+            if runtime.is_active() {
+                if !runtime.inject(input) {
+                    this.emit_err("当前对话正在运行，插不进去");
+                }
+                return;
+            }
+            if runtime.input_tx.send(input).is_err() {
+                this.emit_err("运行通道已关闭");
             }
         });
     }

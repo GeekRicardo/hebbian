@@ -57,6 +57,17 @@ pub fn action_label(name: &str) -> &'static str {
     }
 }
 
+/// 卡片中段那句「在做什么」。
+///
+/// **模型自己在入参里写的 `description` 优先**（Bash 的推荐用法就是带一句简短意图，
+/// 比通用动词具体得多），没有才回退到 [`action_label`]。这一层我第一版整个漏了。
+pub fn call_description(name: &str, input: &Value) -> String {
+    if let Some(desc) = arg(input, "description") {
+        return desc.to_string();
+    }
+    action_label(name).to_string()
+}
+
 /// 这次调用「作用在什么上」——动作名后面那截摘要。
 pub fn call_summary(name: &str, input: &Value) -> String {
     if is_shell_command_tool(name) {
@@ -181,6 +192,18 @@ mod tests {
             "f"
         );
         assert_eq!(call_summary("MysteryTool", &json!({})), "自定义工具调用");
+    }
+
+    #[test]
+    fn description_prefers_model_written_intent() {
+        // 模型写了 description 就用它，而不是通用的「运行命令」
+        let input = json!({"command": "du -sh target/", "description": "查看编译产物占用"});
+        assert_eq!(call_description("Bash", &input), "查看编译产物占用");
+        // 没写才回退到动作名
+        assert_eq!(
+            call_description("Bash", &json!({"command": "ls"})),
+            "运行命令"
+        );
     }
 
     /// 空串入参要当作「没有」，否则卡片上会出现一段空白摘要。

@@ -542,6 +542,10 @@ impl Focusable for HebbianApp {
 
 impl Render for HebbianApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 「编辑后重跑」取回的原文也在这里落进输入框。
+        if let Some(text) = self.state.edit_draft.take() {
+            self.pending_composer_text = Some(text);
+        }
         // 异步回调攒下来的输入框文本在这里落地——那边没有 Window 可用。
         if let Some(text) = self.pending_composer_text.take() {
             self.composer

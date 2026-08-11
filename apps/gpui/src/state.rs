@@ -144,6 +144,9 @@ pub struct AppState {
     /// 展开着的目录。
     pub expanded_dirs: HashSet<PathBuf>,
 
+    /// 「编辑后重跑」待填进输入框的原文。
+    pub edit_draft: Option<String>,
+
     /// 刚保存了哪个文件（编辑区状态条上一闪而过的提示）。
     pub saved_notice: Option<String>,
 
@@ -192,6 +195,7 @@ impl AppState {
             expanded_parts: HashSet::new(),
             dirs: HashMap::new(),
             expanded_dirs: HashSet::new(),
+            edit_draft: None,
             saved_notice: None,
             error: None,
         }
@@ -298,6 +302,9 @@ impl AppState {
             }
             CoreUpdate::GitStatus(status) => {
                 self.git = status.map(|s| *s);
+            }
+            CoreUpdate::EditDraft(text) => {
+                self.edit_draft = Some(text);
             }
             CoreUpdate::FileSaved { path, text } => {
                 // 保存成功后基线跟着走，圆点随之消失。
