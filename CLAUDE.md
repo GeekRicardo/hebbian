@@ -123,9 +123,12 @@
 
 ```bash
 # Rust 编译
-cargo check --workspace
+cargo check --workspace          # 注意：**不含 apps/gpui**，它自成一个 workspace
 cargo check -p agent-core --tests
 cargo test -p agent-core --lib
+
+# gpui surface 单独跑（在它自己的 workspace 里）
+cd apps/gpui && cargo check && cargo test && cd -
 
 # TS 类型检查
 pnpm exec tsc --noEmit
@@ -177,6 +180,9 @@ pnpm tauri dev                                   # Desktop GUI
 ```bash
 # 启动 Desktop（GUI surface）
 pnpm tauri dev
+
+# 启动 gpui surface（原生 GUI，不走 WebView）
+cd apps/gpui && cargo run && cd -
 
 # 启动 heb CLI daemon（AI 脚本化调试 surface，2026-05-20 changelog）
 cargo build -p hebbian-cli

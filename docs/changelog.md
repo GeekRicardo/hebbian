@@ -12365,3 +12365,82 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 **留尾巴**：
 - 预览只渲染消息正文，不复刻聊天区那整套工具卡片。这里要回答的问题只有「是不是我要找的那段对话」，堆细节反而更难扫——有意为之，不算缺口
 - 浮窗现在只能靠「点别处」关闭，鼠标飘走不会自动收。要做到原前端那样「移开一会儿自己收」，得先解决 `deferred` 元素收不到 `on_hover` 的问题
+
+---
+
+## 2026-08-11 — 修回 desktop 编译（我自己弄坏的）：apps/gpui 拆成独立 workspace
+
+**Why**：这条要先更正我之前的说法。
+
+前几条 changelog 与交付说明里，我把 `apps/desktop` 在 Linux 上编不过（`tauri-runtime-wry` 的 E0046/E0277）称作「既有问题、与本次改动无关」。**这是错的**——去 `main` 上实测：`cargo check -p tauri-runtime-wry` 在 main 上是**通过**的，解析到 2.11.2；在 gpui 分支上解析到 2.9.3 才编不过。是我引入的回归。
+
+根因链条：
+1. `gpui-component` 的 webview 功能依赖 `lb-wry 0.53.3`，它把 `webkit2gtk` **精确钉死**在 `=2.0.1`
+2. 打过补丁的 `tauri 2.11.2` → `tauri-runtime-wry 2.11.2` → `wry 0.55` 把 `webkit2gtk` 精确钉在 `=2.0.2`
+3. 两个精确版本没法共存。放在同一个 workspace 里，cargo 为了凑出一个可解的图，**悄悄把 tauri 降到 registry 的 2.9.5**
+4. 一降版本，根 `Cargo.toml` 里 `[patch.crates-io] tauri = { git = "…tauri-fork" }` 就不再命中——cargo 只给一句 `warning: patch 'tauri v2.11.2 (…)' was not used in the crate graph`
+5. 那句 warning 我在好几轮 `cargo check` 输出里都看见了，一直当成噪音略过。**它才是真正的报错**
+
+**改动**：
+- 根 `Cargo.toml`：把 `apps/gpui` 从 members 里摘出去，并在文件顶部写清为什么
+- `apps/gpui/Cargo.toml`：加空 `[workspace]`，自成一个 workspace（新增 `apps/gpui/Cargo.lock`）
+- 根 `Cargo.lock`：`cargo update -p tauri@2.9.5 --precise 2.11.2` 把 tauri 抬回 fork
+- `CLAUDE.md`：验证命令与启动命令补上 gpui 那条——`cargo check --workspace` 从此**覆盖不到** gpui，得单独进 `apps/gpui` 跑
+
+**验证**：
+- `cargo check -p tauri-runtime-wry`：修前 E0046 + E0277，修后通过
+- `cargo check --workspace --exclude hebbian`：0 error
+- `cd apps/gpui && cargo test`：40 passed
+- `cargo check -p hebbian`：仍失败，但换成了另一个错——`resource path '../island-mac/dist/HebIsland.app' doesn't exist`。这条在 main 上**一模一样**地失败，是 macOS 专属打包资源在 Linux 上缺失，与本分支无关（这次是去 main 上跑过才敢这么说）
+
+**代价**：两个 workspace = 两份 Cargo.lock、两次编译缓存，CI 要跑两条命令。换来的是两条依赖链各自解各自的，互不牵连——考虑到 gpui 的最终目标就是把 Tauri 换掉，这两条链本来也不该纠缠在一起。
+
+**留尾巴**：等 desktop 真正退场时，根 workspace 的 tauri patch 与这条注释可以一起删掉。
+
+---
+
+## 2026-08-11 — gpui surface：后台任务面板按原版重做，预览补工具卡片与体量封顶
+
+**Why**：逐行比对 `BackgroundTaskPanel.tsx` 与 `backgroundTasks.ts`，发现我那版不只是「少几个按钮」，**派生规则本身就是错的**：
+
+1. **前台跑超时转后台的任务整个漏掉**。原版判定是「显式 `run_in_background`　**或**　结果里解析得出任务编号」；我只判了前者。而恰恰是跑太久被转后台的那种任务最该盯着
+2. **任务编号解析太糙**。我只找一对方括号，任何 `[xxx]` 开头的结果都会被当成编号；原版限定 `bash_` + 数字，还认旧版 `task_id=bash_001` 写法。假编号拿去和注册表比对会把一条毫不相干的活任务顶掉
+3. **定时唤醒没有倒计时**。原版按 reason 去 scheduler 的待唤醒表里查：查得到用精确触发时刻，查不到用「调用时刻 + 延时」倒推
+4. **子任务判定错**。原版要求结果里解析得出 `subagent-*` 编号，完成与否看有没有收到 `bg_task_finished` 系统通知；我用的是「有没有 result」
+5. **卡片长得也不一样**：原版是状态点 + 编号 + 已跑秒数 + 状态徽章 + 展开箭头，命令按类型加 `$ ` / `⏰ ` / `🤖 ` 前缀，输出区是深底浅字；点整行还会**跳到聊天区对应的那张工具卡片**并展开高亮
+
+**改动**：
+- `apps/gpui/src/state.rs`：`derive_background_tasks` 按原版重写，改成吃 `(messages, live_shells, pending_crons)` 三份输入，输出统一形状的卡片列表；`BackgroundTask` 加 `tool_call_id` / `result` / `elapsed_secs` / `cron`
+- `apps/gpui/src/ui/right_panel.rs`：卡片按原版重画，三种任务各有自己的展开区
+- `apps/gpui/src/ui/{mod,chat}.rs`：点卡片跳到聊天区那次工具调用——展开它、滚过去、描一圈重色闪 1.6 秒
+- `apps/gpui/src/core.rs`：轮询间隔 1000ms → 600ms（与原版同频）；`LiveTasks` 事件顺带把待唤醒的定时任务一起带回来
+
+**这轮修掉的三个自己写出来的 bug**：
+1. **卡片一展开就自己收起来**。展开态按 tool_call_id 记（定时唤醒没有 task_id），而轮询回来的输出是按 task_id 存的，两者混在同一个字段里，每轮刷新都把展开态覆盖掉
+2. **跳转跳不动**。我按「消息 id + 序号」拼 key 去展开目标卡片，但同一条消息在流式和落盘两条渲染路径下序号规则不同，跨路径拼不出同一个 key。改成按调用 id 记
+3. **预览大对话直接把界面卡死**。点一段 1190 条消息的真实对话后 CPU 一直吃着、几十秒出不来。分析下来解析只花 345ms，全在渲染：既有条数问题，也有单条几十 KB 的问题（贴日志、贴整份文件）。现在头 8 条 + 尾 24 条、单条正文 600 字、每条最多 3 张工具卡片封顶，中间显示「略过 N 条」
+
+**另外**：预览现在会画工具卡片了（之前只画正文）。一段「读了五个文件再改了两处」的对话，只看正文会缩成一句「我看看」，根本认不出是不是要找的那段。
+
+**回归测试**（`cd apps/gpui && cargo test`，40 passed）：新增 7 条覆盖上面每条派生规则——转后台任务要认出来、两种编号写法都要认、`[nope]` / `[bash_]` 这类不许瞎解析、注册表状态压过工具结果、注册表独有的任务也要列、定时唤醒待唤醒/已唤醒两种时刻来源、运行中的排前面。
+
+**怎么验的**：真起一个后台任务（`MOCK_TOOL=bg`）跑完整条链路——卡片显示 `bash_001` + 已跑秒数 + 琥珀底；展开出深色输出区与「停止」；点卡片后聊天区那张 Bash 工具卡确实展开并描了重色边框；不碰鼠标输出自己从 tick 9 走到 tick 12。
+
+**留尾巴**：预览封顶是我加的取舍，原版不封顶（浏览器里能扛住）。软件渲染（lavapipe）下即使封顶后，超大对话的预览仍要几秒才出得来，真机上应该快得多。
+
+---
+
+## 2026-08-11 — gpui surface：悬停浮窗改成「延时关闭 + 进浮窗续命」，并更正上一条的结论
+
+**Why**：上一条我写的是「浮窗是 `deferred` 画的，挂在它上面的 `on_hover` 根本不触发」，因此只能靠「点别处才收」。**这个结论是错的**——加了一个探针实测，`deferred` 元素的 `on_hover` 进和出都会触发：
+
+```
+WARN HOVERPROBE popup shell hovered=true
+WARN HOVERPROBE popup shell hovered=false
+```
+
+真正的原因是**事件顺序不定**：鼠标从锚点挪到浮窗时，「离开锚点」和「进入浮窗」是同一帧里的两个事件，谁先到不一定。要是「进入浮窗」先到，它作废掉的是上一次的关闭；随后「离开锚点」再排一个新的关闭，就没人管得住了——于是浮窗时好时坏地在 260ms 后消失。之前测三次恰好都成功，就误判成「`on_hover` 不触发」。
+
+**改动**：`apps/gpui/src/ui/mod.rs` 恢复原前端的行为——离开锚点后延时 260ms 关闭，期间鼠标进了浮窗就作废。判据用两个：一个递增的「这次悬停」编号（管换锚点），加一个「鼠标是不是正停在浮窗上」的布尔量（管事件顺序）。**只有编号不够**，那正是上面那个顺序问题。
+
+**验证**：连做三轮「移开 → 悬停锚点 → 挪到浮窗」，三轮浮窗都还在（r1/r2/r3.png）；点它能打开弹窗；鼠标飘走后自动收起（hv2.png）。中文搜索也用剪贴板粘贴验过了——粘「当前项目」精确筛出 agent-terminal 组那一条，之前说的「只验了 ASCII」纯粹是 xdotool 送不进 CJK，不是应用的问题。

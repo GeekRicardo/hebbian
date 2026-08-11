@@ -67,6 +67,19 @@ pub struct HebbianApp {
     /// 悬停浮窗当前挂在哪个锚点上。与原前端一样是「悬停浮出」而不是「点开菜单」：
     /// 它只有一个按钮，为一个按钮多要一次点击不值当。
     pub hover_popup: Option<HoverPopup>,
+    /// 「这一次悬停」的编号。鼠标离开锚点时不立刻收，而是排一个延时关闭并记下当时的
+    /// 编号；这期间只要鼠标进了浮窗（或换了个锚点），编号一变，延时任务醒来发现
+    /// 对不上就什么都不做。
+    ///
+    /// 这段延时是必须的：鼠标从锚点挪到浮窗要跨过几像素间隙，一离开锚点就收的话
+    /// 浮窗在半路就没了，那个按钮肉眼看着在、就是点不到。
+    hover_popup_gen: u64,
+    /// 鼠标此刻是不是停在浮窗上。
+    ///
+    /// 只靠上面那个编号不够：离开锚点和进入浮窗是同一帧里的两个事件，**先后顺序不定**。
+    /// 要是「进入浮窗」先到、「离开锚点」后到，后者排下的关闭就没人作废得了，
+    /// 浮窗照样在 260ms 后消失（实测就是这样时好时坏）。所以最终判据是这个布尔量。
+    hover_popup_over: bool,
 
     /// 「从 Claude 导入」弹窗是否打开，以及限定导进哪个项目。
     pub import_claude_open: bool,
@@ -115,6 +128,9 @@ pub struct HebbianApp {
     /// 下一帧要写进输入框的文本。异步回调里拿不到 `Window`，
     /// 所以先存起来，render 时再写进去。
     pub pending_composer_text: Option<String>,
+
+    /// 聊天区消息列表的滚动句柄。「跳到这次工具调用」要用它把对应消息滚进视野。
+    pub messages_scroll: gpui::ScrollHandle,
 
     pub composer: Entity<InputState>,
     pub search: Entity<InputState>,
@@ -293,6 +309,8 @@ impl HebbianApp {
             terminal_focus: cx.focus_handle(),
             prefs,
             hover_popup: None,
+            hover_popup_gen: 0,
+            hover_popup_over: false,
             import_claude_open: false,
             import_claude_project: None,
             claude_search,
@@ -316,6 +334,7 @@ impl HebbianApp {
             right_width: right_panel::DEFAULT_WIDTH,
             editors: std::collections::HashMap::new(),
             pending_composer_text: None,
+            messages_scroll: gpui::ScrollHandle::new(),
             composer,
             search,
             focus: cx.focus_handle(),
@@ -409,14 +428,79 @@ impl HebbianApp {
         crate::prefs::save(self.state.core.data_dir(), &self.prefs);
     }
 
-    /// 悬停到锚点就显示浮窗；换一个锚点就换一个浮窗。
-    ///
-    /// **离开锚点时不收**，收的时机交给浮窗自己的 `on_mouse_down_out`（点别处才收）。
-    /// 试过「离开锚点后延时 220ms 再收」：不行——浮窗是 `deferred` 画的，
-    /// 挂在它上面的 `on_hover` 根本不触发，没法在鼠标挪进来时续命，
-    /// 于是浮窗总在半路消失，那个按钮肉眼看着在、就是点不到。
+    /// 悬停到锚点就显示浮窗；换一个锚点就换一个浮窗。顺带作废在排队的延时关闭。
     pub fn open_hover_popup(&mut self, popup: HoverPopup) {
         self.hover_popup = Some(popup);
+        self.hover_popup_over = false;
+        self.keep_hover_popup();
+    }
+
+    /// 鼠标进了浮窗：让在排队的延时关闭作废。
+    pub fn keep_hover_popup(&mut self) {
+        self.hover_popup_gen = self.hover_popup_gen.wrapping_add(1);
+    }
+
+    /// 记录鼠标是不是在浮窗上。
+    pub fn set_hover_popup_over(&mut self, over: bool) {
+        self.hover_popup_over = over;
+    }
+
+    /// 鼠标离开锚点或浮窗：排一个延时关闭，给「挪到浮窗上」留出时间。
+    pub fn schedule_hover_close(&mut self, cx: &mut Context<Self>) {
+        self.hover_popup_gen = self.hover_popup_gen.wrapping_add(1);
+        let generation = self.hover_popup_gen;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(260))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                // 编号变了 = 这中间换了锚点；鼠标还停在浮窗上 = 用户正要去点它。
+                // 两种情况都不能关。
+                if this.hover_popup_gen == generation && !this.hover_popup_over {
+                    this.hover_popup = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// 「后台任务」面板点了某张卡片：把聊天区滚到对应的工具调用、展开它、闪一下。
+    ///
+    /// 在 render 里消费而不是在点击时做，是因为滚动要等这一帧的布局——
+    /// 点击那一刻消息还没重新排版，滚过去会落在错的位置。
+    fn consume_focus_tool_call(&mut self, cx: &mut Context<Self>) {
+        let Some(call_id) = self.state.focus_tool_call.take() else {
+            return;
+        };
+        // 占位 id（任务刚起、工具结果还没落进消息）没有可跳的目标，直接算了。
+        if call_id.starts_with("pending-") {
+            return;
+        }
+        let message_ix = self
+            .state
+            .messages
+            .iter()
+            .position(|m| m.tool_calls.iter().any(|c| c.id == call_id));
+        let Some(message_ix) = message_ix else {
+            self.state.error = Some("这次任务在当前对话里找不到对应的记录".to_string());
+            return;
+        };
+        self.state.expanded_calls.insert(call_id.clone());
+        self.state.flash_tool_call = Some(call_id);
+        self.messages_scroll.scroll_to_item(message_ix);
+
+        // 高亮只留一会儿：一直亮着就成了「选中」，会让人以为这张卡片有别的状态。
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1600))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.state.flash_tool_call = None;
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// 发起一次需要确认的破坏性操作。
@@ -640,6 +724,7 @@ impl Render for HebbianApp {
             self.pending_composer_text = Some(text);
         }
         // 异步回调攒下来的输入框文本在这里落地——那边没有 Window 可用。
+        self.consume_focus_tool_call(cx);
         if let Some(text) = self.pending_composer_text.take() {
             self.composer
                 .update(cx, |state, cx| state.set_value(text, window, cx));
@@ -696,10 +781,22 @@ pub fn hover_popup(
     };
     gpui::deferred(
         div()
+            .id("hover-popup-shell")
             .absolute()
             .left(gpui::relative(1.))
             .top(px(-4.))
+            // 这点内边距把锚点和浮窗之间的间隙填上，鼠标挪过去时不会掉到
+            // 「谁都不属于」的空隙里。
             .pl(px(8.))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                this.set_hover_popup_over(*hovered);
+                if *hovered {
+                    this.keep_hover_popup();
+                } else {
+                    this.schedule_hover_close(cx);
+                }
+                cx.notify();
+            }))
             .child(
                 div()
                     .id("hover-popup-btn")
@@ -931,35 +1028,82 @@ fn import_preview_view(
                 .child("这段对话是空的"),
         );
     }
-    for message in &preview.messages {
-        let is_user = matches!(message.role, agent_core::storage::sessions::Role::User);
-        // 预览只看正文，不复刻聊天区那一整套工具卡片：这里要回答的问题只有
-        // 「是不是我要找的那段对话」，堆细节反而更难扫。
-        let text = message.content.trim();
-        if text.is_empty() {
+    // 预览必须封顶。真实的 Claude 会话动辄上千条消息，全画出来会把 UI 线程占死——
+    // 实测一段 1190 条的对话点开后 CPU 一直吃着、界面几十秒都出不来。
+    // 头尾各留一段：开头决定「这是哪段对话」，结尾决定「进行到哪了」，
+    // 中间那截对「是不是我要找的那段」帮不上忙。
+    const HEAD: usize = 8;
+    const TAIL: usize = 24;
+    let total = preview.messages.len();
+    let omitted = total.saturating_sub(HEAD + TAIL);
+
+    for (mi, message) in preview.messages.iter().enumerate() {
+        if omitted > 0 && mi == HEAD {
+            body = body.child(
+                div()
+                    .py(px(6.))
+                    .text_size(px(10.))
+                    .text_color(theme.faint)
+                    .child(format!("…… 中间 {omitted} 条略过 ……")),
+            );
+        }
+        if omitted > 0 && mi >= HEAD && mi < HEAD + omitted {
             continue;
         }
-        body = body.child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(3.))
-                .child(
-                    div()
-                        .text_size(px(10.))
-                        .text_color(theme.faint)
-                        .child(if is_user { "我" } else { "助手" }),
-                )
-                .child(
-                    div()
-                        .p(px(8.))
-                        .rounded(px(8.))
-                        .bg(if is_user { theme.accent_soft } else { theme.surface_veil })
-                        .text_size(px(11.))
-                        .text_color(theme.text)
-                        .child(text.to_string()),
-                ),
-        );
+        let is_user = matches!(message.role, agent_core::storage::sessions::Role::User);
+        let text = message.content.trim();
+        if text.is_empty() && message.tool_calls.is_empty() {
+            continue;
+        }
+        let mut bubble = div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(theme.faint)
+                    .child(if is_user { "我" } else { "助手" }),
+            );
+        if !text.is_empty() {
+            // 单条也要封顶。真实对话里常有一条就几十 KB 的消息（贴日志、贴整份文件），
+            // 光排版这一条就够卡住一帧——限住条数还不够，还得限住每条的长度。
+            const MAX_CHARS: usize = 600;
+            let shown = if text.chars().count() > MAX_CHARS {
+                let head: String = text.chars().take(MAX_CHARS).collect();
+                format!("{head}…（这条还有更多，导入后看全文）")
+            } else {
+                text.to_string()
+            };
+            bubble = bubble.child(
+                div()
+                    .p(px(8.))
+                    .rounded(px(8.))
+                    .bg(if is_user { theme.accent_soft } else { theme.surface_veil })
+                    .text_size(px(11.))
+                    .text_color(theme.text)
+                    .child(shown),
+            );
+        }
+        // 工具调用也要画出来，用的就是聊天区那张卡片。
+        // 只显示正文的话，一段「读了五个文件再改了两处」的对话在预览里会缩成
+        // 一句「我看看」，根本认不出是不是要找的那段。
+        // 工具卡片最多画三张：一条消息里连着二十次工具调用的情况不少见，
+        // 预览没必要把它们全铺开。
+        for (ci, call) in message.tool_calls.iter().take(3).enumerate() {
+            bubble = bubble.child(crate::ui::chat::tool_card(
+                app,
+                cx,
+                &format!("preview-{mi}-{ci}"),
+                None,
+                &call.name,
+                &call.input,
+                call.result.as_deref(),
+                call.duration_ms,
+                call.is_error,
+            ));
+        }
+        body = body.child(bubble);
     }
 
     dialog_frame(

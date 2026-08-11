@@ -494,20 +494,20 @@ fn diff_view(app: &HebbianApp) -> Option<impl IntoElement> {
 }
 
 /// 后台任务面板。与原前端同源：历史从 `session.messages` 派生（跑完的永久保留），
-/// 再用本进程注册表 join 出「还在跑」的实时状态。
+/// 「后台任务」面板。一张卡片一条任务，点整行展开看详情。
+///
+/// 三种任务共用一张卡片模板，展开区各不相同：
+/// - Bash：实时输出（跑完了就直接看工具结果），运行中还给一个「停止」
+/// - 定时唤醒：原因 + 唤醒时刻 + 倒计时
+/// - 子任务：子 agent 类型 + 一句「跑完会自动回到这个对话里」
 fn tasks_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();
-    let tasks = crate::state::derive_background_tasks(&app.state.messages);
-    let live = &app.state.live_tasks;
-    let expanded_task = app.state.task_output.as_ref().map(|(id, _)| id.clone());
-    let output_text = app
-        .state
-        .task_output
-        .as_ref()
-        .map(|(_, text)| text.clone())
-        .filter(|text| !text.trim().is_empty())
-        .unwrap_or_else(|| "还没有输出".to_string());
-    if tasks.is_empty() && live.is_empty() {
+    let tasks = crate::state::derive_background_tasks(
+        &app.state.messages,
+        &app.state.live_tasks,
+        &app.state.pending_crons,
+    );
+    if tasks.is_empty() {
         return div()
             .p(px(14.))
             .text_size(px(12.))
@@ -516,205 +516,331 @@ fn tasks_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoEleme
             .into_any_element();
     }
 
+    let now_ms = now_ms();
+    let expanded_id = app.state.expanded_task.clone();
+
     let mut list = v_flex()
         .id("task-list")
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
-        .px(px(12.))
-        .py(px(6.));
-
-    // 注册表里还活着的排在最前——它们是此刻正在发生的事。
-    for t in live {
-        let task_id = t.task_id.clone();
-        list = list.child(
-            v_flex()
-                .py(px(6.))
-                .gap(px(3.))
-                .border_b_1()
-                .border_color(theme.line)
-                .child(
-                    h_flex()
-                        .gap(px(6.))
-                        .text_size(px(11.))
-                        .text_color(theme.faint)
-                        .child(Icon::Terminal.el(px(11.), theme.faint))
-                        // 任务编号要露出来：模型自己用它读输出 / 停任务，
-                        // 用户在聊天区看到「已在后台启动 bash_3」时得对得上号。
-                        .child(
-                            div()
-                                .font_family("monospace")
-                                .child(t.task_id.clone()),
-                        )
-                        .child(
-                            div()
-                                .text_color(if t.running { theme.accent } else { theme.green })
-                                .child(if t.running {
-                                    "运行中".to_string()
-                                } else {
-                                    match t.exit_code {
-                                        Some(0) | None => "已结束".to_string(),
-                                        Some(code) => format!("退出码 {code}"),
-                                    }
-                                }),
-                        )
-                        .child(div().flex_1())
-                        // 只有还在跑的才给「停止」——已经结束的按了也没意义。
-                        .when(t.running, |this| {
-                            this.child(
-                                div()
-                                    .id(gpui::SharedString::from(format!("kill-{task_id}")))
-                                    .px(px(6.))
-                                    .rounded(px(999.))
-                                    .border_1()
-                                    .border_color(theme.line)
-                                    .text_color(theme.muted)
-                                    .cursor_pointer()
-                                    .hover(|this| {
-                                        this.bg(gpui::rgba(0xd35b5b1a)).text_color(theme.danger)
-                                    })
-                                    .child("停止")
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        let Some(sid) =
-                                            this.state.current_id().map(str::to_string)
-                                        else {
-                                            return;
-                                        };
-                                        this.state.core.kill_task(sid, task_id.clone());
-                                        cx.notify();
-                                    })),
-                            )
-                        }),
-                )
-                .child(
-                    div()
-                        .font_family("monospace")
-                        .text_size(px(11.))
-                        .text_color(theme.muted)
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .child(t.command.clone()),
-                )
-                // 点一下展开这个任务到目前为止的输出。后台任务最常问的问题
-                // 就是「它现在跑到哪了」，只显示一行命令回答不了。
-                .child({
-                    let expand_id = t.task_id.clone();
-                    div()
-                        .id(gpui::SharedString::from(format!("open-{}", t.task_id)))
-                        .text_size(px(11.))
-                        .text_color(theme.accent)
-                        .cursor_pointer()
-                        .child(if expanded_task.as_deref() == Some(t.task_id.as_str()) {
-                            "收起输出"
-                        } else {
-                            "查看输出"
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let already = this
-                                .state
-                                .task_output
-                                .as_ref()
-                                .is_some_and(|(id, _)| id == &expand_id);
-                            if already {
-                                this.state.task_output = None;
-                                this.state.core.unwatch_task_output();
-                            } else if let Some(sid) =
-                                this.state.current_id().map(str::to_string)
-                            {
-                                this.state.core.watch_task_output(sid, expand_id.clone());
-                            }
-                            cx.notify();
-                        }))
-                })
-                .when(
-                    expanded_task.as_deref() == Some(t.task_id.as_str()),
-                    |this| {
-                        this.child(
-                            div()
-                                .id(gpui::SharedString::from(format!("out-{}", t.task_id)))
-                                .max_h(px(220.))
-                                .overflow_y_scroll()
-                                .p(px(8.))
-                                .rounded(px(6.))
-                                .bg(theme.surface_veil)
-                                .font_family("monospace")
-                                .text_size(px(11.))
-                                .text_color(theme.text)
-                                .child(output_text.clone()),
-                        )
-                    },
-                ),
-        );
-    }
+        .px(px(10.))
+        .py(px(6.))
+        .gap(px(6.));
 
     for task in &tasks {
         use crate::state::BackgroundKind;
-        // 注册表里已经有这个任务了就别再列一遍：那份是活的（真实状态 + 能停 +
-        // 能看输出），这份只知道「启动成功」，两条并排会一个写「运行中」
-        // 一个写「已完成」，自相矛盾。
-        if task
-            .task_id
-            .as_ref()
-            .is_some_and(|id| live.iter().any(|t| &t.task_id == id))
-        {
-            continue;
-        }
-        let (icon, tag) = match task.kind {
-            BackgroundKind::Bash => (Icon::Terminal, "命令"),
-            BackgroundKind::Cron => (Icon::Clock, "定时"),
-            BackgroundKind::Subagent => (Icon::Bot, "子任务"),
+        // 展开态按 tool_call_id 记，不用 task_id：定时唤醒压根没有 task_id。
+        let key = task.tool_call_id.clone();
+        let expanded = expanded_id.as_deref() == Some(key.as_str());
+        let (icon, prefix) = match task.kind {
+            BackgroundKind::Bash => (Icon::Terminal, "$ "),
+            BackgroundKind::Cron => (Icon::Clock, "⏰ "),
+            BackgroundKind::Subagent => (Icon::Bot, "🤖 "),
         };
-        let color = if task.is_error {
+        let dot = if task.is_error {
             theme.danger
-        } else if task.finished {
-            theme.green
+        } else if task.running {
+            theme.amber
         } else {
-            theme.accent
+            theme.green
         };
-        list = list.child(
-            v_flex()
-                .py(px(6.))
-                .gap(px(3.))
-                .border_b_1()
-                .border_color(theme.line)
-                .child(
-                    h_flex()
-                        .gap(px(6.))
-                        .text_size(px(11.))
-                        .text_color(theme.faint)
-                        .child(icon.el(px(11.), theme.faint))
-                        .child(tag)
-                        .child(
-                            div().text_color(color).child(if task.is_error {
-                                "失败"
-                            } else if task.finished {
-                                "已完成"
-                            } else {
-                                "运行中"
-                            }),
-                        )
-                        .children(task.duration_ms.map(|ms| {
-                            div()
-                                .text_color(theme.faint)
-                                .child(format!("{:.1}s", ms as f64 / 1000.))
-                        })),
-                )
-                .child(
-                    div()
-                        .font_family("monospace")
-                        .text_size(px(11.))
-                        .text_color(theme.muted)
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .child(task.label.clone()),
-                ),
+
+        // 顶行：状态点 + 编号/倒计时 + 耗时 + 状态徽章 + 展开箭头
+        let mut head = h_flex()
+            .gap(px(5.))
+            .text_size(px(10.))
+            .text_color(theme.faint)
+            .child(div().size(px(6.)).flex_none().rounded_full().bg(dot))
+            .child(icon.el(px(11.), theme.faint));
+        head = match (&task.cron, &task.task_id) {
+            (Some(cron), _) => head.child(if cron.pending {
+                format!("{} 后唤醒", countdown(cron.fire_at_ms, now_ms))
+            } else {
+                format!("已于 {} 唤醒", clock(cron.fire_at_ms))
+            }),
+            (None, Some(id)) => head.child(div().font_family("monospace").child(id.clone())),
+            (None, None) => head.child("待启动"),
+        };
+        if let Some(secs) = task.elapsed_secs {
+            head = head.child(format!("{secs}s"));
+        } else if let Some(ms) = task.duration_ms {
+            head = head.child(format!("{}s", ms / 1000));
+        }
+        if !task.running {
+            head = head.child(
+                div()
+                    .px(px(4.))
+                    .rounded(px(4.))
+                    .bg(theme.line)
+                    .text_color(theme.muted)
+                    .child(match task.kind {
+                        BackgroundKind::Cron => "已唤醒",
+                        _ if task.is_error => "失败",
+                        _ => "已结束",
+                    }),
+            );
+        }
+        head = head.child(div().flex_1()).child(
+            if expanded {
+                Icon::ChevronDown
+            } else {
+                Icon::ChevronRight
+            }
+            .el(px(11.), theme.faint),
         );
+
+        let jump_to = task.tool_call_id.clone();
+        let task_id = task.task_id.clone();
+        let is_bash = task.kind == BackgroundKind::Bash;
+        let mut card = v_flex()
+            .id(gpui::SharedString::from(format!("task-{key}")))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme.line)
+            .when(task.running, |this| this.bg(gpui::rgba(0xf59e0b0d)))
+            .child(
+                v_flex()
+                    .id(gpui::SharedString::from(format!("task-head-{key}")))
+                    .px(px(10.))
+                    .py(px(7.))
+                    .gap(px(3.))
+                    .cursor_pointer()
+                    .hover(|this| this.bg(theme.accent_soft))
+                    .child(head)
+                    // 命令原文按类型加前缀，一眼能分出是命令、定时还是子任务。
+                    .child(
+                        div()
+                            .font_family("monospace")
+                            .text_size(px(11.))
+                            .text_color(theme.text)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(format!("{prefix}{}", task.command)),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        // 点整行 = 展开/收起 + 跳到聊天区对应的那张工具卡。
+                        // 折叠时也跳：用户点它的意图就是「这次任务在对话里哪个位置」。
+                        if expanded {
+                            this.state.expanded_task = None;
+                            this.state.task_output = None;
+                            this.state.core.unwatch_task_output();
+                        } else {
+                            this.state.expanded_task = Some(key.clone());
+                            this.state.task_output = None;
+                            // 只有 Bash 有实时输出可拉；定时与子任务没有。
+                            if is_bash {
+                                if let (Some(sid), Some(tid)) = (
+                                    this.state.current_id().map(str::to_string),
+                                    task_id.clone(),
+                                ) {
+                                    this.state.core.watch_task_output(sid, tid);
+                                }
+                            }
+                        }
+                        this.state.focus_tool_call = Some(jump_to.clone());
+                        cx.notify();
+                    })),
+            );
+
+        if expanded {
+            card = card.child(
+                v_flex()
+                    .px(px(10.))
+                    .py(px(8.))
+                    .gap(px(6.))
+                    .border_t_1()
+                    .border_color(theme.line)
+                    .child(match task.kind {
+                        BackgroundKind::Cron => cron_detail(&theme, task, now_ms).into_any_element(),
+                        BackgroundKind::Subagent => {
+                            subagent_detail(&theme, task).into_any_element()
+                        }
+                        BackgroundKind::Bash => bash_detail(app, &theme, task, cx).into_any_element(),
+                    }),
+            );
+        }
+        list = list.child(card);
     }
     list.into_any_element()
 }
 
+/// 定时唤醒的展开区：为什么要唤醒、什么时候唤醒。
+fn cron_detail(
+    theme: &crate::theme::Theme,
+    task: &crate::state::BackgroundTask,
+    now_ms: i64,
+) -> impl IntoElement {
+    let cron = task.cron.clone().unwrap_or_else(|| crate::state::CronInfo {
+        reason: task.command.clone(),
+        fire_at_ms: 0,
+        pending: false,
+    });
+    v_flex()
+        .gap(px(4.))
+        .text_size(px(11.))
+        .text_color(theme.text)
+        .child(
+            div()
+                .child(labeled(theme, "原因", cron.reason.clone())),
+        )
+        .child(labeled(
+            theme,
+            "唤醒时刻",
+            if cron.pending {
+                format!(
+                    "{}（{} 后）",
+                    clock(cron.fire_at_ms),
+                    countdown(cron.fire_at_ms, now_ms)
+                )
+            } else {
+                clock(cron.fire_at_ms)
+            },
+        ))
+}
+
+/// 子任务的展开区：它是谁、跑完之后会发生什么。
+fn subagent_detail(
+    theme: &crate::theme::Theme,
+    task: &crate::state::BackgroundTask,
+) -> impl IntoElement {
+    v_flex()
+        .gap(px(4.))
+        .text_size(px(11.))
+        .child(labeled(theme, "子代理", task.command.clone()))
+        .child(
+            div().text_color(theme.muted).child(if task.running {
+                "正在后台跑。跑完会自动唤醒这个对话，结果直接出现在对话里。"
+            } else {
+                "已经跑完，并且唤醒过这个对话了。"
+            }),
+        )
+}
+
+/// Bash 的展开区：运行中拉实时输出（带「停止」），跑完了直接看工具结果。
+fn bash_detail(
+    app: &HebbianApp,
+    theme: &crate::theme::Theme,
+    task: &crate::state::BackgroundTask,
+    cx: &mut Context<HebbianApp>,
+) -> impl IntoElement {
+    // 只认这个任务自己的输出：切着看另一个任务时，上一份还没被覆盖，
+    // 不按编号对一下会把别人的输出显示在这张卡片里。
+    let live = app
+        .state
+        .task_output
+        .as_ref()
+        .filter(|(id, _)| Some(id) == task.task_id.as_ref())
+        .map(|(_, text)| text.clone())
+        .unwrap_or_default();
+    // 跑完的任务不要再显示轮询到的那份：进程一结束注册表就可能被清掉，
+    // 那时轮询拿到的是空的，而工具结果是永久留在 transcript 里的。
+    let body = if task.running {
+        if live.trim().is_empty() {
+            "等待输出…".to_string()
+        } else {
+            live
+        }
+    } else {
+        task.result
+            .clone()
+            .filter(|r| !r.trim().is_empty())
+            .unwrap_or_else(|| "(无输出)".to_string())
+    };
+
+    v_flex()
+        .gap(px(6.))
+        .when_some(
+            task.task_id.clone().filter(|_| task.running),
+            |this, task_id| {
+                this.child(
+                    h_flex().justify_end().child(
+                        div()
+                            .id(gpui::SharedString::from(format!("kill-{task_id}")))
+                            .px(px(6.))
+                            .py(px(2.))
+                            .rounded(px(6.))
+                            .text_size(px(10.))
+                            .text_color(theme.danger)
+                            .cursor_pointer()
+                            .hover(|this| this.bg(gpui::rgba(0xd35b5b1a)))
+                            .child("停止")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                if let Some(sid) = this.state.current_id().map(str::to_string) {
+                                    this.state.core.kill_task(sid, task_id.clone());
+                                }
+                                cx.notify();
+                            })),
+                    ),
+                )
+            },
+        )
+        // 输出区用深色：终端输出本来就是深底浅字，放在浅色卡片里反而难读。
+        .child(
+            div()
+                .id("task-output")
+                .max_h(px(240.))
+                .overflow_y_scroll()
+                .p(px(8.))
+                .rounded(px(6.))
+                .bg(gpui::rgb(0x18181b))
+                .font_family("monospace")
+                .text_size(px(10.))
+                .text_color(gpui::rgb(0xe4e4e7))
+                .child(body),
+        )
+}
+
+fn labeled(
+    theme: &crate::theme::Theme,
+    label: &'static str,
+    value: String,
+) -> impl IntoElement {
+    h_flex()
+        .gap(px(4.))
+        .items_start()
+        .child(div().flex_none().text_color(theme.muted).child(label))
+        .child(div().min_w_0().text_color(theme.text).child(value))
+}
+
+/// `3h20m` 这样的倒计时。与原前端同一套写法：只显示有值的档位。
+fn countdown(fire_at_ms: i64, now_ms: i64) -> String {
+    let secs = ((fire_at_ms - now_ms) / 1000).max(0);
+    let (days, hours, mins, s) = (secs / 86400, (secs % 86400) / 3600, (secs % 3600) / 60, secs % 60);
+    let mut parts = Vec::new();
+    if days > 0 {
+        parts.push(format!("{days}d"));
+    }
+    if hours > 0 {
+        parts.push(format!("{hours}h"));
+    }
+    if mins > 0 {
+        parts.push(format!("{mins}m"));
+    }
+    if s > 0 || parts.is_empty() {
+        parts.push(format!("{s}s"));
+    }
+    parts.join("")
+}
+
+fn clock(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|dt| {
+            chrono::DateTime::<chrono::Local>::from(dt)
+                .format("%m/%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| "时间未知".to_string())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
 /// 修改文件面板：这个会话每个 run 改了哪些文件（edits-worktree 的记录）。
 fn edits_panel(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let theme = app.theme.clone();

@@ -1,8 +1,14 @@
+# apps/gpui **不在这个 workspace 里**（它自带一个）。
+# 原因：gpui-component 的 webview 依赖链把 webkit2gtk 精确钉在 =2.0.1，
+# 而打过补丁的 tauri 那条链钉的是 =2.0.2——两个精确版本没法共存。
+# 放在同一个 workspace 里，cargo 会为了凑出一个解把 tauri 降到 2.9.5，
+# 于是 [patch] 里那份 fork 静默失效（cargo 只给一句 "patch was not used" 的 warning），
+# desktop 就编不过了。拆成两个 workspace，两条依赖链各自解各自的，互不干扰。
+# 代价：`cargo check --workspace` 覆盖不到 gpui，得单独 `cargo check -p hebbian-gpui`（在 apps/gpui 下跑）。
 [workspace]
 members = [
     "apps/desktop",
     "apps/native",
-    "apps/gpui",
     "apps/cli",
     "apps/web-server",
     "apps/hebcore",

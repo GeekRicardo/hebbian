@@ -8,8 +8,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use agent_core::storage::projects::WorkspaceProject;
-use agent_core::storage::sessions::{Message, Role, Session, SessionMeta};
+use agent_core::storage::sessions::{Message, MessageMeta, Role, Session, SessionMeta};
+use agent_core::wakeup::PendingCron;
 use protocol::{QuestionOption, WireEvent};
+use serde_json::Value;
 
 use crate::core::{Core, CoreUpdate, DirEntry};
 
@@ -93,8 +95,23 @@ pub struct AppState {
     pub search_regex: bool,
     pub collapsed: HashSet<String>,
 
-    /// 展开着的那个后台任务的输出（任务编号 + 正文）。一次只展开一个。
+    /// 当前展开着的是哪张后台任务卡片（按 tool_call_id 记——定时唤醒没有 task_id）。
+    pub expanded_task: Option<String>,
+    /// 轮询回来的输出（任务编号 + 正文）。**和上面那个分开存**：
+    /// 输出是按任务编号回来的，混在一起会让每轮刷新都把展开态覆盖成任务编号，
+    /// 卡片一展开就立刻自己收起来。
     pub task_output: Option<(String, String)>,
+    /// 还在等的定时唤醒。倒计时要用它的精确触发时刻。
+    pub pending_crons: Vec<agent_core::wakeup::PendingCron>,
+    /// 请求把聊天区滚到这次工具调用上并高亮一下。渲染时消费掉即清空。
+    pub focus_tool_call: Option<String>,
+    /// 被「后台任务」面板点名展开的那些工具调用（按调用 id 记）。
+    /// 不能复用 `expanded_parts`：那个按「消息 id + 序号」拼 key，而同一条消息
+    /// 在流式和落盘两条渲染路径下序号规则不同，跨路径拼不出同一个 key。
+    pub expanded_calls: HashSet<String>,
+    /// 正在闪烁高亮的那次工具调用。闪一下比直接滚过去更容易被眼睛抓到——
+    /// 长对话里滚动之后，用户往往不知道该看哪一行。
+    pub flash_tool_call: Option<String>,
 
     /// 正在预览的那条 Claude 对话（点列表里某一条后才有）。
     pub claude_preview: Option<crate::core::ClaudePreview>,
@@ -197,7 +214,12 @@ impl AppState {
             search_case: false,
             search_regex: false,
             collapsed: HashSet::new(),
+            expanded_task: None,
             task_output: None,
+            pending_crons: Vec::new(),
+            focus_tool_call: None,
+            flash_tool_call: None,
+            expanded_calls: HashSet::new(),
             claude_importable: Vec::new(),
             claude_preview: None,
             claude_exported: None,
@@ -266,6 +288,7 @@ impl AppState {
                 self.branches.clear();
                 // 后台任务的输出是按会话取的，切走了还留着就会把上一个会话的
                 // 输出挂在新会话的面板上；同时把轮询也停掉。
+                self.expanded_task = None;
                 self.task_output = None;
                 self.core.unwatch_task_output();
                 self.core
@@ -319,7 +342,11 @@ impl AppState {
             } => {
                 self.context_usage = Some((used_tokens, budget_tokens, cache_hit_pct));
             }
-            CoreUpdate::LiveTasks(tasks) => {
+            CoreUpdate::LiveTasks {
+                tasks,
+                pending_crons,
+            } => {
+                self.pending_crons = pending_crons;
                 self.live_tasks = tasks;
             }
             CoreUpdate::RunModeChanged(mode) => {
@@ -514,20 +541,44 @@ impl AppState {
     }
 }
 
-/// 「后台任务」面板的一条。与原前端一样**从 `session.messages` 派生**——
-/// 跑完的任务永远留在 transcript 里，不依赖任何运行期注册表，切会话/重启都还在。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 注册表里还活着的后台任务（运行中的实时状态）。
+/// transcript 只知道「启动成功了没」，真实状态与已跑秒数只有注册表知道。
+#[derive(Debug, Clone)]
+pub struct LiveTask {
+    pub task_id: String,
+    pub command: String,
+    pub running: bool,
+    pub exit_code: Option<i32>,
+    /// 已经跑了多少秒。运行中的卡片显示它，也用来给「运行中」排序。
+    pub elapsed_secs: u64,
+}
+
+/// 后台任务卡片的一条。三种来源合成同一种形状，面板才好按统一模板画。
+#[derive(Debug, Clone)]
 pub struct BackgroundTask {
     pub kind: BackgroundKind,
-    /// 后台 Bash 的任务编号，从工具结果里解析（形如 `[bash_001] 已在后台启动`）。
-    /// 用来和注册表里那份活的记录对上号，只有一个的时候不至于显示两遍。
+    /// 注册表 task_id。cron 恒为 None；Bash 在结果还没回来时也可能是 None。
     pub task_id: Option<String>,
-    /// 命令原文 / 唤醒原因 / 子 agent 描述，取决于 kind。
-    pub label: String,
-    /// 有 result 就算跑完了；没有就是还在跑（或这轮没跑完就结束了）。
-    pub finished: bool,
+    /// 这条卡片对应哪次工具调用——点卡片要跳到聊天区那张工具卡。
+    pub tool_call_id: String,
+    /// Bash 是命令原文，cron 是唤醒原因，subagent 是子 agent 类型。
+    pub command: String,
+    pub running: bool,
     pub is_error: bool,
+    /// 工具结果原文。任务已经结束时，输出直接看它，不用再问注册表。
+    pub result: Option<String>,
     pub duration_ms: Option<u64>,
+    /// 注册表报上来的已运行秒数（只有活着的 Bash 有）。
+    pub elapsed_secs: Option<u64>,
+    pub cron: Option<CronInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CronInfo {
+    pub reason: String,
+    pub fire_at_ms: i64,
+    /// 还在等 = 时间没到；已唤醒 = scheduler 里查不到了。
+    pub pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -537,80 +588,206 @@ pub enum BackgroundKind {
     Subagent,
 }
 
-/// 注册表里还活着的后台任务（运行中的实时状态）。
-/// transcript 派生只知道「有没有 result」，活的输出与真实退出码要从注册表拿。
-#[derive(Debug, Clone)]
-pub struct LiveTask {
-    pub task_id: String,
-    pub command: String,
-    pub running: bool,
-    pub exit_code: Option<i32>,
-}
-
-/// 从 `[bash_001] 已在后台启动` 这样的结果里抠出任务编号。
-fn parse_task_id(result: &str) -> Option<String> {
-    let rest = result.trim_start().strip_prefix('[')?;
-    let (id, _) = rest.split_once(']')?;
-    let id = id.trim();
-    (!id.is_empty()).then(|| id.to_string())
-}
-
-/// 从消息里挑出后台任务。
+/// 从 Bash 工具结果里抠出后台任务编号。
 ///
-/// 判定依据与原前端一致：后台 Bash（入参 `run_in_background: true`）、
-/// `ScheduleWakeup`（定时唤醒）、`Task`（子 agent）。前台 Bash 不进这个列表——
-/// 它由聊天区的工具卡片自己管，重复列出只会让人分不清哪个才是后台的。
-pub fn derive_background_tasks(messages: &[Message]) -> Vec<BackgroundTask> {
+/// 两种文案都要认：现在的 `[bash_001] 已在后台启动` / `[bash_001] 60s 内未结束，已转后台`，
+/// 以及旧版的 `task_id=bash_001 cmd=…`。**必须限定成 `bash_` 加数字**——
+/// 早先我图省事只找一对方括号，那样任何以 `[xxx]` 开头的结果都会被认成任务编号，
+/// 拿这种假编号去和注册表比对，会把一条毫不相干的活任务顶掉。
+pub fn extract_bg_task_id(result: &str) -> Option<String> {
+    extract_after(result, "task_id=", "bash_")
+        .or_else(|| extract_after(result, "[", "bash_"))
+}
+
+/// 子 agent 的编号只有 `task_id=subagent-xxx` 一种写法。
+pub fn extract_subagent_task_id(result: &str) -> Option<String> {
+    let rest = result.split("task_id=").nth(1)?;
+    let id: String = rest
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    id.starts_with("subagent-").then_some(id)
+}
+
+/// 找 `marker` 之后紧跟着的、以 `prefix` 开头的编号。
+fn extract_after(text: &str, marker: &str, prefix: &str) -> Option<String> {
+    for chunk in text.split(marker).skip(1) {
+        if !chunk.starts_with(prefix) {
+            continue;
+        }
+        let id: String = chunk
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        // 前缀后面必须真的是数字，`bash_` 光秃秃一个不算。
+        if id.len() > prefix.len() && id[prefix.len()..].chars().all(|c| c.is_ascii_digit()) {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// 把 transcript 里的工具调用和注册表里活着的任务合成一张卡片列表。
+///
+/// 三条来源规则，与原前端逐条对齐：
+/// - **Bash**：显式 `run_in_background` 的，**以及**前台跑超时被转到后台的
+///   （那种入参里没有 run_in_background，只能靠结果里有没有任务编号认出来）。
+///   纯前台跑完的不算——它由聊天区的工具卡片自己管，列到这里只会让人分不清。
+/// - **ScheduleWakeup**：按原因去 scheduler 的待唤醒表里查；查得到说明还在等，
+///   用它的精确触发时刻；查不到说明已经唤醒过了，用「调用时刻 + 延时」倒推。
+/// - **Task**：结果里解析出子 agent 编号才算数；完成与否看有没有收到对应的完成通知。
+///
+/// 最后把注册表里有、transcript 里还没记上的补进来（刚启动 / 结果还没回来 /
+/// 上次进程留下的），并让运行中的排在最前——正在发生的事优先。
+pub fn derive_background_tasks(
+    messages: &[Message],
+    shells: &[LiveTask],
+    pending_crons: &[PendingCron],
+) -> Vec<BackgroundTask> {
+    let mut consumed: HashSet<String> = HashSet::new();
+    // 子 agent 跑完会以系统通知的形式回到对话里，据此判定它结束了没有。
+    let finished_subagents: HashSet<&str> = messages
+        .iter()
+        .filter_map(|m| match m.meta.as_ref() {
+            Some(MessageMeta::SystemNotification {
+                kind,
+                task_id: Some(id),
+                ..
+            }) if kind == "bg_task_finished" => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+
     let mut out = Vec::new();
     for message in messages {
         for call in &message.tool_calls {
-            let kind = match call.name.as_str() {
+            match call.name.as_str() {
+                "ScheduleWakeup" => {
+                    let reason = arg_str(&call.input, "reason").unwrap_or("(无说明)").to_string();
+                    let delay_secs = call
+                        .input
+                        .get("delay_secs")
+                        .or_else(|| call.input.get("delaySeconds"))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let pending = pending_crons.iter().find(|c| c.reason == reason);
+                    let fire_at_ms = match pending {
+                        Some(c) => c.fire_at_ms,
+                        None => message.created_at + delay_secs * 1000,
+                    };
+                    out.push(BackgroundTask {
+                        kind: BackgroundKind::Cron,
+                        task_id: None,
+                        tool_call_id: call.id.clone(),
+                        command: reason.clone(),
+                        running: pending.is_some(),
+                        is_error: call.is_error,
+                        result: call.result.clone(),
+                        duration_ms: call.duration_ms,
+                        elapsed_secs: None,
+                        cron: Some(CronInfo {
+                            reason,
+                            fire_at_ms,
+                            pending: pending.is_some(),
+                        }),
+                    });
+                }
+                "Task" => {
+                    let Some(task_id) = call
+                        .result
+                        .as_deref()
+                        .and_then(extract_subagent_task_id)
+                    else {
+                        continue;
+                    };
+                    out.push(BackgroundTask {
+                        kind: BackgroundKind::Subagent,
+                        running: !finished_subagents.contains(task_id.as_str()),
+                        task_id: Some(task_id),
+                        tool_call_id: call.id.clone(),
+                        command: arg_str(&call.input, "subagent_type")
+                            .unwrap_or("subagent")
+                            .to_string(),
+                        is_error: call.is_error,
+                        result: call.result.clone(),
+                        duration_ms: call.duration_ms,
+                        elapsed_secs: None,
+                        cron: None,
+                    });
+                }
                 "Bash" => {
-                    let bg = call
+                    let explicit = call
                         .input
                         .get("run_in_background")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
-                    if !bg {
+                    let task_id = call.result.as_deref().and_then(extract_bg_task_id);
+                    // 前台正常跑完的 Bash：既没声明后台、结果里也没有任务编号。
+                    if !explicit && task_id.is_none() {
                         continue;
                     }
-                    BackgroundKind::Bash
+                    let live = task_id
+                        .as_ref()
+                        .and_then(|id| shells.iter().find(|s| &s.task_id == id));
+                    if let Some(id) = task_id.as_ref() {
+                        consumed.insert(id.clone());
+                    }
+                    out.push(BackgroundTask {
+                        kind: BackgroundKind::Bash,
+                        // 状态以注册表为准；查不到就退回「有结果就是跑完了」。
+                        // 反过来不行：后台 Bash 的结果只表示**启动成功**，
+                        // 拿它当「跑完了」会让一个还在跑的任务显示成已完成。
+                        running: match live {
+                            Some(shell) => shell.running,
+                            None => call.result.is_none(),
+                        },
+                        elapsed_secs: live.map(|s| s.elapsed_secs),
+                        task_id,
+                        tool_call_id: call.id.clone(),
+                        command: arg_str(&call.input, "command").unwrap_or("(无命令)").to_string(),
+                        is_error: call.is_error,
+                        result: call.result.clone(),
+                        duration_ms: call.duration_ms,
+                        cron: None,
+                    });
                 }
-                "ScheduleWakeup" => BackgroundKind::Cron,
-                "Task" => BackgroundKind::Subagent,
-                _ => continue,
-            };
-            let label = match kind {
-                BackgroundKind::Bash => call
-                    .input
-                    .get("command")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default(),
-                BackgroundKind::Cron => call
-                    .input
-                    .get("reason")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("定时唤醒"),
-                BackgroundKind::Subagent => call
-                    .input
-                    .get("description")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("子任务"),
-            };
-            out.push(BackgroundTask {
-                kind,
-                task_id: call.result.as_deref().and_then(parse_task_id),
-                label: label.to_string(),
-                // 后台任务的「有 result」只代表**启动成功**（结果就是一句
-                // 「已在后台启动」），不代表命令跑完了。真实状态得看注册表，
-                // 所以这里同 id 的会被注册表那条顶掉（见 tasks_panel）。
-                finished: call.result.is_some(),
-                is_error: call.is_error,
-                duration_ms: call.duration_ms,
-            });
+                _ => {}
+            }
         }
     }
-    out
+
+    // 注册表里有、transcript 还没记上的：刚启动、结果还没回来、或上次进程留下的。
+    for shell in shells {
+        if consumed.contains(&shell.task_id) {
+            continue;
+        }
+        out.push(BackgroundTask {
+            kind: BackgroundKind::Bash,
+            task_id: Some(shell.task_id.clone()),
+            // 还没有对应的工具调用可跳，用一个占位 id 标记。
+            tool_call_id: format!("pending-{}", shell.task_id),
+            command: shell.command.clone(),
+            running: shell.running,
+            is_error: false,
+            result: None,
+            duration_ms: None,
+            elapsed_secs: Some(shell.elapsed_secs),
+            cron: None,
+        });
+    }
+
+    // 运行中的排前面，其中跑得越久的越靠后（新起的更可能是用户正在等的那个）。
+    let (mut running, done): (Vec<_>, Vec<_>) = out.into_iter().partition(|t| t.running);
+    running.sort_by_key(|t| t.elapsed_secs.unwrap_or(0));
+    running.into_iter().chain(done).collect()
+}
+
+fn arg_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
+    input
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
 }
 
 /// 侧栏的一个项目分组。空项目也要显示（原前端同样保留空桶）。
@@ -853,6 +1030,10 @@ mod tests {
         }
     }
 
+    fn derive(msgs: &[Message]) -> Vec<BackgroundTask> {
+        derive_background_tasks(msgs, &[], &[])
+    }
+
     /// 前台 Bash 不该出现在后台任务列表里——它由聊天区的工具卡片管，
     /// 重复列出会让人分不清哪个才是真后台。
     #[test]
@@ -862,21 +1043,40 @@ mod tests {
             serde_json::json!({"command": "ls"}),
             Some("ok"),
         )];
-        assert!(derive_background_tasks(&msgs).is_empty());
+        assert!(derive(&msgs).is_empty());
+    }
+
+    /// 前台 Bash 跑超时会被转成后台任务：入参里**没有** run_in_background，
+    /// 只有结果里那个编号能认出它。漏掉这条的话，最需要盯着的那种任务
+    /// （跑太久的）反而不出现在后台任务面板里。
+    #[test]
+    fn promoted_foreground_bash_is_picked_up() {
+        let msgs = vec![tool_call(
+            "Bash",
+            serde_json::json!({"command": "cargo build"}),
+            Some("[bash_007] 60s 内未结束，已转后台"),
+        )];
+        let tasks = derive(&msgs);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].task_id.as_deref(), Some("bash_007"));
     }
 
     /// 后台 Bash 的工具结果是 `[bash_001] 已在后台启动`——只说明**启动**成功。
     /// 必须把编号解析出来，否则面板没法和注册表里那份活记录对上号，
     /// 同一个任务会并排显示成一条「运行中」加一条「已完成」，自相矛盾。
     #[test]
-    fn background_bash_task_id_is_parsed_for_dedupe() {
-        let msgs = vec![tool_call(
-            "Bash",
-            serde_json::json!({"command": "sleep 300", "run_in_background": true}),
-            Some("[bash_001] 已在后台启动"),
-        )];
-        let tasks = derive_background_tasks(&msgs);
-        assert_eq!(tasks[0].task_id.as_deref(), Some("bash_001"));
+    fn background_bash_task_id_is_parsed_both_formats() {
+        for (result, want) in [
+            ("[bash_001] 已在后台启动", "bash_001"),
+            ("task_id=bash_042 cmd=sleep", "bash_042"),
+        ] {
+            let msgs = vec![tool_call(
+                "Bash",
+                serde_json::json!({"command": "sleep 300", "run_in_background": true}),
+                Some(result),
+            )];
+            assert_eq!(derive(&msgs)[0].task_id.as_deref(), Some(want), "{result}");
+        }
 
         // 还没返回结果时自然没有编号，这条会照常列出来。
         let msgs = vec![tool_call(
@@ -884,47 +1084,149 @@ mod tests {
             serde_json::json!({"command": "sleep 300", "run_in_background": true}),
             None,
         )];
-        assert_eq!(derive_background_tasks(&msgs)[0].task_id, None);
+        assert_eq!(derive(&msgs)[0].task_id, None);
     }
 
-    /// 结果文本不是那个格式时不要瞎解析出一个假编号——
-    /// 假编号会把一条无关的活任务错误地顶掉。
+    /// 结果文本不是那个格式时不要瞎解析出一个假编号——假编号拿去和注册表比对，
+    /// 会把一条毫不相干的活任务顶掉。`[nope]` 这种是重点：早先只找一对方括号，
+    /// 任何带方括号的结果都会被当成编号。
     #[test]
     fn malformed_result_yields_no_task_id() {
-        for bad in ["已在后台启动", "[] 空的", "no brackets here"] {
+        for bad in [
+            "已在后台启动",
+            "[] 空的",
+            "no brackets here",
+            "[nope] 不是任务编号",
+            "[bash_] 没有数字",
+        ] {
             let msgs = vec![tool_call(
                 "Bash",
                 serde_json::json!({"command": "x", "run_in_background": true}),
                 Some(bad),
             )];
-            assert_eq!(derive_background_tasks(&msgs)[0].task_id, None, "{bad}");
+            assert_eq!(derive(&msgs)[0].task_id, None, "{bad}");
         }
     }
 
+    /// 注册表说还在跑，就必须显示成还在跑——哪怕工具结果早就回来了。
+    /// 后台 Bash 的结果只代表「启动成功」，拿它当「跑完了」会让面板睁眼说瞎话。
     #[test]
-    fn background_bash_cron_and_subagent_are_picked_up() {
+    fn registry_state_wins_over_tool_result() {
+        let msgs = vec![tool_call(
+            "Bash",
+            serde_json::json!({"command": "sleep 300", "run_in_background": true}),
+            Some("[bash_001] 已在后台启动"),
+        )];
+        let live = vec![LiveTask {
+            task_id: "bash_001".into(),
+            command: "sleep 300".into(),
+            running: true,
+            exit_code: None,
+            elapsed_secs: 12,
+        }];
+        let tasks = derive_background_tasks(&msgs, &live, &[]);
+        // 只有一条，不是「运行中」+「已结束」两条
+        assert_eq!(tasks.len(), 1);
+        assert!(tasks[0].running);
+        assert_eq!(tasks[0].elapsed_secs, Some(12));
+    }
+
+    /// 注册表里有、transcript 里还没记上的（刚启动 / 上次进程留下的）也要列出来，
+    /// 否则任务已经在跑了、面板却是空的。
+    #[test]
+    fn registry_only_task_still_shows_up() {
+        let live = vec![LiveTask {
+            task_id: "bash_009".into(),
+            command: "npm run dev".into(),
+            running: true,
+            exit_code: None,
+            elapsed_secs: 3,
+        }];
+        let tasks = derive_background_tasks(&[], &live, &[]);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].command, "npm run dev");
+        // 没有对应的工具调用可跳，用占位 id 标记
+        assert!(tasks[0].tool_call_id.starts_with("pending-"));
+    }
+
+    /// 定时唤醒：还在等就用 scheduler 的精确时刻，已经唤醒过就用「调用时刻 + 延时」倒推。
+    #[test]
+    fn cron_uses_scheduler_time_while_pending() {
+        let mut msg = tool_call(
+            "ScheduleWakeup",
+            serde_json::json!({"reason": "等 CI", "delay_secs": 600}),
+            Some("已安排"),
+        );
+        msg.created_at = 1_000_000;
+
+        // 还在等：用 scheduler 报的触发时刻
+        let pending = vec![PendingCron {
+            run_id: "r1".into(),
+            fire_at_ms: 9_999_999,
+            seconds_remaining: 300,
+            reason: "等 CI".into(),
+        }];
+        let tasks = derive_background_tasks(std::slice::from_ref(&msg), &[], &pending);
+        let cron = tasks[0].cron.as_ref().unwrap();
+        assert!(cron.pending);
+        assert_eq!(cron.fire_at_ms, 9_999_999);
+        assert!(tasks[0].running);
+
+        // 已经唤醒过：scheduler 里查不到，按调用时刻 + 延时倒推
+        let tasks = derive_background_tasks(&[msg], &[], &[]);
+        let cron = tasks[0].cron.as_ref().unwrap();
+        assert!(!cron.pending);
+        assert_eq!(cron.fire_at_ms, 1_000_000 + 600 * 1000);
+        assert!(!tasks[0].running);
+    }
+
+    /// 子任务要能从结果里解出编号才算数；跑完与否看有没有收到完成通知。
+    #[test]
+    fn subagent_needs_task_id_and_finish_notice() {
+        let msgs = vec![tool_call(
+            "Task",
+            serde_json::json!({"subagent_type": "Explore"}),
+            Some("已启动 task_id=subagent-abc123"),
+        )];
+        let tasks = derive(&msgs);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].command, "Explore");
+        assert!(tasks[0].running, "没收到完成通知就还算在跑");
+
+        // 解不出编号的（例如同步跑完的 Task）不进这个面板
+        let msgs = vec![tool_call(
+            "Task",
+            serde_json::json!({"subagent_type": "Explore"}),
+            Some("直接返回了结果"),
+        )];
+        assert!(derive(&msgs).is_empty());
+    }
+
+    /// 运行中的排在前面：面板最上面应该是「此刻正在发生的事」。
+    #[test]
+    fn running_tasks_sort_first() {
         let msgs = vec![
             tool_call(
                 "Bash",
-                serde_json::json!({"command": "cargo build", "run_in_background": true}),
-                None,
+                serde_json::json!({"command": "done one", "run_in_background": true}),
+                Some("[bash_001] 已在后台启动"),
             ),
             tool_call(
-                "ScheduleWakeup",
-                serde_json::json!({"reason": "等 CI"}),
-                Some("done"),
+                "Bash",
+                serde_json::json!({"command": "still going", "run_in_background": true}),
+                Some("[bash_002] 已在后台启动"),
             ),
-            tool_call("Task", serde_json::json!({"description": "查一下用法"}), None),
         ];
-        let tasks = derive_background_tasks(&msgs);
-        assert_eq!(tasks.len(), 3);
-        assert_eq!(tasks[0].kind, BackgroundKind::Bash);
-        assert_eq!(tasks[0].label, "cargo build");
-        // 没有 result = 还在跑
-        assert!(!tasks[0].finished);
-        assert_eq!(tasks[1].kind, BackgroundKind::Cron);
-        assert!(tasks[1].finished);
-        assert_eq!(tasks[2].kind, BackgroundKind::Subagent);
+        let live = vec![LiveTask {
+            task_id: "bash_002".into(),
+            command: "still going".into(),
+            running: true,
+            exit_code: None,
+            elapsed_secs: 5,
+        }];
+        let tasks = derive_background_tasks(&msgs, &live, &[]);
+        assert_eq!(tasks[0].command, "still going");
+        assert!(tasks[0].running);
     }
 
     #[test]

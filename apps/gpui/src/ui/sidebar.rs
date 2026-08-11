@@ -132,6 +132,8 @@ fn new_chat_button(app: &mut HebbianApp, cx: &mut Context<HebbianApp>) -> impl I
         .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
             if *hovered {
                 this.open_hover_popup(crate::ui::HoverPopup::GlobalImport);
+            } else {
+                this.schedule_hover_close(cx);
             }
             cx.notify();
         }))
@@ -454,6 +456,8 @@ fn project_group(
                             this.open_hover_popup(crate::ui::HoverPopup::ImportToProject(
                                 import_project.clone(),
                             ));
+                        } else {
+                            this.schedule_hover_close(cx);
                         }
                         cx.notify();
                     }))
@@ -611,6 +615,8 @@ fn session_row(
                         this.open_hover_popup(crate::ui::HoverPopup::ExportSession(
                             export_id.clone(),
                         ));
+                    } else {
+                        this.schedule_hover_close(cx);
                     }
                     cx.notify();
                 }))

@@ -58,8 +58,12 @@ pub enum CoreUpdate {
         budget_tokens: usize,
         cache_hit_pct: u32,
     },
-    /// 注册表里还活着的后台任务。
-    LiveTasks(Vec<crate::state::LiveTask>),
+    /// 注册表里还活着的后台任务，以及还在等的定时唤醒。
+    /// 两者一起取：面板要把它们画成同一列卡片，分两次回来会先后闪一下。
+    LiveTasks {
+        tasks: Vec<crate::state::LiveTask>,
+        pending_crons: Vec<agent_core::wakeup::PendingCron>,
+    },
     /// 某个后台任务到目前为止的输出。
     TaskOutput { task_id: String, text: String },
     /// 运行模式改好了。
@@ -834,7 +838,7 @@ impl Core {
         });
     }
 
-    /// 盯住一个后台任务的输出，每秒刷一次，直到面板收起或换看别的任务。
+    /// 盯住一个后台任务的输出，每 600ms 刷一次，直到面板收起或换看别的任务。
     ///
     /// 每次从头读（cursor = 0）而不是增量拼：面板一次只展开一个任务，输出本来就有
     /// 环形缓冲上限，全量读一次比在 UI 侧维护游标简单得多，也不会因为漏掉一次刷新
@@ -875,7 +879,8 @@ impl Core {
                 if finished {
                     return;
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                // 600ms 与原前端同频：再慢一点肉眼就能看出输出是一跳一跳的。
+                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
             }
         });
     }
@@ -914,6 +919,7 @@ impl Core {
                     crate::state::LiveTask {
                         task_id: shell.task_id.clone(),
                         command: shell.command.clone(),
+                        elapsed_secs: shell.started_at.elapsed().as_secs(),
                         running: matches!(state, ShellState::Running),
                         exit_code: match state {
                             ShellState::Exited { code } => code,
@@ -922,7 +928,12 @@ impl Core {
                     }
                 })
                 .collect();
-            this.emit(CoreUpdate::LiveTasks(tasks));
+            let pending_crons =
+                agent_core::wakeup::WakeupScheduler::global().list_pending_crons(&session_id);
+            this.emit(CoreUpdate::LiveTasks {
+                tasks,
+                pending_crons,
+            });
         });
     }
 

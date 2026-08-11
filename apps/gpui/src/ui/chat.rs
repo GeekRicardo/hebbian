@@ -173,6 +173,7 @@ fn canvas(
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
+        .track_scroll(&app.messages_scroll)
         .child(
             v_flex()
                 .w_full()
@@ -359,6 +360,7 @@ fn bubble(
                 app,
                 cx,
                 &format!("{}-tc{}", message.id, i),
+                Some(call.id.as_str()),
                 &call.name,
                 &call.input,
                 call.result.as_deref(),
@@ -383,6 +385,7 @@ fn bubble(
                     body.child(reasoning_block(app, cx, &key, text, *duration_ms))
                 }
                 MessagePart::ToolCall {
+                    id,
                     name,
                     input,
                     result,
@@ -393,6 +396,7 @@ fn bubble(
                     app,
                     cx,
                     &key,
+                    Some(id.as_str()),
                     name,
                     input,
                     result.as_deref(),
@@ -498,10 +502,11 @@ fn reasoning_block(
 /// 工具调用卡片。收起时是一行「图标 + 工具名 + 摘要 + 耗时」，
 /// 展开后把入参与结果原样摊开——排查 agent 行为时看的就是这两块。
 #[allow(clippy::too_many_arguments)]
-fn tool_card(
+pub(crate) fn tool_card(
     app: &HebbianApp,
     cx: &mut Context<HebbianApp>,
     key: &str,
+    call_id: Option<&str>,
     name: &str,
     input: &serde_json::Value,
     result: Option<&str>,
@@ -509,7 +514,8 @@ fn tool_card(
     is_error: bool,
 ) -> impl IntoElement {
     let theme = app.theme.clone();
-    let expanded = app.state.expanded_parts.contains(key);
+    let expanded = app.state.expanded_parts.contains(key)
+        || call_id.is_some_and(|id| app.state.expanded_calls.contains(id));
     let key_owned = key.to_string();
     // 卡片头是三段：工具名（粗）+ 这次在做什么 + 作用对象（等宽）。
     let description = crate::tool_label::call_description(name, input);
@@ -522,11 +528,21 @@ fn tool_card(
     let args = serde_json::to_string_pretty(input).unwrap_or_default();
     let result_text = result.unwrap_or("").to_string();
 
+    // 从「后台任务」面板跳过来的那张卡片描一圈重色——长对话滚过去之后，
+    // 不给个落点用户根本不知道该看哪一行。
+    let flashed = call_id.is_some() && app.state.flash_tool_call.as_deref() == call_id;
     v_flex()
         .rounded(px(5.))
         .border_1()
-        .border_color(if is_error { theme.danger } else { theme.line })
-        .bg(theme.card)
+        .border_color(if is_error {
+            theme.danger
+        } else if flashed {
+            theme.accent
+        } else {
+            theme.line
+        })
+        .when(flashed, |this| this.bg(theme.accent_soft))
+        .when(!flashed, |this| this.bg(theme.card))
         .child(
             h_flex()
                 .id(gpui::SharedString::from(format!("tool-{key}")))

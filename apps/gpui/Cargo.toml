@@ -1,3 +1,6 @@
+# 自成一个 workspace，理由见仓库根 Cargo.toml 顶部注释。
+[workspace]
+
 [package]
 name = "hebbian-gpui"
 version = "0.1.0"
