@@ -272,6 +272,7 @@ fn body(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
     let content = match app.settings_tab {
         SettingsTab::General => general_pane(app, cx).into_any_element(),
         SettingsTab::Providers => providers_pane(app).into_any_element(),
+        SettingsTab::Conversation => conversation_pane(app, cx).into_any_element(),
         SettingsTab::Appearance => appearance_pane(app, cx).into_any_element(),
         other => not_yet(app, other.label()).into_any_element(),
     };
@@ -477,6 +478,155 @@ fn segmented(
                 .child(label),
         )
         .child(group)
+}
+
+/// 对话页：新对话继承的默认值。
+fn conversation_pane(app: &HebbianApp, cx: &mut Context<HebbianApp>) -> impl IntoElement {
+    let theme = app.theme.clone();
+    let conv = app
+        .settings_draft
+        .as_ref()
+        .map(|d| &d.conversation)
+        .unwrap_or(&app.state.settings.conversation);
+
+    v_flex()
+        .gap(px(2.))
+        .child(
+            h_flex()
+                .h(px(44.))
+                .justify_between()
+                .gap(px(16.))
+                .border_b_1()
+                .border_color(theme.line)
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.muted)
+                        .child("新对话的默认文件夹"),
+                )
+                .child(
+                    h_flex()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .max_w(px(280.))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(px(12.))
+                                .child(
+                                    conv.workdir
+                                        .as_ref()
+                                        .map(|p| p.to_string_lossy().to_string())
+                                        .unwrap_or_else(|| "用户主目录".to_string()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("pick-default-workdir")
+                                .px(px(10.))
+                                .py(px(4.))
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(theme.line)
+                                .text_size(px(11.))
+                                .cursor_pointer()
+                                .hover(|this| this.bg(theme.accent_soft))
+                                .child("选择…")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.pick_default_workdir(cx);
+                                })),
+                        ),
+                ),
+        )
+        .child(row(
+            &theme,
+            "额外允许访问的路径",
+            if conv.allowed_paths.is_empty() {
+                "无".to_string()
+            } else {
+                format!("{} 条", conv.allowed_paths.len())
+            },
+        ))
+        .child(row(
+            &theme,
+            "默认启用的工具",
+            if conv.enabled_tools.is_empty() {
+                "只用内置工具".to_string()
+            } else {
+                format!("{} 个", conv.enabled_tools.len())
+            },
+        ))
+        .child(row(
+            &theme,
+            "全局规则文件",
+            format!("{} 个", conv.global_rules.len()),
+        ))
+        .child(stepper(
+            &theme,
+            cx,
+            "改动快照保留天数",
+            conv.edits_worktree_ttl_days,
+            |draft, days| draft.conversation.edits_worktree_ttl_days = days,
+        ))
+        .child(hint(
+            &theme,
+            "改完记得点右上角保存。路径与工具清单的编辑还没搬过来，先在原来的桌面端改。",
+        ))
+}
+
+/// 数值加减控件。天数这种小整数用它比输入框省事，也不会输入非法值。
+fn stepper(
+    theme: &crate::theme::Theme,
+    cx: &mut Context<HebbianApp>,
+    label: &'static str,
+    value: u32,
+    apply: fn(&mut agent_core::storage::settings::Settings, u32),
+) -> impl IntoElement {
+    let button = |id: &'static str, text: &'static str, delta: i64| {
+        let theme = theme.clone();
+        div()
+            .id(id)
+            .size(px(22.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(theme.line)
+            .text_size(px(12.))
+            .cursor_pointer()
+            .hover(|this| this.bg(theme.accent_soft))
+            .child(text)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(draft) = this.settings_draft.as_mut() {
+                    let current = value as i64;
+                    // 夹在 1..=365：0 天等于立刻清掉快照，太容易误伤。
+                    let next = (current + delta).clamp(1, 365) as u32;
+                    apply(draft, next);
+                    cx.notify();
+                }
+            }))
+    };
+
+    h_flex()
+        .h(px(44.))
+        .justify_between()
+        .border_b_1()
+        .border_color(theme.line)
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(theme.muted)
+                .child(label),
+        )
+        .child(
+            h_flex()
+                .gap(px(8.))
+                .child(button("dec", "−", -1))
+                .child(div().text_size(px(12.)).child(format!("{value} 天")))
+                .child(button("inc", "+", 1)),
+        )
 }
 
 /// 外观：色系与深浅由左下角调色盘控制，这里给出当前值与入口说明。

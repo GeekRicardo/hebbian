@@ -100,6 +100,9 @@ pub struct AppState {
     /// 工作目录的 git 状态。`None` = 还没读或不是仓库。
     pub git: Option<agent_core::git_scm::GitProjectStatus>,
 
+    /// 每个打开文件「上次读盘/保存时」的内容，用来判断有没有未保存改动。
+    pub file_baselines: HashMap<PathBuf, String>,
+
     /// 编辑区打开的文件列表（多标签），以及当前活动的那个。
     pub open_files: Vec<PathBuf>,
     pub active_file: Option<PathBuf>,
@@ -148,6 +151,7 @@ impl AppState {
             diff: None,
             skills: Vec::new(),
             git: None,
+            file_baselines: HashMap::new(),
             open_files: Vec::new(),
             active_file: None,
             todos: Vec::new(),
@@ -224,12 +228,15 @@ impl AppState {
             CoreUpdate::GitStatus(status) => {
                 self.git = status.map(|s| *s);
             }
-            CoreUpdate::FileSaved(path) => {
+            CoreUpdate::FileSaved { path, text } => {
+                // 保存成功后基线跟着走，圆点随之消失。
+                self.file_baselines.insert(path.clone(), text);
                 self.saved_notice = path
                     .file_name()
                     .map(|n| format!("{} 已保存", n.to_string_lossy()));
             }
-            CoreUpdate::FileLoaded { path, .. } => {
+            CoreUpdate::FileLoaded { path, text } => {
+                self.file_baselines.insert(path.clone(), text);
                 // 已经开过就只切过去，不重复加标签。
                 if !self.open_files.contains(&path) {
                     self.open_files.push(path.clone());

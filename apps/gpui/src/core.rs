@@ -52,8 +52,8 @@ pub enum CoreUpdate {
     Skills(Vec<agent_core::tools::skill::Skill>),
     /// git 状态读完了。`None` 表示这个目录不是 git 仓库。
     GitStatus(Option<Box<agent_core::git_scm::GitProjectStatus>>),
-    /// 某个文件存好了。
-    FileSaved(PathBuf),
+    /// 某个文件存好了，附上落盘的内容（用来更新「有没有未保存改动」的基线）。
+    FileSaved { path: PathBuf, text: String },
     /// 某个文件读完了（编辑区打开）。
     FileLoaded { path: PathBuf, text: String },
     /// 某个目录读完了（文件树按需展开）。
@@ -294,8 +294,8 @@ impl Core {
             if !path.is_file() {
                 return this.emit_err("这个文件不在了，没法保存");
             }
-            match std::fs::write(&path, text) {
-                Ok(()) => this.emit(CoreUpdate::FileSaved(path)),
+            match std::fs::write(&path, &text) {
+                Ok(()) => this.emit(CoreUpdate::FileSaved { path, text }),
                 Err(err) => this.emit_err(format!("保存失败：{err}")),
             }
         });

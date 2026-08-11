@@ -360,6 +360,17 @@ impl HebbianApp {
         self.save_prefs();
     }
 
+    /// 这个文件有没有未保存的改动。
+    pub fn is_dirty(&self, path: &std::path::Path, cx: &App) -> bool {
+        let Some(editor) = self.editors.get(path) else {
+            return false;
+        };
+        let Some(baseline) = self.state.file_baselines.get(path) else {
+            return false;
+        };
+        editor.read(cx).value().as_ref() != baseline.as_str()
+    }
+
     /// 保存当前标签的内容。编辑器里的文本才是准的——用户可能改过。
     pub fn save_active_file(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self.state.active_file.clone() else {
@@ -400,6 +411,31 @@ impl HebbianApp {
         self.title_input
             .update(cx, |state, cx| state.focus(window, cx));
         cx.notify();
+    }
+
+    /// 给「新对话的默认文件夹」选目录。选中后落进设置草稿，点保存才生效。
+    pub fn pick_default_workdir(&mut self, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("选择默认文件夹".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let Some(dir) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let Some(draft) = this.settings_draft.as_mut() {
+                    draft.conversation.workdir = Some(dir);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// 打开设置面板：拷一份草稿，并把 shell 输入框填上当前值。

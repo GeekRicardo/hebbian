@@ -12010,3 +12010,13 @@ cd apps/desktop && pnpm build   # tsc + vite build 通过，无 error
 - **影响范围**: 动了两个共享 crate，但都是新增：`CoreClient` trait 加了一个方法（全仓仅 `LocalCoreClient` 一个实现者，已确认），`CoreRequest` 加了一个 variant。`cargo check -p agent-core` / `-p core-rpc` / `-p hebbian-web-server` 均通过，hebweb 与 desktop 的现有代码路径未改动、行为不变。
 - **验证**: ① 在 deepseek 会话里选 claude-opus-5 —— 顶部弹出「本会话已锁定模型系列：DeepSeek 与其他模型之间不可互相切换，请新建会话。」，磁盘未变；② 选 deepseek-v4 —— `session.jsonl` 里 model 变成 `deepseek-v4` 且追加了 `switch` marker（`deepseek-v4-flash -> deepseek-v4`），输入框上的模型名同步变化。允许与拒绝两条路径都跑到了。
 - **留尾巴**: **`apps/desktop` 与 `apps/web-server` 仍在用各自的旧实现**，没有改成调这个新入口——那是两处独立改动，应各自单独验证后再做，不该混在本次里。收口它们之前，切模型逻辑事实上仍是三份（core 一份 + 那两份旧的），只是 gpui 用的是 core 那份。
+
+### 2026-08-11 — gpui surface：对话默认值可改 + 编辑区未保存标记
+
+- **Why**: 设置里除「通用」外全是只读；编辑区改了没改看不出来，容易误关。
+- **改动**:
+  - `apps/gpui/src/ui/settings.rs`: 「对话」页接上——默认文件夹走系统目录选择器写进草稿，改动快照保留天数用加减控件（**夹在 1..=365**：0 天等于立刻清掉快照，太容易误伤）。路径 / 工具清单仍只读并明说去哪改。
+  - `apps/gpui/src/ui/editor.rs` / `state.rs` / `core.rs`: 记住每个文件「上次读盘或保存时」的内容作基线，与编辑器当前内容不一致就在标签上点一个蓝色小圆点（多数编辑器的约定）。保存成功后基线跟着更新，圆点随之消失——所以 `FileSaved` 事件改成带上落盘的内容。
+- **影响范围**: 仅 `apps/gpui`。
+- **验证**: 打开 `probe.txt` 敲一个字符 → 标签上出现蓝点；Ctrl+S → 蓝点消失。
+- **留尾巴**: 关标签 / 退出时仍不会因未保存而拦一下；对话页的路径与工具清单还不能编辑。

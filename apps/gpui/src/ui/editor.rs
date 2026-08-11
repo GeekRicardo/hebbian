@@ -160,6 +160,16 @@ fn tab_bar(
                 })
                 .child(Icon::FileText.el(px(12.), theme.faint))
                 .child(name)
+                // 有未保存改动就点一个小圆点，和多数编辑器的约定一致。
+                .when(app.is_dirty(path, cx), |this| {
+                    this.child(
+                        div()
+                            .size(px(6.))
+                            .flex_none()
+                            .rounded_full()
+                            .bg(theme.accent),
+                    )
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.state.active_file = Some(switch_to.clone());
                     cx.notify();
